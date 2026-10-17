@@ -2541,7 +2541,7 @@ function planMeasuredLines(
     && /^[+\-(]?[\d., ]+\)?%?$/u.test(visibleText)
       ? earliestTab.pos - context.physicalIndentLeftPt
       : undefined;
-  const specifiedParagraph = specifiedTextParagraphIsHomogeneous(paragraph);
+  const specifiedParagraph = specifiedTextParagraphIsHomogeneous(paragraph, context.lineGrid.active);
   return retainPhysicalLines(measured.lines.map((measuredLine, lineIndex) => {
     const raw = measuredLine.layout;
     // The measured allocation's first-line marker union (paragraph-measure.ts):

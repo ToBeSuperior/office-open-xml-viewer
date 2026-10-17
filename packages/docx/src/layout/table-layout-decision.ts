@@ -227,11 +227,16 @@ function memberContext(
     : textBandPt) + outerCellMarginsPt;
   // Windows Word 16.0 #1881 controls: an AutoFit table whose effective tblW is
   // an absolute length keeps its saved grid up to that width beyond its
-  // container (body column, past the page edge, two-column section column,
-  // nested cell); a percentage or auto width fits the container. tblW never
+  // container (body column, past the page edge, two-column section column);
+  // a percentage or auto width fits the container. tblW never
   // widens the grid here (the WORD_TABLE_ORIGIN_COMPATIBILITY center/end
   // controls keep a 468pt grid under a 540pt tblW).
-  const absolutePreferredPt = effectiveLayout !== 'fixed' ? absoluteTablePreferredWidthPt(source) : null;
+  // A nested AutoFit table keeps the established cell fit: the #1881 nested
+  // control (grid kept past a 200pt cell) and a Word-exported resume whose
+  // nested bars stay inside their cell disagree, and no measured input
+  // separates them yet.
+  const absolutePreferredPt = effectiveLayout !== 'fixed' && !state.inTableCell
+    ? absoluteTablePreferredWidthPt(source) : null;
   const maximumTableWidthPt = absolutePreferredPt === null ? containerMaximumPt
     : Math.max(containerMaximumPt, Math.min(absolutePreferredPt, savedGridWidthPt));
   const isFixedNestedTable = effectiveLayout === 'fixed'

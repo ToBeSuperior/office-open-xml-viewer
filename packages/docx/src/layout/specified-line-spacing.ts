@@ -17,12 +17,13 @@ function referenceSourceAdmitted(segment: LayoutTextSeg): boolean {
  * do not establish the homogeneous matrix's rule, even on their ASCII-only
  * physical lines. Keeping admission paragraph-wide also avoids quadratic
  * rescans of source runs for long wrapped paragraphs. */
-export function specifiedTextParagraphIsHomogeneous(paragraph: ParagraphLayoutSource): boolean {
-  // One face for all text runs. The paragraph mark may name another face of
-  // the same size: Windows Word 16.0 #1884 controls (Times New Roman 12pt text,
-  // Arial 12pt mark) keep the same partition as the homogeneous controls.
-  const textFamily = paragraph.runs.find((run) => run.type === 'text')?.fontFamily
-    ?? paragraph.defaultFontFamily;
+export function specifiedTextParagraphIsHomogeneous(paragraph: ParagraphLayoutSource, gridActive = false): boolean {
+  // One face for all text runs. Without a document grid the paragraph mark may
+  // name another face of the same size: Windows Word 16.0 #1884 controls
+  // (Times New Roman 12pt text, Arial 12pt mark) keep the same partition as
+  // the homogeneous controls. Grid paragraphs keep the homogeneous admission.
+  const textFamily = gridActive ? paragraph.defaultFontFamily
+    : paragraph.runs.find((run) => run.type === 'text')?.fontFamily ?? paragraph.defaultFontFamily;
   return paragraph.runs.every(run => {
     if (run.type === 'field' || run.type === 'math') return false;
     if (run.type !== 'text') return true;
@@ -33,8 +34,11 @@ export function specifiedTextParagraphIsHomogeneous(paragraph: ParagraphLayoutSo
       || (run.fontFamily ?? paragraph.defaultFontFamily) !== textFamily
       || run.fontSize !== paragraph.defaultFontSize) return false;
     const fontAxes: ParagraphTextBearingRun = run;
-    // ASCII-only text never selects the East Asian slot (§17.3.2.26).
-    for (const axis of ['fontFamilyHighAnsi', 'fontFamilyCs'] as const) {
+    // ASCII-only text never selects the East Asian slot (§17.3.2.26); grid
+    // paragraphs keep the homogeneous check of every axis.
+    for (const axis of gridActive
+      ? ['fontFamilyHighAnsi', 'fontFamilyEastAsia', 'fontFamilyCs'] as const
+      : ['fontFamilyHighAnsi', 'fontFamilyCs'] as const) {
       if (fontAxes[axis] && fontAxes[axis] !== textFamily) return false;
     }
     return true;
@@ -121,6 +125,17 @@ export function specifiedTextLineMetrics(
     || !Number.isFinite(first.fontSize)) return null;
   if (paragraphMark) {
     if (paragraphMark.fontSizePt !== first.fontSize) return null;
+  }
+  // The #1884 controls that admitted numbered lines and marks of another face
+  // had no document grid; grid paragraphs keep the homogeneous admission.
+  if (context.lineGrid.active) {
+    if ('numbering' in mark && (mark as { numbering?: unknown }).numbering) return null;
+    if (mark.defaultFontFamily !== authoredFamily) return null;
+    if (paragraphMark) {
+      for (const family of Object.values(paragraphMark.fonts)) {
+        if (family && family !== authoredFamily) return null;
+      }
+    }
   }
   // Host-face/style changes were not part of the homogeneous controls.
   for (const segment of line.segments) {

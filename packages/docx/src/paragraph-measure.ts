@@ -347,7 +347,7 @@ export function measureParagraph(
   // (§17.3.3.25 describes the guide above the base; §17.6.5 supplies grid cells).
   // Resolve the complete physical unions before querying floats: a per-fragment
   // reserve cannot determine either a probe band or the next physical origin.
-  const specifiedParagraph = specifiedTextParagraphIsHomogeneous(paragraph);
+  const specifiedParagraph = specifiedTextParagraphIsHomogeneous(paragraph, context.lineGrid.active);
   const allocateLines = (lines: readonly LayoutLine[]) => {
     let uniformRubyAdvancePt = context.hasRuby
       ? snapParagraphLineToGrid(
