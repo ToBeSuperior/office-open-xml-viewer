@@ -7142,6 +7142,9 @@ fn handle_run_in_para(
         // Everything derived from the run itself is computed at most once per
         // run, however many field markers or visible segments it holds.
         let run_rpr = child_w(r_node, "rPr");
+        // Resolved lazily: a run whose children are all field markup never
+        // needs it.
+        let mut segment_fmt: Option<RunFmt> = None;
         let mut control_fmt_cache: Option<RunFmt> = None;
         let mut control_fmt = || {
             control_fmt_cache
@@ -7187,6 +7190,9 @@ fn handle_run_in_para(
                             first,
                             last,
                             rpr: run_rpr,
+                            fmt: segment_fmt.get_or_insert_with(|| {
+                                run_formatting(run_rpr, base_run, style_map)
+                            }),
                         }),
                     );
                     collect_run_diagnostics = false;
@@ -7286,6 +7292,8 @@ fn handle_run_in_para(
                     first,
                     last,
                     rpr: run_rpr,
+                    fmt: segment_fmt
+                        .get_or_insert_with(|| run_formatting(run_rpr, base_run, style_map)),
                 }),
             );
         }
@@ -7829,17 +7837,42 @@ fn prepend_anchor_host_metrics(
     }
 }
 
+/// Run formatting: the paragraph-level `base_run`, then the rStyle chain
+/// (§17.3.2.29), then direct rPr. ECMA-376 §17.7.2 (Style Hierarchy) applies
+/// character styles ON TOP of the paragraph's run formatting (Document
+/// defaults < Table < Numbering < Paragraph < Character < Direct); they must
+/// not re-introduce docDefaults or the default paragraph style — those are
+/// already baked into base_run.
+fn run_formatting(
+    rpr_node: Option<roxmltree::Node>,
+    base_run: &RunFmt,
+    style_map: &StyleMap,
+) -> RunFmt {
+    let mut fmt = base_run.clone();
+    if let Some(rpr) = rpr_node {
+        if let Some(rs) = child_w(rpr, "rStyle").and_then(|n| attr_w(n, "val")) {
+            let style_run = style_map.resolve_run_style(&rs);
+            apply_direct_run(&mut fmt, &style_run);
+        }
+        let direct = parse_run_fmt(rpr);
+        apply_direct_run(&mut fmt, &direct);
+    }
+    fmt
+}
+
 /// One visible stretch of a run that also carries complex-field markup: the
 /// element children from `first` to `last` (inclusive siblings) other than
 /// `rPr` and `instrText`, with the run's `rPr` found once for every segment.
 #[derive(Clone, Copy)]
-struct RunSegment<'a, 'input> {
+struct RunSegment<'a, 'input, 'f> {
     first: roxmltree::Node<'a, 'input>,
     last: roxmltree::Node<'a, 'input>,
     rpr: Option<roxmltree::Node<'a, 'input>>,
+    /// [`run_formatting`] of the whole run, resolved once.
+    fmt: &'f RunFmt,
 }
 
-impl<'a, 'input> RunSegment<'a, 'input> {
+impl<'a, 'input> RunSegment<'a, 'input, '_> {
     fn children(self) -> impl Iterator<Item = roxmltree::Node<'a, 'input>> {
         let last = self.last.id();
         std::iter::successors(Some(self.first), move |node| {
@@ -7874,28 +7907,17 @@ fn parse_run_inner(
     depth: DepthGuard,
     diagnostics: &mut Vec<PendingParseDiagnostic>,
     collect_run_diagnostics: bool,
-    segment: Option<RunSegment<'_, '_>>,
+    segment: Option<RunSegment<'_, '_, '_>>,
 ) {
-    // Merge run-level formatting
-    let rpr_node = match segment {
-        Some(segment) => segment.rpr,
-        None => child_w(node, "rPr"),
-    };
-    let mut fmt = base_run.clone();
-
-    // Apply rStyle (§17.3.2.29). ECMA-376 §17.7.2 (Style Hierarchy) applies
-    // character styles ON TOP of the paragraph's run formatting (Document
-    // defaults < Table < Numbering < Paragraph < Character < Direct); they must
-    // not re-introduce docDefaults or the default paragraph style — those are
-    // already baked into base_run.
-    if let Some(rpr) = rpr_node {
-        if let Some(rs) = child_w(rpr, "rStyle").and_then(|n| attr_w(n, "val")) {
-            let style_run = style_map.resolve_run_style(&rs);
-            apply_direct_run(&mut fmt, &style_run);
+    // Merge run-level formatting. A field-bearing run resolves it once for
+    // all of its visible segments.
+    let (rpr_node, mut fmt) = match segment {
+        Some(segment) => (segment.rpr, segment.fmt.clone()),
+        None => {
+            let rpr_node = child_w(node, "rPr");
+            (rpr_node, run_formatting(rpr_node, base_run, style_map))
         }
-        let direct = parse_run_fmt(rpr);
-        apply_direct_run(&mut fmt, &direct);
-    }
+    };
 
     // Skip hidden runs entirely
     if fmt.vanish.unwrap_or(false) {

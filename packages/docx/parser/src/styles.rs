@@ -473,7 +473,9 @@ pub(crate) const MAX_STYLE_INHERITANCE_DEPTH: usize = 64;
 /// [`StyleMap::resolve_table_style`] walk it (a cycle stops at the first
 /// revisited style; a missing parent ends the chain). `styles` maps each style
 /// id to its `basedOn`; each style is resolved once, so this is linear.
-fn max_style_inheritance_depth(styles: &HashMap<&str, Option<&str>>) -> usize {
+/// The walk stops as soon as a chain is proven longer than `limit`, so its
+/// per-walk state never grows past `limit + 1` entries.
+fn max_style_inheritance_depth(styles: &HashMap<&str, Option<&str>>, limit: usize) -> usize {
     let mut depth: HashMap<&str, usize> = HashMap::with_capacity(styles.len());
     let mut deepest = 0;
     let mut path: Vec<&str> = Vec::new();
@@ -488,6 +490,9 @@ fn max_style_inheritance_depth(styles: &HashMap<&str, Option<&str>>) -> usize {
             if let Some(&known) = depth.get(id) {
                 tail = known;
                 break;
+            }
+            if path.len() > limit {
+                return path.len();
             }
             let Some(&based_on) = styles.get(id) else {
                 break;
@@ -508,6 +513,9 @@ fn max_style_inheritance_depth(styles: &HashMap<&str, Option<&str>>) -> usize {
         for member in path.drain(..).rev() {
             tail += 1;
             depth.insert(member, tail);
+        }
+        if tail > limit {
+            return tail;
         }
         deepest = deepest.max(tail);
     }
@@ -665,8 +673,9 @@ impl StyleMap {
             .iter()
             .map(|(id, def)| (id.as_str(), def.based_on.as_deref()))
             .collect();
-        let depth = max_style_inheritance_depth(&style_graph)
-            .max(max_style_inheritance_depth(&table_graph));
+        let depth = max_style_inheritance_depth(&style_graph, MAX_STYLE_INHERITANCE_DEPTH).max(
+            max_style_inheritance_depth(&table_graph, MAX_STYLE_INHERITANCE_DEPTH),
+        );
         drop((style_graph, table_graph));
         if depth > MAX_STYLE_INHERITANCE_DEPTH {
             // Latches the typed resource error for the package operation; the

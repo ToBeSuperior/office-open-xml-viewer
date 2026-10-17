@@ -321,3 +321,38 @@ fn repeated_separators_and_balanced_fields_in_one_run_stay_linear() {
     // Linear work: well under the quadratic-era seconds even in debug.
     assert!(started.elapsed() < std::time::Duration::from_secs(20));
 }
+
+#[test]
+fn large_run_properties_are_resolved_once_for_many_visible_segments() {
+    let rpr = format!("<w:rPr>{}<w:b/></w:rPr>", "<w:noProof/>".repeat(4_000));
+    let sequence = r#"<w:fldChar w:fldCharType="begin"/><w:instrText>REF a</w:instrText><w:fldChar w:fldCharType="separate"/><w:t>x</w:t><w:fldChar w:fldCharType="end"/>"#;
+    let body = format!("<w:p><w:r>{rpr}{}</w:r></w:p>", sequence.repeat(4_000));
+    let started = std::time::Instant::now();
+    let document = parse_from_bytes(&package(&body, &[])).expect("fields with large rPr parse");
+    assert!(serde_json::to_string(&document).unwrap().contains("\"x\""));
+    assert!(started.elapsed() < std::time::Duration::from_secs(20));
+}
+
+#[test]
+fn style_depth_validation_stops_at_the_limit_despite_many_other_styles() {
+    // A very deep chain beside many independent styles: the validator must
+    // reject without re-walking the deep chain's state for every style.
+    let mut styles = format!(r#"<w:styles xmlns:w="{W_NS}">"#);
+    for level in 0..20_000 {
+        let based_on = if level == 0 {
+            String::new()
+        } else {
+            format!(r#"<w:basedOn w:val="D{}"/>"#, level - 1)
+        };
+        styles.push_str(&format!(
+            r#"<w:style w:type="paragraph" w:styleId="D{level}">{based_on}</w:style><w:style w:type="paragraph" w:styleId="I{level}"/>"#
+        ));
+    }
+    styles.push_str("</w:styles>");
+    let bytes = package("<w:p/>", &[("word/styles.xml", &styles)]);
+    let started = std::time::Instant::now();
+    let error = parse_from_bytes(&bytes).expect_err("deep chain rejected");
+    let limit = crate::styles::MAX_STYLE_INHERITANCE_DEPTH;
+    assert_hard_limit(&error, "style-inheritance", limit as u64);
+    assert!(started.elapsed() < std::time::Duration::from_secs(20));
+}
