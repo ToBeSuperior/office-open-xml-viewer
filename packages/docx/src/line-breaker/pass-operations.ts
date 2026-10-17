@@ -20,6 +20,7 @@ import {
   type LayoutTabSeg,
   type LayoutTextSeg,
   type LineBoundary,
+  type WrapLayoutCtx,
 } from './model.js';
 import { createLineBreakerState, type GapTransaction, type GapWindow } from './break-queue.js';
 import {
@@ -362,6 +363,39 @@ export function performStartLine(operationState: PassOperationState, requirement
   placeLineWindow(operationState, transaction, null);
 }
 
+/** Windows Word 16.0 controls (issue #1883: decimal, bullet, picture and long
+ * markers; left/right/center lvlJc; tab/space/nothing suffixes; custom stops;
+ * hanging, first-line and zero indents; 72-360pt floats on either side, distR
+ * 0-30pt, RTL) show a numbered first line beside a float placed exactly like a
+ * plain paragraph that starts with the marker text: the leading edge is
+ * max(max(indent, wrap) + firstLine, wrap), the marker is aligned there and its
+ * suffix tab advances to the paragraph's absolute stops (hanging stop, custom
+ * stops, then default stops from the margin). Lines whose leading edge the
+ * window leaves where the indents put it keep the precomputed body offset. */
+function placeNumberingFirstLine(
+  operationState: PassOperationState,
+  numbering: NonNullable<WrapLayoutCtx['numberingFirstLine']>,
+  hangingOffset: number,
+): void {
+  const { breakerState, maxWidth, baseRtl } = operationState;
+  const base = baseRtl
+    ? maxWidth - (breakerState.lineXOffset + breakerState.lineMaxWidth)
+    : breakerState.lineXOffset;
+  const windowEdge = base + hangingOffset;
+  const authored = numbering.authoredFirstIndentPx;
+  const leadingEdge = Math.max(Math.max(0, windowEdge) + authored, windowEdge);
+  if (leadingEdge <= authored) {
+    breakerState.firstIndentOverride = undefined;
+    breakerState.numberingFirstLine = undefined;
+    return;
+  }
+  const bodyIndent = Math.max(leadingEdge, numbering.bodyIndentAt(leadingEdge));
+  breakerState.firstIndentOverride = bodyIndent - base;
+  breakerState.numberingFirstLine = {
+    leadingEdgePx: leadingEdge, bodyIndentPx: bodyIndent, lineStartOffsetPx: bodyIndent - base,
+  };
+}
+
 /** Search the first admissible window for the transaction's requirement:
  * a later gap on the continuation baseline, else a new physical line. */
 function placeLineWindow(
@@ -380,7 +414,9 @@ function placeLineWindow(
   // The measured-line contract still carries the authored firstIndent: restore
   // it in the returned width so fit/tab arithmetic and planLine consume the
   // same safe window, including the mirrored logical start of RTL paragraphs.
-  const hangingOffset = breakerState.isFirst ? Math.min(0, firstIndent) : 0;
+  const numbering = breakerState.isFirst ? wrapCtx.numberingFirstLine : undefined;
+  const hangingOffset = breakerState.isFirst
+    ? Math.min(0, numbering ? numbering.authoredFirstIndentPx : firstIndent) : 0;
   const lineBandX = wrapCtx.paraX + (baseRtl ? 0 : hangingOffset);
   const lineBandWidth = maxWidth - hangingOffset;
   const reference = {
@@ -465,6 +501,7 @@ function placeLineWindow(
   breakerState.currentLineTopY = accepted.topY;
   breakerState.lineXOffset = accepted.xOffset;
   breakerState.lineMaxWidth = accepted.maxWidth;
+  if (numbering) placeNumberingFirstLine(operationState, numbering, hangingOffset);
   // A trailing-indent extension exists only beside an unnarrowed band, and
   // only where no exclusion intersects it on this line (§20.4.2.17–.19).
   const extension = marginExtensionWidth(operationState);
@@ -764,6 +801,8 @@ export function performFlush(
         }
       : undefined;
   breakerState.lines.push({
+    ...(breakerState.isFirst && breakerState.numberingFirstLine
+      ? { numberingFirstLine: breakerState.numberingFirstLine } : {}),
     physicalLineIndex: breakerState.physicalLineIndex,
     ...(justifiedCompressionApplies(operationState)
       ? {

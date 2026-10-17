@@ -40,6 +40,8 @@ export interface ParagraphMeasurementEnvironment extends LineLayoutEnvironment {
   readonly documentHasEastAsianText: boolean;
   readonly paragraphMarkShapeInput?: NumberingMarkerShapeInput;
   /** Selected-face text marker box, resolved by retained numbering before line acquisition. */
+  /** WrapLayoutCtx.numberingFirstLine for a numbered paragraph's first line. */
+  readonly numberingFirstLine?: NonNullable<WrapLayoutCtx['numberingFirstLine']>;
   readonly firstLineNumberingMarkerBox?: Readonly<{ ascentPt: number; descentPt: number; intendedSinglePt?: number }>;
   /** Display height of a sized picture-bullet marker, which stands on the
    * paragraph's first baseline (see `markerMetric` in the line breaker). */
@@ -482,6 +484,8 @@ export function measureParagraph(
           1,
         ),
         hasExclusions: placement.wrap!.hasExclusions,
+        ...(environment.numberingFirstLine && !continuation
+          ? { numberingFirstLine: environment.numberingFirstLine } : {}),
         lineWindow: (input) => placement.wrap!.lineWindow(input),
         lineBoxH: (ascent, descent, _hasRuby, intendedSingle, eastAsian, gridCountSingle, uniformPositionAuto, inlinePictureTextSingle, latinGridCountSingle) => lineBoxHeight(
           context.lineSpacing,

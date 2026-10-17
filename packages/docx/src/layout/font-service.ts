@@ -50,6 +50,9 @@ export interface FontResolver {
   /** Script of the scoped substitute that actually wins this resource tuple.
    * Authored embedded/local/installed faces retain §17.3.2.26 scalar slots. */
   scopedSubstituteScript?(requestedFamily: string | null | undefined, weight?: number, style?: FontStyle): FontSubstituteScript | undefined;
+  /** Installed Office faces of an authored family loaded through an exact
+   * local() name, each under its own private single-face family. */
+  exactLocalFaces?(requestedFamily: string): readonly Readonly<{ resolvedFamily: string; weight: number; style: FontStyle }>[];
 }
 
 export interface FontInventoryFace {
@@ -309,6 +312,11 @@ export function createFontResolver(
     fingerprint,
     configuredSubstituteScript(requestedFamily: string | null | undefined): FontSubstituteScript | undefined {
       return requestedFamily ? scriptScopedFamilies[normalizeFamily(requestedFamily)]?.script : undefined;
+    },
+    exactLocalFaces(requestedFamily: string) {
+      return (byFamily.get(normalizeFamily(requestedFamily)) ?? [])
+        .filter((face) => face.source === 'local' && face.resourceIdentity?.startsWith('office-local:') === true)
+        .map((face) => ({ resolvedFamily: face.resolvedFamily, weight: face.weight, style: face.style }));
     },
     scopedSubstituteScript(requestedFamily: string | null | undefined, weight?: number, style?: FontStyle): FontSubstituteScript | undefined {
       const family = requestedFamily?.trim();

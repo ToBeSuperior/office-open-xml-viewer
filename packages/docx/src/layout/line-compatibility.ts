@@ -64,6 +64,15 @@ export const LIBRARY_ABSENT_FACE_FALLBACK_LINE_BOX = defineCompatibilityRule({
   description: 'Library policy (user decision 2026-10-16), replacing the e3286ecb9 absent-face rule: when the authored face is not present on the viewing host, a native CSS family list paints with a browser fallback, and the span is sized from that painting face (its Canvas font box), never from the absent face\'s catalog line box. Word lays out with the authored face it has, so pagination differences from Office caused by the missing font are accepted. Present local faces use their measured host geometry first and the catalog only as a fallback; registered substitutes use their own geometry. Leading for anonymous fallback faces is not measured (issue #1843). No viewer-OS or font-name branch is involved.',
 });
 
+export const LIBRARY_SYNTHESIZED_FACE_LINE_GEOMETRY = defineCompatibilityRule({
+  id: 'library-synthesized-face-line-geometry',
+  evidence: {
+    kind: 'regression-test',
+    reference: 'packages/docx/src/synthesized-face-line-geometry.test.ts#sizes a bold empty mark from the proved face: identical=$sameRaster',
+  },
+  description: 'Library evidence boundary (user decision 2026-10-18, issue #1848): the reference catalog holds some installed faces only at weight 400 (MS Mincho, for example), so a bold or italic run of such a family resolves to a native route without a catalog tuple. Catalog absence does not show that the host synthesizes the tuple: a genuine styled face may exist with different vertical tables, and Canvas cannot expose OS/2 usWin, which the Far-East 1.3 x usWin line needs. Instead the span is proved to paint a loaded face. Each installed Office face loaded through an exact local() name sits under a private family holding only that FontFace, so by CSS Fonts Level 4 section 5.2 font matching any weight/style request to that family selects it and the browser synthesizes the missing bold/oblique from it. Fixed probe glyphs of the span\'s script class (国あ for East Asian text, Hxg otherwise; 64px) are rasterized once per route and tuple through the native route and through that private family on this realm\'s Canvas. Pixel-identical non-empty rasters prove the native route paints the same synthesized face, so the catalog geometry of the CSS-matched loaded tuple applies, including its Far-East projection. Any raster or advance difference (a genuine styled face, another file, glyphs from a fallback face) is no proof and the span keeps its own Canvas box, as before. Main thread and worker each rasterize with their own Canvas and FontFaceSet over the same host fonts. Residual risk: a genuine styled face whose glyphs are pixel-identical to the synthesized regular face but whose vertical tables differ.',
+});
+
 export const WORD_KERN_THRESHOLD_AUTHORITY = defineCompatibilityRule({
   id: 'word-kern-threshold-authority',
   evidence: {

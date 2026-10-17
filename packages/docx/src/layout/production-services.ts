@@ -35,6 +35,7 @@ import {
   type GlyphMeasureRequest,
 } from './text.js';
 import type { LayoutServices } from './types.js';
+import { sameGlyphRaster } from '../glyph-raster-proof.js';
 
 export interface LoadedFontFaceRecord {
   readonly family: string;
@@ -282,7 +283,9 @@ export function createProductionLayoutServices(
       // DOM-dependent vertical documents cannot retain worker mode, so folding
       // that unused capability into the general text snapshot would make equal
       // horizontal main/worker services advertise unequal cache identities.
-      fingerprint: context ? 'canvas-text-metrics-v1' : 'deterministic-text-metrics-v1',
+      // v2: the Canvas measurer also proves synthesized faces (#1848).
+      fingerprint: context ? 'canvas-text-metrics-v2' : 'deterministic-text-metrics-v1',
+      ...(context ? { sameGlyphRaster } : {}),
       measure(request: Readonly<GlyphMeasureRequest>) {
         if (!context) return {
           advancePt: [...request.text].length * request.fontSizePt * 0.5,

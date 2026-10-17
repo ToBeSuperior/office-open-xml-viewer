@@ -1699,13 +1699,49 @@ function retainedNumberingPlan(
   }, service);
 }
 
+/** Body start for a numbered first line whose marker leading edge a float
+ * moved (WrapLayoutCtx.numberingFirstLine; issue #1883). Only paragraphs whose
+ * body offset is the resolved marker+suffix geometry take part: the RTL forms
+ * that keep the authored first-line indent position their marker otherwise. */
+function numberingFirstLineWindow(
+  paragraph: ParagraphAcquisitionInput,
+  context: ParagraphLayoutContext,
+  options: Pick<ParagraphAcquisitionOptions, 'environment'>,
+): NonNullable<import('../line-breaker/model.js').WrapLayoutCtx['numberingFirstLine']> | undefined {
+  const numbering = paragraph.numbering;
+  const markerInput = paragraph.numberingMarkerShapeInput;
+  const service = options.environment.layoutServices?.text;
+  // Same admission as applyNumberingBodyOffset (numbering-marker.ts).
+  const usesResolvedBodyOffset = !context.baseRtl
+    || ((numbering?.suff || 'tab') === 'tab' && paragraph.indentFirst < 0);
+  if (!numbering || !markerInput || !service || !usesResolvedBodyOffset
+    || (numbering.text === '' && numbering.picBulletImagePath == null)) return undefined;
+  return {
+    authoredFirstIndentPx: paragraph.indentFirst,
+    bodyIndentAt: (markerLeadingEdgePx) => resolveNumberingMarkerGeometry(numbering, markerInput, {
+      authoredFirstIndentPt: markerLeadingEdgePx,
+      physicalIndentLeftPt: context.physicalIndentLeftPt,
+      tabStops: paragraph.tabStops,
+      defaultTabPt: context.defaultTabPt,
+    }, service).bodyOffsetPt,
+  };
+}
+
 function numberingAlignedLeadingEdgePt(
   plan: RetainedNumberingPlan,
   context: ParagraphLayoutContext,
   paragraphXPt: number,
   availableWidthPt: number,
   line: LineLayout,
+  moved?: Readonly<{ leadingEdgePx: number; authoredFirstIndentPt: number }>,
 ): number {
+  // A float moved the marker's leading edge (numberingFirstLineWindow): the
+  // aligned edge is chosen so that numberingMarkerPhysicalLeft puts the
+  // marker's logical start at that edge.
+  if (moved) {
+    const offsetPt = moved.leadingEdgePx - moved.authoredFirstIndentPt;
+    return context.baseRtl ? paragraphXPt + availableWidthPt - offsetPt : paragraphXPt + offsetPt;
+  }
   // Non-empty lines retain their aligned body bounds. A numbering-only line has
   // zero width and therefore retains the paragraph frame origin instead of a
   // body origin with the resolved marker suffix offset applied.
@@ -1724,6 +1760,7 @@ function numberingMarkerPlacements(
   paragraphXPt: number,
   availableWidthPt: number,
   line: LineLayout,
+  movedLeadingEdgePx?: number,
 ): readonly TextPlacement[] {
   if (!plan.shape || plan.markerText === '') return [];
   const shape = plan.shape;
@@ -1735,6 +1772,8 @@ function numberingMarkerPlacements(
       paragraphXPt,
       availableWidthPt,
       line,
+      movedLeadingEdgePx === undefined ? undefined
+        : { leadingEdgePx: movedLeadingEdgePx, authoredFirstIndentPt: paragraph.indentFirst },
     ),
     authoredFirstIndentPt: paragraph.indentFirst,
     markerShiftPt: plan.markerShiftPt,
@@ -2704,7 +2743,7 @@ function planMeasuredLines(
       exactLineSpacing: context.lineSpacing?.rule === 'exact',
       firstLineIndentPt: context.firstIndentPt,
       ...(lineIndex === 0 && numberingPlan
-        ? { numbering: { bodyOffsetPt: numberingPlan.bodyOffsetPt } }
+        ? { numbering: { bodyOffsetPt: raw.numberingFirstLine?.lineStartOffsetPx ?? numberingPlan.bodyOffsetPt } }
         : {}),
       ...(decimalAutoTabPt === undefined ? {} : { decimalAutoTabPt }),
       ...(onlyMath?.display ? {
@@ -5050,6 +5089,9 @@ export function acquireParagraphResult(
   const acquisitionOptions = numberingPlan && !options.context.numberingMarkerGeometry
     ? { ...options, context: { ...options.context, numberingMarkerGeometry: numberingPlan } }
     : options;
+  const numberingFirstLine = numberingPlan
+    ? numberingFirstLineWindow(paragraph, acquisitionOptions.context, acquisitionOptions)
+    : undefined;
   const measureWithExclusions = (
     exclusions: readonly WrapExclusion[],
     observeBand?: (topPt: number, heightPt: number, moved: boolean) => void,
@@ -5064,6 +5106,7 @@ export function acquireParagraphResult(
       ...(numberingPlan?.lineBox && numberingPlan.markerText ? {
         firstLineNumberingMarkerBox: numberingPlan.lineBox,
       } : {}),
+      ...(numberingFirstLine ? { numberingFirstLine } : {}),
       ...(paragraph.numbering?.picBulletImagePath ? {
         // The same display height the marker placement below paints.
         firstLinePictureMarkerHeightPt: paragraph.numbering.picBulletHeightPt
@@ -5647,9 +5690,12 @@ function projectAcquiredParagraph(
       } : line);
     }
   }
+  const firstLineMovedMarkerEdgePx = options.continuesFromPrevious
+    ? undefined : measured.lines[0]?.layout.numberingFirstLine?.leadingEdgePx;
   if (numberingPlan && lines[0]) {
     const markerPlacements = numberingMarkerPlacements(
       numberingPlan, paragraph, options.context, paragraphXPt, availableWidthPt, lines[0],
+      firstLineMovedMarkerEdgePx,
     );
     if (markerPlacements.length > 0) {
       lines = [{ ...lines[0], placements: [...markerPlacements, ...lines[0].placements] }, ...lines.slice(1)];
@@ -5804,6 +5850,8 @@ function projectAcquiredParagraph(
         paragraphXPt,
         availableWidthPt,
         lines[0],
+        firstLineMovedMarkerEdgePx === undefined ? undefined
+          : { leadingEdgePx: firstLineMovedMarkerEdgePx, authoredFirstIndentPt: paragraph.indentFirst },
       ),
       authoredFirstIndentPt: paragraph.indentFirst,
       markerShiftPt: numberingPlan.markerShiftPt,

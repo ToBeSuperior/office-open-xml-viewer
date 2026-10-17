@@ -485,9 +485,22 @@ export interface GlyphInkBounds {
   readonly descentPt: number;
 }
 
+/** Two Canvas routes rasterizing the same text in the same tuple. */
+export interface GlyphRasterComparisonRequest {
+  readonly text: string;
+  readonly weight: number;
+  readonly style: FontStyle;
+  readonly route: CanvasFontRoute;
+  /** Single private family of one loaded exact face; the comparison route. */
+  readonly faceFamily: string;
+}
+
 export interface GlyphMeasurer {
   readonly fingerprint: string;
   measure(request: Readonly<GlyphMeasureRequest>): GlyphMeasurement;
+  /** True only when both routes paint pixel-identical non-empty glyph
+   * rasters for the request. Absent or unable to rasterize → no proof. */
+  sameGlyphRaster?(request: Readonly<GlyphRasterComparisonRequest>): boolean;
 }
 
 export interface TextShapeSpan extends GlyphMeasurement {
@@ -547,6 +560,10 @@ export interface TextLayoutService {
   /** Per-source script-substitute proof, when configured. A mixed scope stays
    * a semantic face-selection boundary; plain runs return no scope key. */
   sourceScopeKey?(request: Readonly<TextShapeRequest>): string | undefined;
+  /** Cached {@link GlyphMeasurer.sameGlyphRaster} proof. */
+  sameGlyphRaster?(request: Readonly<GlyphRasterComparisonRequest>): boolean;
+  /** {@link FontResolver.exactLocalFaces} of this service's resolver. */
+  exactLocalFaces?(requestedFamily: string): readonly Readonly<{ resolvedFamily: string; weight: number; style: FontStyle }>[];
 }
 
 export interface TextLayoutServiceInput {
@@ -997,8 +1014,26 @@ export function createTextLayoutService(input: TextLayoutServiceInput): TextLayo
   const scopeCache = new Map<string, Map<string, Uint8Array>>();
   let scopeScans = 0;
   let scopeUtf16Units = 0;
+  // Bounded per document service: authored family names are arbitrary.
+  const rasterProofs = new Map<string, boolean>();
+  const rasterProofLimit = 256;
+  const sameGlyphRaster = input.measurer.sameGlyphRaster
+    ? (request: Readonly<GlyphRasterComparisonRequest>): boolean => {
+        const key = JSON.stringify([request.route.fingerprint, request.faceFamily,
+          request.weight, request.style, request.text]);
+        const retained = rasterProofs.get(key);
+        if (retained !== undefined) return retained;
+        const proved = input.measurer.sameGlyphRaster!(request);
+        if (rasterProofs.size >= rasterProofLimit) rasterProofs.clear();
+        rasterProofs.set(key, proved);
+        return proved;
+      }
+    : undefined;
   const service: TextLayoutService = Object.freeze({
     ...(input.glyphContours ? { glyphContours: input.glyphContours } : {}),
+    ...(sameGlyphRaster ? { sameGlyphRaster } : {}),
+    ...(input.fonts.exactLocalFaces
+      ? { exactLocalFaces: (family: string) => input.fonts.exactLocalFaces!(family) } : {}),
     fingerprint,
     fontMetrics,
     localMetrics: fontMetrics,
