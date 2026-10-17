@@ -215,6 +215,17 @@ export function projectEffectiveTablePreferredWidthPt(
   return null;
 }
 
+/** The effective tblW when it is an absolute length (dxa), else null. */
+export function absoluteTablePreferredWidthPt(input: TableSourceAcquisitionInput): number | null {
+  if (input.format.firstRowException?.preferredWidthAuthored) {
+    const exception = input.format.firstRowException.preferredWidth;
+    return exception?.kind === 'dxa' && exception.value > 0 ? exception.value : null;
+  }
+  const lexical = tableWidthConstraintFromLexical(input.lexical.table?.preferredWidth);
+  if (lexical) return lexical.kind === 'dxa' && lexical.value > 0 ? lexical.value : null;
+  return input.semantic.widthPt != null && input.semantic.widthPt > 0 ? input.semantic.widthPt : null;
+}
+
 const tableGridPointFactors: Readonly<Record<string, string>> = Object.freeze({
   pt: '1/1', in: '72/1', cm: '3600/127', mm: '360/127', pc: '12/1', pi: '12/1',
 });

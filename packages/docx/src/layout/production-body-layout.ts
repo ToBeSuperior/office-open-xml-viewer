@@ -3281,7 +3281,12 @@ function acquireTableColumnInput(
   const maximumWidthPt = isFixedNestedTable
     // ECMA-376 §17.18.87: the containing cell is not an implicit tblW.
     ? null
-    : format.ordinaryFlow ? maximumTableWidthPt : Math.max(contentWPt, state.pageWidth);
+    // §17.18.87 fixed tracks are final in flow: Windows Word 16.0 #1881
+    // controls keep them beyond a text box's inner width, the body column and
+    // a two-column section's column, for left, centred and right tables.
+    // Floating tables keep the page ceiling (unmeasured).
+    : format.ordinaryFlow ? (decision.effectiveLayout === 'fixed' ? null : maximumTableWidthPt)
+      : Math.max(contentWPt, state.pageWidth);
   const intrinsicWidths = intrinsicWidthsForTable(table);
   const columnInput = projectTableColumnLayoutInput(decision.source, contentWPt,
     (rowIndex, cellIndex, preferred) => intrinsicWidths(table.rows[rowIndex]!.cells[cellIndex]!, preferred),

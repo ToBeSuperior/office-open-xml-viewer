@@ -196,10 +196,12 @@ describe('§17.4.50 tblInd — table indent from the leading margin', () => {
   });
 
   it.each([
-    ['LTR', false, { xPt: 10, widthPt: 190 }],
-    ['RTL', true, { xPt: 0, widthPt: 190 }],
+    // Windows Word 16.0 #1881 control B2: an AutoFit table whose tblW is an
+    // absolute length keeps its saved grid past the physical page edge.
+    ['LTR', false, { xPt: 10, widthPt: 220 }],
+    ['RTL', true, { xPt: -30, widthPt: 220 }],
   ] as const)(
-    '%s: caps AutoFit at the physical page edge after resolving a partial negative leading indent',
+    '%s: keeps an absolute-width AutoFit grid past the page edge after a partial negative leading indent',
     (_direction, bidiVisual, expected) => {
       // The text band is [20, 180]. A -10pt leading indent moves the resolved
       // leading edge halfway into its 20pt page margin. AutoFit may therefore
@@ -215,8 +217,6 @@ describe('§17.4.50 tblInd — table indent from the leading margin', () => {
 
       expect(retained.flowBounds.xPt).toBeCloseTo(expected.xPt, 6);
       expect(retained.flowBounds.widthPt).toBeCloseTo(expected.widthPt, 6);
-      expect(retained.flowBounds.xPt).toBeGreaterThanOrEqual(0);
-      expect(retained.flowBounds.xPt + retained.flowBounds.widthPt).toBeLessThanOrEqual(200);
     },
   );
 
