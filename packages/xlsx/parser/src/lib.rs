@@ -6383,24 +6383,37 @@ mod threaded_comment_tests {
         );
     }
 
-    /// Sheet names, cell values and review comments are document text: they
-    /// reach the Markdown projection as literal text (no links, HTML,
-    /// entities, strikethrough, code fences or line-start blocks), while the
-    /// converter's own heading, table and quote syntax stays intact. A lone
-    /// CR in a comment cannot end the quote.
+    /// Sheet names, cell values and review comments are document text. The
+    /// output, parsed as GFM (tables, strikethrough, extended autolinks), may
+    /// contain only the converter's own heading, table and quote structure:
+    /// the document text forms no extra table, link, autolink, heading, list,
+    /// strikethrough, code or HTML node, and a lone CR cannot end the quote.
     #[test]
-    fn markdown_sheet_names_cells_and_comments_cannot_inject_markup() {
-        const ATTACK: &str = "&lt;img src=x onerror=alert(1)&gt; [x](javascript:alert(1))";
-        let workbook = r#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="&lt;b&gt;_x_ #" sheetId="1" r:id="rSheet1"/></sheets></workbook>"#;
+    fn markdown_sheet_names_cells_and_comments_form_no_markdown_structure() {
+        const INLINE: &str = "&lt;img src=x onerror=alert(1)&gt; [x](javascript:alert(1)) https://evil.example/ www.evil.example a@evil.example ~~del~~ &amp;copy; `c`";
+        const INLINE_TEXT: &str = "<img src=x onerror=alert(1)> [x](javascript:alert(1)) https://evil.example/ www.evil.example a@evil.example ~~del~~ &copy; `c`";
+        const LINES: &str = "alpha&#13;&#13;```&#13;| a | b |&#13;| :-- | --: |&#13;forged | row&#13;# h&#13;&#160;# nbsp&#13;&#xFEFF;# bom&#13;&gt; q&#13;- item&#13;1. item&#13;===";
+        let workbook = r#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="&lt;b&gt;_x_ # www.evil.example" sheetId="1" r:id="rSheet1"/></sheets></workbook>"#;
         let workbook_rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rSheet1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rPersons" Type="http://schemas.microsoft.com/office/2017/10/relationships/person" Target="persons/person.xml"/></Relationships>"#;
+        let cell = |reference: &str, text: &str| {
+            format!(
+                r#"<c r="{reference}" t="inlineStr"><is><t xml:space="preserve">{text}</t></is></c>"#
+            )
+        };
         let worksheet = format!(
-            r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>{ATTACK}</t></is></c><c r="B1" t="inlineStr"><is><t xml:space="preserve">a|b&#13;c&#10;d, 50% done</t></is></c><c r="C1" t="inlineStr"><is><t xml:space="preserve">&amp;copy; ~~x~~</t></is></c></row></sheetData></worksheet>"#
+            r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1">{}{}{}</row><row r="2">{}{}{}</row></sheetData></worksheet>"#,
+            cell("A1", INLINE),
+            cell("B1", "a|b&#13;# c&#10;d, 50% done"),
+            cell("C1", "&#160;# nbsp"),
+            cell("A2", "| :-- | --: |"),
+            cell("B2", "- item"),
+            cell("C2", "#DIV/0!"),
         );
         let worksheet_rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rThread" Type="http://schemas.microsoft.com/office/2017/10/relationships/threadedComment" Target="../threadedComments/threadedComment1.xml"/></Relationships>"#;
         let threaded_comments = format!(
-            r#"<ThreadedComments xmlns="{TC_NS}"><threadedComment ref="A1" personId="{{p1}}" id="thread-1"><text>{ATTACK}&#13;&#13;```&#13;- outside</text></threadedComment></ThreadedComments>"#,
+            r#"<ThreadedComments xmlns="{TC_NS}"><threadedComment ref="A1" personId="{{p1}}" id="thread-1"><text>{INLINE}&#13;{LINES}</text></threadedComment></ThreadedComments>"#,
         );
-        let persons = r#"<personList><person id="{p1}" displayName="[a](javascript:alert(1))"/></personList>"#;
+        let persons = r#"<personList><person id="{p1}" displayName="[a](javascript:alert(1)) a@evil.example"/></personList>"#;
 
         let mut bytes = Vec::new();
         {
@@ -6425,26 +6438,54 @@ mod threaded_comment_tests {
         }
 
         let markdown = to_markdown_native(&bytes).expect("markdown projects");
+        let gfm = ooxml_common::markdown::gfm_check::summarize(&markdown);
 
-        let escaped = r"\<img src=x onerror=alert(1)> \[x\](javascript:alert(1))";
-        assert!(
-            markdown.starts_with(&format!(
-                "## \\<b>\\_x\\_ \\#\n\n| {escaped} | a\\|b<br>c<br>d, 50% done | \\&copy; \\~\\~x\\~\\~ |\n| --- | --- | --- |\n"
-            )),
+        assert_eq!(
+            gfm.headings,
+            [
+                "<b>_x_ # www.evil.example",
+                "Review comments",
+                "<b>_x_ # www.evil.example — A1",
+            ],
             "{markdown}"
         );
-        assert!(
-            markdown.contains("### \\<b>\\_x\\_ \\# — A1\n"),
+        assert_eq!(gfm.tables, 1, "{markdown}");
+        assert_eq!(
+            gfm.table_cells,
+            [
+                INLINE_TEXT,
+                "a|b# cd, 50% done",
+                "\u{a0}# nbsp",
+                "| :-- | --: |",
+                "- item",
+                "#DIV/0!",
+            ],
             "{markdown}"
         );
-        assert!(
-            markdown.contains(&format!(
-                "> **\\[a\\](javascript:alert(1))**\n>\n> {escaped}\n> \n> \\`\\`\\`\n> \\- outside\n"
-            )),
+        assert_eq!(gfm.block_quotes, 1, "{markdown}");
+        assert_eq!(
+            (gfm.links, gfm.images, gfm.html, gfm.strikethrough, gfm.code),
+            (0, 0, 0, 0, 0),
             "{markdown}"
         );
+        assert_eq!((gfm.list_items, gfm.thematic_breaks), (0, 0), "{markdown}");
+        for literal in [
+            INLINE_TEXT,
+            "[a](javascript:alert(1)) a@evil.example",
+            "```",
+            "| a | b |",
+            "forged | row",
+            "# h",
+            "\u{feff}# bom",
+            "> q",
+            "1. item",
+            "===",
+        ] {
+            assert!(gfm.text.contains(literal), "{literal:?} in {markdown}");
+        }
+        // The lone CRs in the comment keep every line inside the quote.
         assert!(
-            !markdown.contains(" <img") && !markdown.contains("[x]("),
+            markdown.contains("> alpha\n> \n> \\`\\`\\`\n"),
             "{markdown}"
         );
     }

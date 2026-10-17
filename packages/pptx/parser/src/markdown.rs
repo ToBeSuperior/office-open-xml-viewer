@@ -355,18 +355,32 @@ pub(crate) fn render_table_cell_md(cell: &TableCell) -> String {
     let Some(tb) = &cell.text_body else {
         return String::new();
     };
-    let mut buf = String::new();
-    for (i, para) in tb.paragraphs.iter().enumerate() {
-        if i > 0 {
-            buf.push_str("<br>");
-        }
-        for run in &para.runs {
-            if let TextRun::Text(t) = run {
-                buf.push_str(&escape_text(&t.text, TextContext::TableCell));
-            }
-        }
+    // Trim the cell's document text before escaping it, never the escaped
+    // output; paragraphs are joined with the converter's own `<br>`.
+    let mut paragraphs: Vec<String> = tb
+        .paragraphs
+        .iter()
+        .map(|para| {
+            para.runs
+                .iter()
+                .filter_map(|run| match run {
+                    TextRun::Text(t) => Some(t.text.as_str()),
+                    _ => None,
+                })
+                .collect()
+        })
+        .collect();
+    if let Some(first) = paragraphs.first_mut() {
+        *first = first.trim_start().to_string();
     }
-    buf.trim().to_string()
+    if let Some(last) = paragraphs.last_mut() {
+        *last = last.trim_end().to_string();
+    }
+    paragraphs
+        .iter()
+        .map(|text| escape_text(text, TextContext::TableCell))
+        .collect::<Vec<_>>()
+        .join("<br>")
 }
 
 pub(crate) fn render_chart_md(c: &ChartElement, out: &mut MarkdownWriter) {
@@ -563,7 +577,7 @@ mod tests {
 
         render_chart_md(&chart, &mut out);
 
-        let escaped = r"\<img src=x onerror=alert(1)> \[x\](javascript:alert(1))";
+        let escaped = r"\<img src=x onerror=alert(1)> \[x\](javascript\:alert(1))";
         assert_eq!(
             out.into_string(),
             format!(

@@ -63,22 +63,28 @@ pub fn link_destination(url: &str) -> Option<String> {
     Some(out)
 }
 
-/// True for inline characters escaped in projected text: formatting
-/// metacharacters (`\ * _ \`` and the GFM strikethrough `~`), `&` (which
-/// would start an entity or numeric character reference), and the characters
-/// that would open a link, image or raw HTML from document text (`[`, `]`,
-/// `<`, and `!`, which would turn a following projected link into an image).
-/// Escaping every backtick and tilde also means document text can never open
-/// a code fence.
+/// True for characters escaped wherever document text reaches Markdown.
+/// CommonMark §2.4 lets any ASCII punctuation be backslash-escaped with the
+/// rendered text unchanged, so the set errs towards escaping:
+///
+/// - formatting: `\ * _ \`` and the GFM strikethrough `~` (escaping every
+///   backtick and tilde also means no code fence can open);
+/// - `&`, which would start an entity or numeric character reference;
+/// - `[`, `]`, `<` and `!`, which would open a link, image, raw HTML or a
+///   CommonMark autolink (`!` would turn a following projected link into an
+///   image);
+/// - `|`, which would build a GFM table row or end a table cell;
+/// - `:` and `@`, which every GFM extended scheme (`https:`, `mailto:`) and
+///   email autolink needs.
 pub fn is_inline_metachar(c: char) -> bool {
     matches!(
         c,
-        '\\' | '*' | '_' | '`' | '~' | '&' | '[' | ']' | '<' | '!'
+        '\\' | '*' | '_' | '`' | '~' | '&' | '[' | ']' | '<' | '!' | '|' | ':' | '@'
     )
 }
 
 /// Where projected document text is placed; selects the extra handling on top
-/// of the inline escaping every context shares.
+/// of the escaping every context shares.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TextContext {
     /// Running text (paragraphs, list items, notes, quoted comment lines).
@@ -88,20 +94,34 @@ pub enum TextContext {
     /// An ATX heading label: line breaks become spaces (a heading is one
     /// line) and `#` is escaped so the text cannot form a closing sequence.
     Heading,
-    /// A GFM table cell: `|` is escaped and line breaks become `<br>` so the
-    /// text stays inside its cell and row.
+    /// A GFM table cell: line breaks become `<br>` so the text stays inside
+    /// its cell and row.
     TableCell,
 }
 
+/// Indentation for the line-start block-marker scan: all Unicode whitespace
+/// plus U+FEFF, a superset of what `str::trim` removes and of what Markdown
+/// renderers strip, so trimming or stripping can never expose a marker.
+fn is_indentation(c: char) -> bool {
+    c.is_whitespace() || c == '\u{feff}'
+}
+
 /// Escape document text for the Markdown projection so it reads as literal
-/// text: every [`is_inline_metachar`] is backslash-escaped, plus the
-/// [`TextContext`]-specific handling. In [`TextContext::Inline`] a block
-/// marker at a line start (after optional spaces or tabs) is escaped too, so
-/// the text cannot open an ATX heading (`#`), block quote (`>`), list item
-/// (`-`, `+`, `1.`, `1)`), setext underline or thematic break (`=`, `-`).
-/// Fragments are treated as starting a line because the converter may place
-/// them there; an escaped marker in mid-line renders unchanged.
+/// text in every context and across fragment boundaries:
 ///
+/// - every [`is_inline_metachar`] is backslash-escaped;
+/// - a `.` is escaped when it follows `www` (case-insensitive) or when only
+///   `w`s precede it in this fragment, because the rest of `www.` may end the
+///   previous fragment; this defuses GFM `www.` autolinks;
+/// - in [`TextContext::Inline`], a block marker at a line start (the start of
+///   the text and after every line break, past any [`is_indentation`]) is
+///   escaped, so the text cannot open an ATX heading (`#`), block quote
+///   (`>`), list item (`-`, `+`, `1.`, `1)`), setext underline or thematic
+///   break (`=`, `-`);
+/// - [`TextContext::Heading`] also escapes `#` and folds line breaks into
+///   spaces; [`TextContext::TableCell`] turns line breaks into `<br>`.
+///
+/// Callers trim document text before escaping it, never the escaped output.
 /// Markdown the converter emits itself (heading markers, quote prefixes,
 /// `<br>` between paragraphs, link syntax for an allowed destination) is
 /// written around the result, never through it. The output is at most four
@@ -111,19 +131,26 @@ pub fn escape_text(text: &str, context: TextContext) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
     let mut at_line_start = context == TextContext::Inline;
+    // Consecutive `w`s just written, and whether nothing else has been.
+    let mut w_run = 0usize;
+    let mut only_ws = true;
     while let Some(c) = rest.chars().next() {
         if at_line_start {
             at_line_start = false;
-            let body = rest.trim_start_matches([' ', '\t']);
-            out.push_str(&rest[..rest.len() - body.len()]);
+            let body = rest.trim_start_matches(is_indentation);
+            if body.len() != rest.len() {
+                out.push_str(&rest[..rest.len() - body.len()]);
+                (w_run, only_ws) = (0, false);
+            }
             rest = body;
             if let Some(marker) = block_marker_offset(rest) {
+                // Digits before an ordered-list delimiter, then the escaped
+                // marker itself (ASCII punctuation no other rule escapes).
                 out.push_str(&rest[..marker]);
                 out.push('\\');
-                // The marker is ASCII punctuation that no other rule escapes
-                // in this context, so it is copied as is.
                 out.push_str(&rest[marker..=marker]);
                 rest = &rest[marker + 1..];
+                (w_run, only_ws) = (0, false);
             }
             continue;
         }
@@ -147,15 +174,21 @@ pub fn escape_text(text: &str, context: TextContext) -> String {
             if crlf {
                 rest = &rest[1..];
             }
+            (w_run, only_ws) = (0, false);
             continue;
         }
         if is_inline_metachar(c)
+            || (c == '.' && (w_run >= 3 || only_ws))
             || (context == TextContext::Heading && c == '#')
-            || (context == TextContext::TableCell && c == '|')
         {
             out.push('\\');
         }
         out.push(c);
+        if c.eq_ignore_ascii_case(&'w') {
+            w_run += 1;
+        } else {
+            (w_run, only_ws) = (0, false);
+        }
     }
     out
 }
@@ -163,17 +196,14 @@ pub fn escape_text(text: &str, context: TextContext) -> String {
 /// Byte offset of the character to escape when `line` (with its indentation
 /// removed) would begin a CommonMark block: an ATX heading, block quote,
 /// bullet or ordered list item, setext underline or thematic break. Markers
-/// that need a following space are only escaped when one (or the end of the
-/// text, which another fragment may continue) follows. A bare `.`/`)` counts
-/// as an ordered-list delimiter because the digits may end a preceding run.
-/// `*`, `_`, `` ` `` and `~` never reach here unescaped.
+/// that need a following space are escaped when any [`is_indentation`]
+/// character or the end of the text (which another fragment may continue, or
+/// a trim may produce) follows. A bare `.`/`)` counts as an ordered-list
+/// delimiter because the digits may end a preceding fragment. `*`, `_`, `|`,
+/// `` ` `` and `~` never reach here unescaped.
 fn block_marker_offset(line: &str) -> Option<usize> {
     let bytes = line.as_bytes();
-    let ends_marker = |index: usize| {
-        bytes
-            .get(index)
-            .is_none_or(|b| matches!(b, b' ' | b'\t' | b'\r' | b'\n'))
-    };
+    let ends_marker = |index: usize| line[index..].chars().next().is_none_or(is_indentation);
     match *bytes.first()? {
         b'>' => Some(0),
         b'#' => {
@@ -223,6 +253,84 @@ pub fn line_count_bound(text: &str) -> u64 {
     text.bytes().filter(|&b| b == b'\r' || b == b'\n').count() as u64 + 1
 }
 
+/// Test support: a GFM structure summary of projected Markdown, parsed with
+/// tables, strikethrough, extended autolinks, task lists and footnotes on, so
+/// regression tests can prove document text formed no Markdown structure.
+#[cfg(feature = "gfm-check")]
+pub mod gfm_check {
+    use comrak::nodes::NodeValue;
+    use comrak::{parse_document, Arena, Options};
+
+    /// Counts of the constructs document text must never create, plus the
+    /// plain text of every heading and table cell for structure assertions.
+    #[derive(Debug, Default, PartialEq, Eq)]
+    pub struct GfmSummary {
+        /// Rendered text of the whole document.
+        pub text: String,
+        pub headings: Vec<String>,
+        pub table_cells: Vec<String>,
+        pub tables: usize,
+        pub links: usize,
+        pub images: usize,
+        pub html: usize,
+        pub strikethrough: usize,
+        pub code: usize,
+        pub block_quotes: usize,
+        pub list_items: usize,
+        pub thematic_breaks: usize,
+    }
+
+    pub fn summarize(markdown: &str) -> GfmSummary {
+        let arena = Arena::new();
+        let mut options = Options::default();
+        options.extension.table = true;
+        options.extension.strikethrough = true;
+        options.extension.autolink = true;
+        options.extension.tasklist = true;
+        options.extension.footnotes = true;
+        let root = parse_document(&arena, markdown, &options);
+        let mut summary = GfmSummary::default();
+        for node in root.descendants() {
+            match &node.data.borrow().value {
+                NodeValue::Heading(_) => summary.headings.push(plain_text(node)),
+                NodeValue::TableCell => summary.table_cells.push(plain_text(node)),
+                NodeValue::Table(_) => summary.tables += 1,
+                NodeValue::Link(_) => summary.links += 1,
+                NodeValue::Image(_) => summary.images += 1,
+                NodeValue::HtmlInline(html) if html == "<br>" => {}
+                NodeValue::HtmlInline(_) | NodeValue::HtmlBlock(_) => summary.html += 1,
+                NodeValue::Strikethrough => summary.strikethrough += 1,
+                NodeValue::Code(_) | NodeValue::CodeBlock(_) => summary.code += 1,
+                NodeValue::BlockQuote => summary.block_quotes += 1,
+                NodeValue::Item(_) | NodeValue::TaskItem(_) => summary.list_items += 1,
+                NodeValue::ThematicBreak => summary.thematic_breaks += 1,
+                _ => {}
+            }
+        }
+        summary.text = plain_text(root);
+        summary
+    }
+
+    /// Rendered text below `node`: line breaks read as spaces, and nested
+    /// paragraphs, headings and cells start on a new line.
+    fn plain_text<'a>(node: &'a comrak::nodes::AstNode<'a>) -> String {
+        let mut text = String::new();
+        for child in node.descendants() {
+            match &child.data.borrow().value {
+                NodeValue::Text(value) => text.push_str(value),
+                NodeValue::SoftBreak | NodeValue::LineBreak => text.push(' '),
+                NodeValue::Paragraph | NodeValue::Heading(_) | NodeValue::TableCell
+                    if !std::ptr::eq(child, node) =>
+                {
+                    text.push('\n')
+                }
+                _ => {}
+            }
+        }
+        text
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -230,28 +338,49 @@ mod tests {
     #[test]
     fn document_text_cannot_form_links_images_or_html() {
         let attack = "<img src=x onerror=alert(1)> [x](javascript:alert(1)) ![i](y)";
-        let escaped = r"\<img src=x onerror=alert(1)> \[x\](javascript:alert(1)) \!\[i\](y)";
+        let escaped = r"\<img src=x onerror=alert(1)> \[x\](javascript\:alert(1)) \!\[i\](y)";
         assert_eq!(escape_text(attack, TextContext::Inline), escaped);
         assert_eq!(escape_text(attack, TextContext::Heading), escaped);
         assert_eq!(escape_text(attack, TextContext::TableCell), escaped);
         // Ordinary punctuation is untouched, including mid-line block markers.
-        let plain = "Q3 revenue: $1,200 (+5%) - see p. 4; a/b, -5 and =SUM(A1) #tag 2026.10";
+        let plain = "Q3 revenue $1,200 (+5%) - see p. 4; a/b, -5 and =SUM(A1) 2026.10";
         for context in [
             TextContext::Inline,
             TextContext::Heading,
             TextContext::TableCell,
         ] {
-            assert_eq!(
-                escape_text(plain, context),
-                plain.replace(
-                    '#',
-                    if context == TextContext::Heading {
-                        r"\#"
-                    } else {
-                        "#"
-                    }
-                )
-            );
+            assert_eq!(escape_text(plain, context), plain);
+        }
+    }
+
+    #[test]
+    fn tables_and_autolinks_cannot_form() {
+        let text =
+            "| a | b |\n| :-- | --: |\nforged | row https://e.example/ www.e.example a@e.example";
+        let escaped = "\\| a \\| b \\|\n\\| \\:-- \\| --\\: \\|\nforged \\| row https\\://e.example/ www\\.e.example a\\@e.example";
+        assert_eq!(escape_text(text, TextContext::Inline), escaped);
+        // `www.` split across fragments: any `.` after only `w`s is escaped.
+        for (fragment, escaped) in [
+            (".e.example", r"\.e.example"),
+            ("w.e", r"w\.e"),
+            ("WW.e", r"WW\.e"),
+            ("xwww.e", r"xwww\.e"),
+            ("aw.e", "aw.e"),
+        ] {
+            assert_eq!(escape_text(fragment, TextContext::TableCell), escaped);
+        }
+    }
+
+    #[test]
+    fn unicode_indentation_cannot_hide_a_line_start_marker() {
+        for (line, escaped) in [
+            ("\u{a0}# forged", "\u{a0}\\# forged"),
+            ("\u{2003}> forged", "\u{2003}\\> forged"),
+            ("\u{feff}# forged", "\u{feff}\\# forged"),
+            ("#\u{a0}forged", "\\#\u{a0}forged"),
+            ("-\u{3000}item", "\\-\u{3000}item"),
+        ] {
+            assert_eq!(escape_text(line, TextContext::Inline), escaped, "{line:?}");
         }
     }
 
@@ -304,8 +433,11 @@ mod tests {
     #[test]
     fn contexts_keep_text_inside_its_construct() {
         let text = "a|b #1\r\nc\rd\ne";
-        assert_eq!(escape_text(text, TextContext::Inline), text);
-        assert_eq!(escape_text(text, TextContext::Heading), r"a|b \#1 c d e");
+        assert_eq!(
+            escape_text(text, TextContext::Inline),
+            "a\\|b #1\r\nc\rd\ne"
+        );
+        assert_eq!(escape_text(text, TextContext::Heading), r"a\|b \#1 c d e");
         assert_eq!(
             escape_text(text, TextContext::TableCell),
             r"a\|b #1<br>c<br>d<br>e"

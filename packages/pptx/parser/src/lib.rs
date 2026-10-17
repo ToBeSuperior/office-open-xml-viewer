@@ -4079,60 +4079,69 @@ mod tests {
         );
         assert!(markdown.contains(r"\<img src=x"), "{markdown}");
         assert!(
-            markdown.contains(r"\!\[p\](https://t.example/p.png)"),
+            markdown.contains(r"\!\[p\](https\://t.example/p.png)"),
             "{markdown}"
         );
     }
 
-    /// Slide titles, table cells, equations, speaker notes and review
-    /// comments carry document text into the Markdown projection too. It must
-    /// read as literal text while the converter's own heading, table and quote
-    /// syntax stays intact: no links, HTML, entities, strikethrough, code
-    /// fences or line-start blocks, and a lone CR cannot end a comment quote.
+    /// Slide titles, body text, table cells, equations, speaker notes and
+    /// review comments carry document text into the Markdown projection. The
+    /// output, parsed as GFM (tables, strikethrough, extended autolinks), may
+    /// contain only the converter's own structure: the document text forms no
+    /// table, link, autolink, heading, list, strikethrough, code or HTML node,
+    /// and a lone CR cannot end a comment quote.
     #[test]
-    fn markdown_titles_tables_notes_and_comments_cannot_inject_markup() {
+    fn markdown_document_text_forms_no_markdown_structure() {
         use std::io::{Read, Write};
-        const ATTACK: &str = "&lt;img src=x onerror=alert(1)&gt; [x](javascript:alert(1))";
-        let text_shape = |id: u32, ph: &str, text: &str| {
+        const INLINE: &str = "&lt;img src=x onerror=alert(1)&gt; [x](javascript:alert(1)) https://evil.example/ www.evil.example a@evil.example ~~del~~ &amp;copy; `c`";
+        const INLINE_TEXT: &str = "<img src=x onerror=alert(1)> [x](javascript:alert(1)) https://evil.example/ www.evil.example a@evil.example ~~del~~ &copy; `c`";
+        const LINES: &str = "alpha&#13;&#13;```&#13;| a | b |&#13;| :-- | --: |&#13;forged | row&#13;# h&#13;&#160;# nbsp&#13;&#xFEFF;# bom&#13;&gt; q&#13;- item&#13;1. item&#13;===";
+        let text_shape = |id: u32, ph: &str, paragraphs: &str| {
             format!(
-                r#"<p:sp><p:nvSpPr><p:cNvPr id="{id}" name="S{id}"/><p:cNvSpPr/><p:nvPr>{ph}</p:nvPr></p:nvSpPr><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1000000" cy="1000000"/></a:xfrm></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p>{text}</a:p></p:txBody></p:sp>"#
+                r#"<p:sp><p:nvSpPr><p:cNvPr id="{id}" name="S{id}"/><p:cNvSpPr/><p:nvPr>{ph}</p:nvPr></p:nvSpPr><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1000000" cy="1000000"/></a:xfrm></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/>{paragraphs}</p:txBody></p:sp>"#
             )
         };
+        let para =
+            |text: &str| format!(r#"<a:p><a:r><a:t xml:space="preserve">{text}</a:t></a:r></a:p>"#);
         let cell = |text: &str| {
             format!(
-                r#"<a:tc><a:txBody><a:bodyPr/><a:p><a:r><a:t>{text}</a:t></a:r></a:p></a:txBody><a:tcPr/></a:tc>"#
+                r#"<a:tc><a:txBody><a:bodyPr/><a:p><a:r><a:t xml:space="preserve">{text}</a:t></a:r></a:p></a:txBody><a:tcPr/></a:tc>"#
             )
         };
+        let body = [
+            para(INLINE),
+            para("| a | b |"),
+            para("| :-- | --: |"),
+            para("forged | row"),
+            para("&#160;# forged nbsp"),
+            para("&#xFEFF;# forged bom"),
+            para("- forged item"),
+            para("```"),
+            r#"<a:p><a:r><a:t>ww</a:t></a:r><a:r><a:t>w.split.example</a:t></a:r></a:p>"#.to_string(),
+            r#"<a:p><mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:a14="http://schemas.microsoft.com/office/drawing/2010/main" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"><mc:Choice Requires="a14"><a14:m><m:oMath><m:r><m:t>&lt;img src=x onerror=alert(2)&gt; https://evil.example/</m:t></m:r></m:oMath></a14:m></mc:Choice><mc:Fallback/></mc:AlternateContent></a:p>"#.to_string(),
+        ]
+        .concat();
         let slide_sp = [
             text_shape(
                 2,
                 r#"<p:ph type="title"/>"#,
-                &format!("<a:r><a:t>{ATTACK} #</a:t></a:r>"),
+                &para(&format!("{INLINE} #")),
             ),
             format!(
                 r#"<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="3" name="T"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="0" y="0"/><a:ext cx="1000000" cy="1000000"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table"><a:tbl><a:tblGrid><a:gridCol w="500000"/><a:gridCol w="500000"/></a:tblGrid><a:tr h="100000">{}{}</a:tr></a:tbl></a:graphicData></a:graphic></p:graphicFrame>"#,
-                cell(ATTACK),
-                cell("a|b, 50% done"),
+                cell(INLINE),
+                cell("a|b&#13;# forged, 50% done"),
             ),
-            text_shape(
-                4,
-                "",
-                r#"<mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:a14="http://schemas.microsoft.com/office/drawing/2010/main" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"><mc:Choice Requires="a14"><a14:m><m:oMath><m:r><m:t>&lt;img src=x onerror=alert(2)&gt;</m:t></m:r></m:oMath></a14:m></mc:Choice><mc:Fallback/></mc:AlternateContent>"#,
-            ),
-            text_shape(
-                5,
-                "",
-                "<a:r><a:t>- item ~~del~~ &amp;copy;</a:t></a:r>",
-            ),
+            text_shape(4, "", &body),
         ]
         .concat();
         let rels = r#"<Relationship Id="rNotes" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesSlide" Target="../notesSlides/notesSlide1.xml"/><Relationship Id="rComments" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="../comments/comment1.xml"/>"#;
         let base = build_align_pptx_with_rels(&slide_sp, "", "", rels, "", "");
         let notes = format!(
-            r#"<p:notes xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:cSld><p:spTree><a:p><a:r><a:t>{ATTACK}&#13;```&#13;# h</a:t></a:r></a:p></p:spTree></p:cSld></p:notes>"#
+            r#"<p:notes xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:cSld><p:spTree><a:p><a:r><a:t xml:space="preserve">{INLINE}&#13;{LINES}</a:t></a:r></a:p></p:spTree></p:cSld></p:notes>"#
         );
         let comments = format!(
-            r#"<p:cmLst xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cm authorId="0"><p:text>{ATTACK}&#13;&#13;outside</p:text></p:cm></p:cmLst>"#
+            r#"<p:cmLst xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cm authorId="0"><p:text>{INLINE}&#13;{LINES}</p:text></p:cm></p:cmLst>"#
         );
         let mut source = zip::ZipArchive::new(Cursor::new(base)).unwrap();
         let mut data = Vec::new();
@@ -4158,36 +4167,52 @@ mod tests {
         }
 
         let markdown = to_markdown_native(&data).expect("markdown projects");
+        let gfm = ooxml_common::markdown::gfm_check::summarize(&markdown);
 
-        let escaped = r"\<img src=x onerror=alert(1)> \[x\](javascript:alert(1))";
-        assert!(
-            markdown.starts_with(&format!("# {escaped} \\# (slide 1)\n")),
+        assert_eq!(
+            gfm.headings,
+            [
+                format!("{INLINE_TEXT} # (slide 1)"),
+                "Speaker notes".to_string(),
+                "Review comments".to_string(),
+                "Slide 1 — Comment 1".to_string(),
+            ],
             "{markdown}"
         );
-        assert!(
-            markdown.contains(&format!("| {escaped} | a\\|b, 50% done |\n| --- | --- |\n")),
+        assert_eq!(gfm.tables, 1, "{markdown}");
+        assert_eq!(
+            gfm.table_cells,
+            [INLINE_TEXT.to_string(), "a|b# forged, 50% done".to_string()],
             "{markdown}"
         );
-        assert!(
-            markdown.contains(r"\<img src=x onerror=alert(2)>"),
+        assert_eq!(gfm.block_quotes, 1, "{markdown}");
+        assert_eq!(
+            (gfm.links, gfm.images, gfm.html, gfm.strikethrough, gfm.code),
+            (0, 0, 0, 0, 0),
             "{markdown}"
         );
+        assert_eq!((gfm.list_items, gfm.thematic_breaks), (0, 0), "{markdown}");
+        for literal in [
+            INLINE_TEXT,
+            "| a | b |",
+            "| :-- | --: |",
+            "forged | row",
+            "# forged nbsp",
+            "\u{feff}# forged bom",
+            "- forged item",
+            "```",
+            "www.split.example",
+            "<img src=x onerror=alert(2)> https://evil.example/",
+            "# h",
+            "> q",
+            "1. item",
+            "===",
+        ] {
+            assert!(gfm.text.contains(literal), "{literal:?} in {markdown}");
+        }
+        // The lone CRs in the comment keep every line inside the quote.
         assert!(
-            markdown.contains("\n\\- item \\~\\~del\\~\\~ \\&copy;\n"),
-            "{markdown}"
-        );
-        assert!(
-            markdown.contains(&format!(
-                "## Speaker notes\n\n{escaped}\r\\`\\`\\`\r\\# h\n"
-            )),
-            "{markdown}"
-        );
-        assert!(
-            markdown.contains(&format!("> {escaped}\n> \n> outside\n")),
-            "{markdown}"
-        );
-        assert!(
-            !markdown.contains(" <img") && !markdown.contains("[x]("),
+            markdown.contains("> alpha\n> \n> \\`\\`\\`\n"),
             "{markdown}"
         );
     }

@@ -90,7 +90,6 @@ pub(crate) fn render_document_with_limit(doc: &Document, limit: u64) -> Markdown
         out.push_str("\n## Footnotes\n\n");
         for note in &doc.footnotes {
             let text = note_inline_text(&note.content);
-            let text = text.trim();
             if text.is_empty() {
                 continue;
             }
@@ -101,7 +100,6 @@ pub(crate) fn render_document_with_limit(doc: &Document, limit: u64) -> Markdown
         out.push_str("\n## Endnotes\n\n");
         for note in &doc.endnotes {
             let text = note_inline_text(&note.content);
-            let text = text.trim();
             if text.is_empty() {
                 continue;
             }
@@ -272,8 +270,7 @@ fn render_paragraph(p: &DocParagraph, out: &mut MarkdownWriter) {
     } else {
         TextContext::Inline
     };
-    let text = render_runs(&p.runs, &p.run_revisions, context);
-    let trimmed = text.trim();
+    let trimmed = render_runs(&p.runs, &p.run_revisions, context);
     if trimmed.is_empty() {
         out.push('\n');
         return;
@@ -304,30 +301,47 @@ fn render_paragraph(p: &DocParagraph, out: &mut MarkdownWriter) {
 /// Flatten a note's block-level content into a single inline markdown string
 /// (paragraphs joined with a space). Used for the `[^id]:` footnote/endnote
 /// projection, which is single-line by convention. Reference markers are
-/// dropped by `format_text_run`.
+/// dropped by `push_text_run`.
 fn note_inline_text(content: &[BodyElement]) -> String {
     let mut parts: Vec<String> = Vec::new();
     for el in content {
         if let BodyElement::Paragraph(p) = el {
             let t = render_runs(&p.runs, &p.run_revisions, TextContext::Inline);
-            let t = t.trim();
             if !t.is_empty() {
-                parts.push(t.to_string());
+                parts.push(t);
             }
         }
     }
     parts.join(" ")
 }
 
+/// One piece of a projected paragraph: document text still to be escaped, or
+/// Markdown the converter emits itself (wrappers, link syntax, breaks).
+enum Piece {
+    Text(String),
+    Markup(String),
+}
+
+impl Piece {
+    fn is_blank(&self) -> bool {
+        match self {
+            Piece::Text(value) | Piece::Markup(value) => value.trim().is_empty(),
+        }
+    }
+}
+
 /// Project a paragraph's runs for the Markdown construct `context` places
 /// them in: document text goes through the shared escaping, and line breaks
 /// follow the construct (a space in a heading, `<br>` in a table cell).
+/// Surrounding whitespace is trimmed from the document text before it is
+/// escaped, never from the escaped output, so a trim cannot expose a
+/// line-start marker the escaping did not see.
 fn render_runs(
     runs: &[DocRun],
     revisions: &[Option<crate::types::RunRevision>],
     context: TextContext,
 ) -> String {
-    let mut out = String::new();
+    let mut pieces = Vec::new();
     for (run_index, run) in runs.iter().enumerate() {
         // §17.13.5 revision containers apply to every inline occurrence. Keep
         // Markdown on the same accepted-final projection as layout, including
@@ -343,23 +357,26 @@ fn render_runs(
             continue;
         }
         match run {
-            DocRun::Text(t) => out.push_str(&format_text_run(t, context)),
+            DocRun::Text(t) => push_text_run(t, context, &mut pieces),
             DocRun::Field(f) => {
                 // Field runs render their displayed text (PAGE, NUMPAGES, …
                 // resolve at view time in the renderer; for markdown we just
                 // surface whatever fallback the parser captured).
                 if !f.fallback_text.is_empty() {
-                    out.push_str(&escape_text(&f.fallback_text, context));
+                    pieces.push(Piece::Text(f.fallback_text.clone()));
                 }
             }
             DocRun::Break { break_type } => {
                 use crate::types::BreakType;
-                out.push_str(match (context, break_type) {
-                    (TextContext::Heading, _) => " ",
-                    (TextContext::TableCell, _) => "<br>",
-                    (_, BreakType::Line | BreakType::RenderedPage) => "  \n",
-                    (_, BreakType::Page | BreakType::Column) => "\n\n",
-                });
+                pieces.push(Piece::Markup(
+                    match (context, break_type) {
+                        (TextContext::Heading, _) => " ",
+                        (TextContext::TableCell, _) => "<br>",
+                        (_, BreakType::Line | BreakType::RenderedPage) => "  \n",
+                        (_, BreakType::Page | BreakType::Column) => "\n\n",
+                    }
+                    .to_string(),
+                ));
             }
             DocRun::AnchorHost(_)
             | DocRun::Image(_)
@@ -373,33 +390,55 @@ fn render_runs(
                 // Surface the equation's literal characters as inline text.
                 let text = crate::math::nodes_to_text(nodes);
                 if !text.is_empty() {
-                    out.push_str(&escape_text(&text, context));
+                    pieces.push(Piece::Text(text));
                 }
             }
             DocRun::PTab { .. } => {
                 // §17.3.3.23 absolute-position tab. Markdown has no notion of an
                 // absolute tab position, so project it as a plain tab advance (the
                 // same whitespace projection a `<w:tab>`'s "\t" text run produces).
-                out.push('\t');
+                pieces.push(Piece::Text("\t".to_string()));
             }
+        }
+    }
+
+    // Trim the paragraph's surrounding whitespace on the unescaped pieces.
+    let start = pieces.iter().position(|piece| !piece.is_blank());
+    let end = pieces.iter().rposition(|piece| !piece.is_blank());
+    let (Some(start), Some(end)) = (start, end) else {
+        return String::new();
+    };
+    let pieces = &mut pieces[start..=end];
+    if let Some(Piece::Text(first)) = pieces.first_mut() {
+        *first = first.trim_start().to_string();
+    }
+    if let Some(Piece::Text(last)) = pieces.last_mut() {
+        *last = last.trim_end().to_string();
+    }
+    let mut out = String::new();
+    for piece in pieces.iter() {
+        match piece {
+            Piece::Text(text) => out.push_str(&escape_text(text, context)),
+            Piece::Markup(markup) => out.push_str(markup),
         }
     }
     out
 }
 
-fn format_text_run(t: &TextRun, context: TextContext) -> String {
+fn push_text_run(t: &TextRun, context: TextContext, pieces: &mut Vec<Piece>) {
     // Footnote/endnote reference markers carry only the note's id; the linkage
     // is expressed via the `[^id]` syntax elsewhere, so drop the marker glyph
     // from the inline text projection.
     if t.note_ref.is_some() {
-        return String::new();
+        return;
     }
     let raw = &t.text;
     if raw.is_empty() {
-        return String::new();
+        return;
     }
     if raw.chars().all(|c| c.is_whitespace()) {
-        return escape_text(raw, context);
+        pieces.push(Piece::Text(raw.clone()));
+        return;
     }
     // Pull whitespace outside the formatting wrappers so `(bold) " Title " `
     // becomes ` **Title** ` not `**" Title "**`.
@@ -409,36 +448,59 @@ fn format_text_run(t: &TextRun, context: TextContext) -> String {
     let trailing = &raw[trail_start..];
     let body = &raw[leading_len..trail_start];
 
-    let mut s = escape_text(body, context);
     // A target outside the viewer's hyperlink scheme policy (`javascript:`,
     // `data:`, ...) keeps its text but does not become a Markdown link.
-    if let Some(url) = t
-        .hyperlink
-        .as_deref()
-        .and_then(ooxml_common::markdown::link_destination)
-    {
+    let link = t.hyperlink.as_deref().and_then(|url| {
+        let url = ooxml_common::markdown::link_destination(url)?;
         // A `|` would end a table cell even inside a link destination.
-        let url = if context == TextContext::TableCell {
+        Some(if context == TextContext::TableCell {
             url.replace('|', "%7C")
         } else {
             url
-        };
-        s = format!("[{s}]({url})");
-    }
-    // Order: bold > italic > strikethrough wrappers. Multiple wrappers stack.
-    if t.bold {
-        s = format!("**{s}**");
+        })
+    });
+    // Wrappers nest as strikethrough > italic > bold > link around the text.
+    let mut open = String::new();
+    let mut close = String::new();
+    if t.strikethrough {
+        open.push_str("~~");
     }
     if t.italic {
-        s = format!("*{s}*");
+        open.push('*');
+    }
+    if t.bold {
+        open.push_str("**");
+    }
+    if link.is_some() {
+        open.push('[');
+    }
+    if let Some(url) = &link {
+        close.push_str("](");
+        close.push_str(url);
+        close.push(')');
+    }
+    if t.bold {
+        close.push_str("**");
+    }
+    if t.italic {
+        close.push('*');
     }
     if t.strikethrough {
-        s = format!("~~{s}~~");
+        close.push_str("~~");
     }
-    let mut out = escape_text(leading, context);
-    out.push_str(&s);
-    out.push_str(&escape_text(trailing, context));
-    out
+    if !leading.is_empty() {
+        pieces.push(Piece::Text(leading.to_string()));
+    }
+    if !open.is_empty() {
+        pieces.push(Piece::Markup(open));
+    }
+    pieces.push(Piece::Text(body.to_string()));
+    if !close.is_empty() {
+        pieces.push(Piece::Markup(close));
+    }
+    if !trailing.is_empty() {
+        pieces.push(Piece::Text(trailing.to_string()));
+    }
 }
 
 /// Document text in running Markdown; see
@@ -479,7 +541,7 @@ fn render_table_cell(cell: &DocTableCell) -> String {
         match el {
             CellElement::Paragraph(p) => {
                 let text = render_runs(&p.runs, &p.run_revisions, TextContext::TableCell);
-                buf.push_str(text.trim());
+                buf.push_str(&text);
             }
             CellElement::Table(_) => {
                 // Nested tables: not representable inside a markdown cell.
