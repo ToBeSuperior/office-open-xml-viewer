@@ -367,7 +367,7 @@ export async function loadDocxModelSource(
         };
         // Absent authored faces: see native-route-line-metrics.ts.
         const nativeRoutes = await prepareMainThreadNativeRouteMetrics(
-          doc._source, doc._document, serviceOptions,
+          doc._source, doc._document, { useGoogleFonts: !!opts.useGoogleFonts, cjkFallback },
         );
         // destroy() may have drained this document's faces while the
         // sentinels loaded: release a late acquisition before aborting.

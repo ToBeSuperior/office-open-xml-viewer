@@ -134,14 +134,15 @@ function ooxmlAwaits(node, code, pptxFontOwnerRefactor = false) {
   return awaits;
 }
 
-const NATIVE_ROUTE_BARRIER = 'prepareMainThreadNativeRouteMetrics';
+const NATIVE_ROUTE_BARRIER = 'nativeRoutesPending';
 
 export function auditAwaitCase(file, name, previous, current) {
   const pptxFontOwnerRefactor = file === 'packages/pptx/src/presentation.ts' && name === 'load';
   const baseline = ooxmlAwaits(findFunction(parse(previous, { sourceType: 'module', plugins: ['typescript', 'jsx'] }), name), previous, pptxFontOwnerRefactor);
   let candidate = ooxmlAwaits(findFunction(parse(current, { sourceType: 'module', plugins: ['typescript', 'jsx'] }), name), current, pptxFontOwnerRefactor);
-  // DOCX issue #1843 adds one font-preparation barrier (native route line
-  // measurement) between math preparation and the first publication. Accept
+  // DOCX issue #1843 adds one font-preparation barrier (awaiting the native
+  // route line measurement started before font loading) between math
+  // preparation and the first publication. Accept
   // exactly that insertion at exactly that position while the merge base
   // predates it; any other addition, removal or reordering still fails.
   if (file === 'packages/docx/src/document.ts' && name === 'load'

@@ -5,6 +5,7 @@ import { resolveCjkFallback, type CjkLang } from '@silurus/ooxml-core';
 import InlineWorker from './worker.ts?worker&inline';
 import wasmAssetUrl from './wasm/docx_parser_bg.wasm?url';
 import {
+  activeFontSet,
   preloadGoogleFonts,
   unloadOfficeFontFallbacks,
   releaseOwnedBitmap,
@@ -45,8 +46,8 @@ import { ProgressiveLayoutLifecycle } from '@silurus/ooxml-core/internal/progres
 import { ProgressiveLayoutObserverNotifier } from '@silurus/ooxml-core/internal/progressive-layout-observers';
 import type { DocxDocumentModel, RenderPageOptions, WorkerRequest, WorkerResponse, DocComment, DocNote, DocRevision } from './types';
 import { renderLayoutSourceToCanvas, documentHasMath, prepareMathRuns, type DocxTextRunInfo } from './renderer';
-import { createLayoutServices, prepareMainThreadNativeRouteMetrics } from './layout-runtime.js';
-import { measureDocxNativeRouteLines } from './native-route-line-metrics.js';
+import { createLayoutServices, nativeRouteLineRequests } from './layout-runtime.js';
+import { admitDocxNativeRouteLines, measureDocxNativeRouteLines } from './native-route-line-metrics.js';
 import { buildBookmarkPageMap } from './bookmark-nav';
 import { DOCX_GOOGLE_FONTS, docxGoogleFontPlan, docxOfficeFontFallbackRequests } from './google-fonts';
 import { loadEmbeddedFonts } from './embedded-fonts';
@@ -414,6 +415,9 @@ export class DocxDocument {
   private _embeddedFontFaces: FontFace[] = [];
   /** Library-owned exact-local or pinned substitute faces in main mode. */
   private _officeFontFaces: FontFace[] = [];
+  /** Native route sentinels (native-route-line-metrics.ts), main mode. */
+  private _nativeRouteFaces: FontFace[] = [];
+  private _nativeRouteFacesReleased = false;
   /** Google-Fonts `FontFace` objects this document preloaded into `document.fonts`
    *  (main mode only — in worker mode the worker owns them and terminates with its
    *  own FontFaceSet). Released in {@link destroy} so they do not leak into the
@@ -625,6 +629,24 @@ export class DocxDocument {
       // inside the worker (before it paginates); here it runs on the main thread.
       let embeddedMetrics: Awaited<ReturnType<typeof loadEmbeddedFonts>>['metrics'] | undefined;
       let embeddedRoutes: Awaited<ReturnType<typeof loadEmbeddedFonts>>['routes'] | undefined;
+      // Absent authored faces (native-route-line-metrics.ts): native family
+      // lists do not depend on which resources load, so the document-realm
+      // measurement starts here and overlaps the font loading below; admission
+      // waits for every font. The sentinels stay with this document (they
+      // judge glyph ownership during layout) and are released by destroy().
+      const measuringDocument = doc;
+      const nativeRoutesPending = doc._mode === 'main' && doc._document && doc._source
+        ? measureDocxNativeRouteLines(nativeRouteLineRequests(doc._source, doc._document, {
+            useGoogleFonts: !!opts.useGoogleFonts, cjkFallback,
+          }), true).then((measured) => {
+            if (measuringDocument._nativeRouteFacesReleased) {
+              unloadOfficeFontFallbacks(measured.faces);
+              return null;
+            }
+            measuringDocument._nativeRouteFaces.push(...measured.faces);
+            return measured;
+          }, () => null)
+        : null;
       if (doc._mode === 'main' && doc._document?.embeddedFonts?.length) {
         const loadingDocument = doc;
         const loadedEmbedded = await loadEmbeddedFonts(
@@ -690,21 +712,13 @@ export class DocxDocument {
           mathResources: preparedMath?.records,
           mathDrawables: preparedMath?.drawables,
         };
-        // Absent authored faces: the measured normal line of each native
-        // route's painting face (native-route-line-metrics.ts).
-        const nativeRoutes = await prepareMainThreadNativeRouteMetrics(
-          doc._source, doc._document, serviceOptions,
-        );
-        // destroy() may have drained this document's faces while the
-        // sentinels loaded: release a late acquisition before aborting.
-        if (signal?.aborted) {
-          unloadOfficeFontFallbacks(nativeRoutes.faces);
-          throw new PaginationAbortError();
-        }
-        doc._officeFontFaces = [...doc._officeFontFaces, ...nativeRoutes.faces];
+        const nativeRoutes = await nativeRoutesPending;
+        checkAbort();
         runtime.services = createLayoutServices(doc._source, {
           ...serviceOptions,
-          nativeRouteMetrics: nativeRoutes.nativeRouteMetrics,
+          nativeRouteMetrics: nativeRoutes && nativeRoutes.faces.length > 0
+            ? admitDocxNativeRouteLines(nativeRoutes.lines, activeFontSet())
+            : undefined,
         });
         const services = runtime.services;
         const retained = retainRenderWorkerDocumentLayout(
@@ -1407,6 +1421,11 @@ export class DocxDocument {
     if (this._officeFontFaces.length > 0) {
       unloadOfficeFontFallbacks(this._officeFontFaces);
       this._officeFontFaces = [];
+    }
+    this._nativeRouteFacesReleased = true;
+    if (this._nativeRouteFaces?.length > 0) {
+      unloadOfficeFontFallbacks(this._nativeRouteFaces);
+      this._nativeRouteFaces = [];
     }
     // Release the Google-Fonts substitutes this document preloaded into the
     // shared FontFaceSet (main mode). Same refcount contract as the embedded

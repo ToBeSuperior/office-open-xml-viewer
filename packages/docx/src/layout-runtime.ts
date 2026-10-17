@@ -55,26 +55,27 @@ function layoutCjkFallback(source: LayoutSourceStore, requested: CjkLang | undef
     ?? classifyCjkFont(source.fonts.majorFamily) ?? classifyCjkFont(source.fonts.minorFamily) ?? requested;
 }
 
-/** Native route family lists that {@link createLayoutServices} with the same
- * options can request (native-route-line-metrics.ts). Resolves through the
- * production text service built from the same inventory, so the set is the
- * resolver's own, not a reconstruction of it. */
+/** Every native route family list that {@link createLayoutServices} can
+ * request for this document (native-route-line-metrics.ts), resolved through
+ * the production text service itself. A native route's family list depends
+ * only on the authored family, the document's family facts, language, script
+ * slot, generic family, CJK fallback and the optional-substitute policy, never
+ * on which resources load: a loaded resource only turns a tuple into a
+ * registered route. So the service is built without any resource inventory,
+ * which makes every tuple native, and the result is the complete set of
+ * native lists before any font is loaded. Lists that later resolve to a
+ * registered or installed route are measured but never looked up. */
 export function nativeRouteLineRequests(
   input: DocxDocumentModel | LayoutSourceStore,
   model: DocxDocumentModel,
-  options: Omit<NonNullable<Parameters<typeof createLayoutServices>[1]>, 'nativeRouteMetrics'> = {},
+  options: Readonly<{ useGoogleFonts?: boolean; cjkFallback?: CjkLang }> = {},
 ): NativeRouteLineRequest[] {
   const source = isLayoutSourceStore(input) ? input : layoutSourceStore(input);
-  const localMetrics = snapshotFontMetrics(options.localMetrics);
-  const canvasElement = options.measureContext?.canvas;
   const text = createProductionTextLayoutService(source, {
-    ...options,
+    useGoogleFonts: options.useGoogleFonts,
     cjkFallback: layoutCjkFallback(source, options.cjkFallback),
-    localMetrics,
-    fontMetrics: snapshotFontMetrics({ ...localMetrics, ...options.fontMetrics }),
     measureContext: null,
-    fontSet: (isHTMLCanvas(canvasElement) ? canvasElement.ownerDocument?.fonts : undefined)
-      ?? activeFontSet(),
+    fontSet: null,
   });
   return docxNativeRouteRequests(model, text);
 }
@@ -85,7 +86,7 @@ export function nativeRouteLineRequests(
 export async function prepareMainThreadNativeRouteMetrics(
   input: LayoutSourceStore,
   model: DocxDocumentModel,
-  options: Omit<NonNullable<Parameters<typeof createLayoutServices>[1]>, 'nativeRouteMetrics'> = {},
+  options: Readonly<{ useGoogleFonts?: boolean; cjkFallback?: CjkLang }> = {},
 ): Promise<{ nativeRouteMetrics?: Record<string, NativeRouteLineMetric>; faces: FontFace[] }> {
   const measured = await measureDocxNativeRouteLines(nativeRouteLineRequests(input, model, options), true);
   return measured.faces.length > 0

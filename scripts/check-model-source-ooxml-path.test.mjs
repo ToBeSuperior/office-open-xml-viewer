@@ -35,11 +35,11 @@ test('PPTX retains the same opt-in font barrier when its owner becomes a lease',
 test('DOCX admits only the native route barrier after math preparation', () => {
   const file = 'packages/docx/src/document.ts';
   const previous = 'async function load() { await parse(); await prepareMathRuns(); await publish(); }';
-  const changed = 'async function load() { await parse(); await prepareMathRuns(); await prepareMainThreadNativeRouteMetrics(); await publish(); }';
+  const changed = 'async function load() { await parse(); await prepareMathRuns(); await nativeRoutesPending(); await publish(); }';
   assert.equal(auditAwaitCase(file, 'load', previous, changed), 3);
-  const moved = 'async function load() { await prepareMainThreadNativeRouteMetrics(); await parse(); await prepareMathRuns(); await publish(); }';
+  const moved = 'async function load() { await nativeRoutesPending(); await parse(); await prepareMathRuns(); await publish(); }';
   assert.throws(() => auditAwaitCase(file, 'load', previous, moved), /OOXML awaits changed/);
-  const twice = 'async function load() { await parse(); await prepareMathRuns(); await prepareMainThreadNativeRouteMetrics(); await prepareMainThreadNativeRouteMetrics(); await publish(); }';
+  const twice = 'async function load() { await parse(); await prepareMathRuns(); await nativeRoutesPending(); await nativeRoutesPending(); await publish(); }';
   assert.throws(() => auditAwaitCase(file, 'load', previous, twice), /OOXML awaits changed/);
   assert.throws(() => auditAwaitCase('sample.ts', 'load', previous, changed), /OOXML awaits changed/);
 });

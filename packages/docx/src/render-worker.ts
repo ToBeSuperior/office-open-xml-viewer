@@ -332,6 +332,24 @@ self.onmessage = async (e: MessageEvent<RenderWorkerWireRequest | WorkerSvgDecod
       let embeddedFonts: Awaited<ReturnType<typeof loadEmbeddedFonts>> = { faces: [], metrics: {}, routes: [] };
       let officeFaces: FontFace[] = [];
       let fontsTransferred = false;
+      // Absent authored faces (native-route-line-metrics.ts): this realm has no
+      // DOM, so the owning document measures the native routes. Their lists do
+      // not depend on loaded resources, so the request leaves now and the
+      // document measures while this realm loads fonts; this realm loads its
+      // own sentinels to re-verify each measurement and to judge glyph
+      // ownership during layout.
+      const nativeRouteRequests = nativeRouteLineRequests(source, model, {
+        useGoogleFonts: !!req.useGoogleFonts, cjkFallback: req.cjkFallback,
+      });
+      const pendingNativeRouteLines = nativeRouteRequests.length > 0
+        ? new Promise<(NativeRouteNormalLine | null)[]>(resolve => {
+            nativeRouteMeasurements.set(id, resolve);
+            post({ type: 'measureNativeRouteLines', forId: id, requests: nativeRouteRequests });
+          })
+        : Promise.resolve([]);
+      // Retained by the cleanup below until the faces join officeFaces.
+      const nativeSentinels = nativeRouteRequests.length > 0
+        ? loadNativeRouteSentinels(activeFontSet()) : Promise.resolve(null);
       try {
         // ECMA-376 §17.8.1 / §17.8.3 — register embedded fonts into the worker's
         // FontFaceSet (self.fonts) before pagination measures text. Bytes are read
@@ -385,22 +403,11 @@ self.onmessage = async (e: MessageEvent<RenderWorkerWireRequest | WorkerSvgDecod
           mathResources: preparedMath?.records,
           mathDrawables: preparedMath?.drawables,
         };
-        // Absent authored faces (native-route-line-metrics.ts): this realm has
-        // no DOM, so the owning document measures the same enumerated routes;
-        // this realm loads its own sentinels to re-verify each measurement
-        // and to judge glyph ownership during layout.
-        const nativeRouteRequests = nativeRouteLineRequests(source, model, serviceOptions);
         let nativeRouteMetrics: ReturnType<typeof admitDocxNativeRouteLines> | undefined;
-        const sentinels = nativeRouteRequests.length > 0
-          ? await loadNativeRouteSentinels(activeFontSet()) : null;
+        const [sentinels, nativeRouteLines] = await Promise.all([nativeSentinels, pendingNativeRouteLines]);
         if (sentinels) {
           officeFaces = [...officeFaces, ...sentinels];
-          if (requestedGeneration !== parseGeneration) throw new Error('render-worker parse was superseded');
-          const lines = await new Promise<(NativeRouteNormalLine | null)[]>(resolve => {
-            nativeRouteMeasurements.set(id, resolve);
-            post({ type: 'measureNativeRouteLines', forId: id, requests: nativeRouteRequests });
-          });
-          nativeRouteMetrics = admitDocxNativeRouteLines(lines, activeFontSet());
+          nativeRouteMetrics = admitDocxNativeRouteLines(nativeRouteLines, activeFontSet());
         }
         if (requestedGeneration !== parseGeneration) throw new Error('render-worker parse was superseded');
         const layoutServices = createLayoutServices(source, { ...serviceOptions, nativeRouteMetrics });
@@ -419,6 +426,9 @@ self.onmessage = async (e: MessageEvent<RenderWorkerWireRequest | WorkerSvgDecod
         doc = requestedDoc;
       } finally {
         if (!fontsTransferred) {
+          void nativeSentinels.then((faces) => {
+            if (faces && !officeFaces.includes(faces[0]!)) unloadOfficeFontFallbacks(faces);
+          });
           try { unloadOfficeFontFallbacks(officeFaces); } catch {}
           try { unloadGoogleFonts(googleFaces); } catch {}
           try { unregisterEmbeddedFonts(embeddedFonts.faces); } catch {}
