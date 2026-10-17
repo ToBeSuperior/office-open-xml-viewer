@@ -369,6 +369,7 @@ impl RetainedBytes for ChartStyleFill {
                 tile,
                 alpha,
                 duotone,
+                blip_effects,
             } => {
                 let _ = (dpi, rot_with_shape, src_rect, fill_rect, stretch, alpha);
                 image_path
@@ -377,6 +378,7 @@ impl RetainedBytes for ChartStyleFill {
                     .saturating_add(svg_image_path.heap_bytes())
                     .saturating_add(tile.heap_bytes())
                     .saturating_add(duotone.heap_bytes())
+                    .saturating_add(blip_effects.heap_bytes())
             }
         }
     }

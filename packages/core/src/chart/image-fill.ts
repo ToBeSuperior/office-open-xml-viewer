@@ -92,6 +92,9 @@ export function chartImageFillKey(fill: ImageFill): string {
     fill.svgImagePath ?? null,
     fill.duotone?.clr1 ?? null,
     fill.duotone?.clr2 ?? null,
+    // The ordered CT_Blip chain is part of the decoded identity (structural,
+    // so no delimiter can alias two recipes).
+    fill.blipEffects?.length ? fill.blipEffects : null,
   ]);
 }
 

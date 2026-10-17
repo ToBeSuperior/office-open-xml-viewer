@@ -391,6 +391,7 @@ function imageDecodeRequests(
           mimeType: fill.mimeType,
           ...(fill.svgImagePath === undefined ? {} : { svgImagePath: fill.svgImagePath }),
           ...(fill.duotone === undefined ? {} : { duotone: fill.duotone }),
+          ...(fill.blipEffects?.length ? { blipEffects: fill.blipEffects } : {}),
           widthPt: raster.widthPt,
           heightPt: raster.heightPt,
           hasCrop: fill.srcRect != null,

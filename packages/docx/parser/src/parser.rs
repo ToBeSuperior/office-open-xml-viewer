@@ -28460,7 +28460,12 @@ mod inline_wps_shape_tests {
         assert_eq!(json["srcRect"]["b"], 0.25);
         assert_eq!(json["fillRect"]["l"], 0.1);
         assert_eq!(json["fillRect"]["r"], -0.07574);
-        assert_eq!(json["alpha"], 0.75);
+        // alphaModFix is an ordered effect, never also paint-time alpha.
+        assert!(json.get("alpha").is_none());
+        assert_eq!(
+            json["blipEffects"],
+            serde_json::json!([{"type": "alphaModFix", "amt": 0.75}])
+        );
     }
 
     #[test]

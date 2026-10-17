@@ -648,7 +648,7 @@ export async function prefetchImages(
       // A zero-inset sentinel forces the raster SVG twin without applying crop
       // twice: widthPt/heightPt already contain the post-crop metafile maxima.
       srcRect: hasSourceCrop ? { l: 0, t: 0, r: 0, b: 0 } : null,
-      duotone: fill.duotone ?? null,
+      duotone: imagePixelTransform(fill),
       failClosedOnDuotoneFailure: true,
       ...(targetWidthPx && targetHeightPx
         ? { targetWidthPx, targetHeightPx }
