@@ -1401,8 +1401,11 @@ export function layoutTable(
       ? { compoundBorderFrames: retainedCompoundFrames }
       : {}),
   };
+  // The table layout is its own verified root, so consumers that retain only
+  // `.layout` (body occurrence projection, table acquisition) hold a branded
+  // immutable graph and can share it instead of copying it again.
   return snapshotPlainData({
-    layout,
+    layout: snapshotPlainData(layout, 'TableLayoutResult.layout'),
     nextCursor: { xPt: placement.cursor.xPt, yPt: placement.cursor.yPt + heightPt },
   }, 'TableLayoutResult') as BlockLayoutResult<TableLayout>;
 }
