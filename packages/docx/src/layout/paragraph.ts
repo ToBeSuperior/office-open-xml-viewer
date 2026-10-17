@@ -5,7 +5,7 @@ import { shadowInkBounds } from './vml-shadow.js';
 import { createParagraphAnchorReferenceWorkBudget } from './resource-budgets.js';
 import { addExactRational, exactRationalFromNumber, exactRationalToNumberUp } from './exact-geometry.js';
 import { revisionIsOmitted } from './revision-visibility.js';
-import { wordKerningApplies } from './line-compatibility.js';
+import { wordArabicTextKerned, wordKerningApplies } from './line-compatibility.js';
 import type { LineGapPlan } from '../line-breaker/line-gaps.js';
 import { distributeLineSlack as distributeProportionalSlack } from '@silurus/ooxml-core';
 import { specifiedTextLineMetrics, specifiedTextParagraphIsHomogeneous } from './specified-line-spacing.js';
@@ -1570,7 +1570,8 @@ function textPlacement(
       perGapPt: segment.fitTextPerGapPx ?? 0,
       trailingPadPt: segment.fitTextTrailingPadPx ?? 0,
     } } : {}),
-    kerning: segment.textShapeRequest?.kerning ?? wordKerningApplies(segment.fontSize, segment.kerning),
+    kerning: (segment.textShapeRequest?.kerning ?? wordKerningApplies(segment.fontSize, segment.kerning))
+      || wordArabicTextKerned(segment.text),
     ...(segment.position !== undefined ? { positionPt: segment.position } : {}),
     ...(segment.vertAlign ? { verticalAlign: segment.vertAlign } : {}),
     ...(segment.tateChuYoko ? { tateChuYoko: true } : {}),
@@ -1644,7 +1645,8 @@ function textPlacement(
       letterSpacingPt: effectiveCharacterSpacingPt(segment),
       scaleX: segment.charScale ?? 1,
       direction: segment.rtl ? 'rtl' : 'ltr',
-      kerning: (segment.textShapeRequest?.kerning ?? wordKerningApplies(segment.fontSize, segment.kerning)) ? 'normal' : 'none',
+      kerning: (segment.textShapeRequest?.kerning ?? wordKerningApplies(segment.fontSize, segment.kerning))
+        || wordArabicTextKerned(segment.text) ? 'normal' : 'none',
       writingMode: segment.verticalRun ? 'vertical-rl' : 'horizontal-tb',
     }],
     ...(segment.hyperlink ? { hyperlink: segment.hyperlink } : {}),

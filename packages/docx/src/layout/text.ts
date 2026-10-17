@@ -1,4 +1,5 @@
 import { wordTextBoxVerticalMode } from './compatibility.js';
+import { wordArabicTextKerned } from './line-compatibility.js';
 import type { LayoutDiagnostic } from './types.js';
 import {
   classifyFontGeneric,
@@ -1357,7 +1358,7 @@ export function createTextLayoutService(input: TextLayoutServiceInput): TextLayo
           weight: font.weight,
           style: font.style,
           letterSpacingPt: request.letterSpacingPt ?? 0,
-          kerning: request.kerning,
+          kerning: wordArabicTextKerned(group.text) ? true : request.kerning,
         });
         return Object.freeze({
           ...group, ...measurement, font, fontRoute: font.route,
@@ -1420,7 +1421,7 @@ export function createTextLayoutService(input: TextLayoutServiceInput): TextLayo
                   weight: span.font.weight,
                   style: span.font.style,
                   letterSpacingPt: request.letterSpacingPt ?? 0,
-                  kerning: request.kerning,
+                  kerning: wordArabicTextKerned(span.text) ? true : request.kerning,
                 });
                 break;
               }

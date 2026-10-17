@@ -109,6 +109,23 @@ export function wordKerningApplies(
     && (thresholdPt > 0 || (thresholdPt === 0 && compatibilityMode !== 15));
 }
 
+export const WORD_ARABIC_PAIR_KERNING = defineCompatibilityRule({
+  id: 'word-arabic-pair-kerning',
+  evidence: {
+    kind: 'regression-test',
+    reference: 'packages/docx/src/arabic-kerning.test.ts#kerns Arabic text whatever w:kern says',
+  },
+  description: 'Windows Word 16.0 build 16.0.20430 #1850 controls with the Arabic supplemental fonts installed: "Z <Arabic run> X" paragraphs at 14pt in Sakkal Majalla, Traditional Arabic, Simplified Arabic, Arabic Typesetting, Arial, Times New Roman and Tahoma, three texts, w:kern absent/0/2/40 and enableOpenTypeFeatures off/on. Every Arabic run width is identical across all eight settings, and for the four faces whose GPOS kern feature has Arabic pairs it equals HarfBuzz shaping with kerning (within 0.15pt) rather than without (1.4-4.8pt wider), measured on the same Windows font files. Word therefore applies pair kerning to Arabic text unconditionally; ECMA-376 section 17.3.2.19 w:kern governs the other scripts (WORD_KERN_THRESHOLD_AUTHORITY). Arial, Times New Roman and Tahoma carry no Arabic kern pairs, so they cannot distinguish the rules. Only the Arabic script was measured; other complex scripts keep w:kern.',
+});
+
+/** WORD_ARABIC_PAIR_KERNING: Arabic-script text is always pair-kerned. The
+ * decision is per measured group or segment; Word writes Arabic in runs of
+ * its own, and a same-face group mixing scripts is kerned as a whole. */
+export function wordArabicTextKerned(text: string): boolean {
+  void WORD_ARABIC_PAIR_KERNING;
+  return /\p{Script=Arabic}/u.test(text);
+}
+
 export const WORD_NUMBERING_MARKER_FIRST_LINE_UNION = defineCompatibilityRule({
   id: 'word-numbering-marker-first-line-union',
   evidence: {
