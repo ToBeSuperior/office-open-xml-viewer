@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import nodePath, { join } from 'node:path';
 import {
   createTypeScriptResolver, findViolations, isGuardedPath, legacyCargoViolations,
 } from './check-core-legacy-boundary.mjs';
@@ -58,59 +58,65 @@ test('allows OOXML specifications and the listed binary-format allowances only',
   assert.deepEqual(at('src/docx.ts', 'export { nativeReadingNotices };'), ['legacy-wire-name']);
 });
 
+// Each case is a real manifest that Cargo resolves; path dependencies point at
+// this repository's crates.
+function manifestLines(body) {
+  const dir = mkdtempSync(nodePath.join(tmpdir(), 'legacy-cargo-'));
+  const crates = nodePath.resolve('packages');
+  // Root-level dotted keys must precede every table header.
+  const text = [
+    ...body.map((line) => line.replaceAll('../..', crates)),
+    '[package]', 'name = "legacy-probe"', 'version = "0.0.0"', 'edition = "2021"', '[lib]', 'path = "lib.rs"',
+    '[workspace]',
+  ].join('\n');
+  writeFileSync(nodePath.join(dir, 'Cargo.toml'), text);
+  writeFileSync(nodePath.join(dir, 'lib.rs'), '');
+  try {
+    return legacyCargoViolations(nodePath.join(dir, 'Cargo.toml')).map((v) => v.text);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 test('limits the legacy reader to model crates and the listed parser crates', () => {
-  const toml = [
+  assert.deepEqual(manifestLines([
     '[dependencies]',
-    'pptx-model = { workspace = true }',
+    'pptx-model = { path = "../../pptx/model" }',
     'pptx-parser = { path = "../../pptx/parser", optional = true }',
     'docx-parser = { path = "../../docx/parser" }',
     '[dev-dependencies]',
     'xlsx-parser = { path = "../../xlsx/parser" }',
-  ].join('\n');
-  assert.deepEqual(legacyCargoViolations('Cargo.toml', toml).map((v) => v.line), [4]);
+  ]), ['docx-parser resolves to docx-parser']);
 });
 
-test('resolves renamed, table and target-specific parser dependencies', () => {
-  const lines = (toml) => legacyCargoViolations('Cargo.toml', toml.join('\n')).map((v) => v.line);
-  // An alias resolves to the package it names, in inline and dotted form.
-  assert.deepEqual(lines([
+test('resolves renamed, quoted, dotted, table and target-specific parser dependencies', () => {
+  assert.deepEqual(manifestLines([
     '[dependencies]',
-    'reader = { package = "docx-parser", path = "../../docx/parser" }',
-    'model = { package = "docx-model", path = "../../docx/model" }',
-    'grid.package = "xlsx_parser"',
-    'grid.path = "../../xlsx/parser"',
-    'shape = { package = "pptx-parser", optional = true } # allowed by package',
-  ]), [2, 4]);
-  // A dependency table, quoted or bare, with or without its own rename.
-  assert.deepEqual(lines([
-    '[dependencies.docx-parser]',
+    'reader = { "package" = "docx-parser", path = "../../docx/parser" }',
+  ]), ['reader resolves to docx-parser']);
+  assert.deepEqual(manifestLines([
+    'dependencies.reader = { package = "docx-parser", path = "../../docx/parser" }',
+  ]), ['reader resolves to docx-parser']);
+  assert.deepEqual(manifestLines([
+    '[dependencies."docx\\u002dparser"]',
     'path = "../../docx/parser"',
-    '[dependencies."reader"]',
+  ]), ['docx-parser resolves to docx-parser']);
+  assert.deepEqual(manifestLines([
+    "[target.'cfg(unix)'.dependencies.grid]",
     'package = "xlsx-parser"',
-    '[dependencies.pptx-model]',
-    'path = "../../pptx/model"',
-  ]), [1, 3]);
-  // Target-specific normal dependencies, as a list and as a table.
-  assert.deepEqual(lines([
-    "[target.'cfg(target_arch = \"wasm32\")'.dependencies]",
-    'docx-parser = { path = "../../docx/parser" }',
-    '[target.wasm32-unknown-unknown.dependencies.reader]',
-    'package = "xlsx-parser"',
+    'path = "../../xlsx/parser"',
     "[target.'cfg(unix)'.dev-dependencies]",
     'pptx-model = { path = "../../pptx/model" }',
-    'xlsx-parser = { path = "../../xlsx/parser" }',
-  ]), [2, 3]);
-  // Features, comments and multi-line arrays are not dependencies.
-  assert.deepEqual(lines([
-    '[features]',
-    'direct = ["dep:docx-parser"] # docx-parser = {}',
-    '[dependencies]',
-    'zip = { workspace = true, features = [',
-    '  "deflate",',
-    '] }',
-  ]), []);
-  // Manifest syntax this reader cannot parse fails closed.
-  assert.deepEqual(lines(['[dependencies]', '{ odd } = 1']), [2]);
+  ]), ['grid resolves to xlsx-parser']);
+  assert.deepEqual(manifestLines([
+    '[build-dependencies]',
+    'docx-parser = { path = "../../docx/parser" }',
+  ]), ['docx-parser resolves to docx-parser']);
+});
+
+test('a manifest Cargo cannot read fails closed', () => {
+  const [text] = manifestLines(['[dependencies]', '{ odd } = 1']);
+  assert.match(text, /^cargo metadata failed/);
 });
 
 test('allows the pre-existing generic CFB rejection and unrelated "legacy" wording', () => {

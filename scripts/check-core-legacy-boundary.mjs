@@ -149,140 +149,47 @@ export const ALLOWED_LEGACY_PARSER_DEPENDENCIES = new Map([
   ['pptx-parser', 'standalone DrawingML shape parts'],
 ]);
 
-/** Strip a TOML comment that is not inside a basic or literal string. */
-function stripTomlComment(line) {
-  let quote = null;
-  for (let i = 0; i < line.length; i++) {
-    const char = line[i];
-    if (quote) {
-      if (char === '\\' && quote === '"') i++;
-      else if (char === quote) quote = null;
-    } else if (char === '"' || char === "'") {
-      quote = char;
-    } else if (char === '#') {
-      return line.slice(0, i);
-    }
-  }
-  return line;
-}
-
-/** Split a TOML dotted key (bare or quoted segments). Returns undefined for
- * syntax this minimal reader does not understand, which the caller rejects. */
-function tomlKeySegments(text) {
-  const segments = [];
-  let rest = text.trim();
-  while (rest.length > 0) {
-    const match = /^(?:"((?:[^"\\]|\\.)*)"|'([^']*)'|([A-Za-z0-9_-]+))\s*/.exec(rest);
-    if (!match) return undefined;
-    segments.push(match[1] ?? match[2] ?? match[3]);
-    rest = rest.slice(match[0].length);
-    if (rest.length === 0) break;
-    if (rest[0] !== '.') return undefined;
-    rest = rest.slice(1).trimStart();
-  }
-  return segments.length > 0 ? segments : undefined;
-}
-
-const DEPENDENCY_TABLES = new Set(['dependencies', 'build-dependencies']);
-
-/** The dependency-table role of a TOML table header: a dependency list
- * (`[dependencies]`, `[target.<cfg>.dependencies]`), one dependency
- * (`[dependencies.<name>]`, `[target.<cfg>.dependencies.<name>]`), or none.
- * `dev-dependencies` are test-only and stay unrestricted. */
-function dependencyHeader(segments) {
-  const body = segments[0] === 'target' && segments.length >= 3 ? segments.slice(2) : segments;
-  if (!DEPENDENCY_TABLES.has(body[0])) return { kind: 'other' };
-  if (body.length === 1) return { kind: 'list' };
-  if (body.length === 2) return { kind: 'one', name: body[1] };
-  return { kind: 'invalid' };
-}
-
 /**
- * Normal (and build) dependencies of a Cargo manifest, by the package each one
- * actually resolves to: a `package = "..."` rename wins over the key. Covers
- * `[dependencies]` key/value and inline-table entries, dotted keys,
- * `[dependencies.<name>]` tables and their `target.<cfg>` forms.
+ * Normal and build dependencies of one Cargo manifest, by the package each
+ * resolves to, as Cargo itself reads them (`cargo metadata`). Using Cargo
+ * instead of a hand-written TOML reader keeps every rename, quoted or escaped
+ * key, dotted key, dependency table and `target.<cfg>` form covered.
+ * `dev-dependencies` are test-only and stay unrestricted.
  */
-export function cargoNormalDependencies(text) {
-  const dependencies = new Map();
-  const declare = (key, line) => {
-    if (!dependencies.has(key)) dependencies.set(key, { key, package: key, line });
-    return dependencies.get(key);
-  };
-  let section = { kind: 'other' };
-  const problems = [];
-  // Open brackets of a multi-line array value (TOML 1.0 inline tables are
-  // single-line). Strings are blanked before counting.
-  let arrayDepth = 0;
-  const bracketBalance = (value) => {
-    const bare = value.replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, '""');
-    return (bare.match(/\[/g)?.length ?? 0) - (bare.match(/\]/g)?.length ?? 0);
-  };
-  text.split('\n').forEach((raw, index) => {
-    const line = stripTomlComment(raw).trim();
-    if (line.length === 0) return;
-    if (arrayDepth > 0) {
-      arrayDepth = Math.max(0, arrayDepth + bracketBalance(line));
-      return;
-    }
-    const header = /^\[(\[?)(.*?)\]?\]$/.exec(line);
-    if (header && line.startsWith('[')) {
-      if (header[1] === '[') {
-        section = { kind: 'other' };
-        return;
-      }
-      const segments = tomlKeySegments(header[2]);
-      if (!segments) {
-        problems.push(index + 1);
-        section = { kind: 'other' };
-        return;
-      }
-      section = dependencyHeader(segments);
-      if (section.kind === 'invalid') problems.push(index + 1);
-      if (section.kind === 'one') declare(section.name, index + 1);
-      return;
-    }
-    const assignment = /^((?:"(?:[^"\\]|\\.)*"|'[^']*'|[A-Za-z0-9_.\s-])+?)\s*=\s*(.*)$/.exec(line);
-    if (assignment) arrayDepth = Math.max(0, bracketBalance(assignment[2]));
-    if (section.kind !== 'list' && section.kind !== 'one') return;
-    const segments = assignment && tomlKeySegments(assignment[1]);
-    if (!segments) {
-      problems.push(index + 1);
-      return;
-    }
-    const value = assignment[2];
-    const renamed = (text) => /(?:^|[{,\s])package\s*=\s*["']([^"']+)["']/.exec(text)?.[1];
-    if (section.kind === 'one') {
-      if (segments.length === 1 && segments[0] === 'package') {
-        const target = /^["']([^"']+)["']/.exec(value)?.[1];
-        if (target) dependencies.get(section.name).package = target;
-      }
-      return;
-    }
-    const entry = declare(segments[0], index + 1);
-    if (segments.length === 1) {
-      const target = value.startsWith('{') ? renamed(value) : undefined;
-      if (target) entry.package = target;
-    } else if (segments.length === 2 && segments[1] === 'package') {
-      const target = /^["']([^"']+)["']/.exec(value)?.[1];
-      if (target) entry.package = target;
-    }
-  });
-  return { dependencies: [...dependencies.values()], problems };
+export function cargoNormalDependencies(manifestPath) {
+  const absolute = nodePath.resolve(manifestPath);
+  const metadata = JSON.parse(execFileSync('cargo', [
+    'metadata', '--no-deps', '--offline', '--format-version', '1', '--manifest-path', absolute,
+  ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 64 * 1024 * 1024 }));
+  const pkg = metadata.packages.find((candidate) => candidate.manifest_path === absolute);
+  if (!pkg) throw new Error(`cargo metadata did not report the package at ${absolute}`);
+  return pkg.dependencies
+    .filter((dependency) => dependency.kind !== 'dev')
+    .map((dependency) => ({ key: dependency.rename ?? dependency.name, package: dependency.name }));
 }
 
 /** Report OOXML parser crates in the legacy reader's normal dependencies. */
-export function legacyCargoViolations(path, text) {
-  const { dependencies, problems } = cargoNormalDependencies(text);
-  const lines = text.split('\n');
-  const violations = problems.map((line) => ({
-    path, line, rule: 'legacy-parser-dependency', text: `unparsed manifest syntax: ${lines[line - 1].trim()}`,
-  }));
+export function legacyCargoViolations(manifestPath) {
+  let dependencies;
+  try {
+    dependencies = cargoNormalDependencies(manifestPath);
+  } catch (error) {
+    return [{
+      path: manifestPath, line: 1, rule: 'legacy-parser-dependency',
+      text: `cargo metadata failed: ${String(error?.message ?? error).split('\n')[0]}`,
+    }];
+  }
+  const lines = readFileSync(manifestPath, 'utf8').split('\n');
+  const violations = [];
   for (const dependency of dependencies) {
     const name = dependency.package.replaceAll('_', '-');
     if (/(?:docx|xlsx|pptx)-parser$/.test(name) && !ALLOWED_LEGACY_PARSER_DEPENDENCIES.has(name)) {
+      const index = lines.findIndex((line) => line.includes(dependency.key));
       violations.push({
-        path, line: dependency.line, rule: 'legacy-parser-dependency', text: lines[dependency.line - 1].trim(),
+        path: manifestPath,
+        line: index + 1 || 1,
+        rule: 'legacy-parser-dependency',
+        text: `${dependency.key} resolves to ${dependency.package}`,
       });
     }
   }
@@ -610,9 +517,9 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   // --ref checks lexical/AST rules at that revision. The live compiler graph
   // is checked for the working tree, where its tsconfig and dependencies exist.
   const violations = findViolations(trackedFiles(ref), ref ? {} : { resolveModule: createTypeScriptResolver() });
-  const cargo = 'packages/legacy-office/parser/Cargo.toml';
-  const git = (args) => execFileSync('git', args, { encoding: 'utf8' });
-  violations.push(...legacyCargoViolations(cargo, ref ? git(['show', `${ref}:${cargo}`]) : readFileSync(cargo, 'utf8')));
+  // Cargo resolves the manifest of the working tree only; --ref checks the
+  // lexical rules above.
+  if (!ref) violations.push(...legacyCargoViolations('packages/legacy-office/parser/Cargo.toml'));
   if (violations.length > 0) {
     for (const violation of violations.slice(0, 200)) {
       console.error(`${violation.path}:${violation.line} [${violation.rule}] ${violation.text}`);
