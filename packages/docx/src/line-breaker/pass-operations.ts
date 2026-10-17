@@ -390,9 +390,14 @@ function placeNumberingFirstLine(
     return;
   }
   const bodyIndent = Math.max(leadingEdge, numbering.bodyIndentAt(leadingEdge));
-  breakerState.firstIndentOverride = bodyIndent - base;
+  // The breaker reads a line's window start as origin + min(0, first indent).
+  // The body indent is never negative here, so re-anchor the origin at the
+  // window's real leading edge (keeping its trailing edge) before charging it.
+  if (!baseRtl) breakerState.lineXOffset += hangingOffset;
+  breakerState.lineMaxWidth -= hangingOffset;
+  breakerState.firstIndentOverride = bodyIndent - windowEdge;
   breakerState.numberingFirstLine = {
-    leadingEdgePx: leadingEdge, bodyIndentPx: bodyIndent, lineStartOffsetPx: bodyIndent - base,
+    leadingEdgePx: leadingEdge, bodyIndentPx: bodyIndent, lineStartOffsetPx: bodyIndent - windowEdge,
   };
 }
 

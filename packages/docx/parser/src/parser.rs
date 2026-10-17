@@ -6244,6 +6244,9 @@ fn parse_paragraph_cond_at_depth_with_diagnostics(
     // inherited indent is not. Captured for all three axes (start/end/first-line) so the
     // de-list drop is symmetric for LTR and RTL.
     let direct_para = ppr_node.map(parse_para_fmt).unwrap_or_default();
+    // Style-chain tabs before the direct layer: a numbering level's tabs enter
+    // the cascade between them (see `tab_stops` below).
+    let style_chain_tabs = base_para.tab_stops.clone();
     let direct_indent_left = direct_para.indent_left;
     let direct_indent_first = direct_para.indent_first;
     let direct_indent_right = direct_para.indent_right;
@@ -6408,10 +6411,30 @@ fn parse_paragraph_cond_at_depth_with_diagnostics(
     // default `mathDefJc` (spec default `centerGroup`). The paragraph alignment
     // stays its natural text value (e.g. Tabletext = left).
 
-    let tab_stops = base_para
-        .tab_stops
-        .clone()
-        .unwrap_or_default()
+    // A numbering level's pPr tabs (§17.9.6) take the same layer as its
+    // indents (resolve_numbered_indent_axes): directly selected numbering sits
+    // in the direct layer beneath the paragraph's own pPr; style-origin
+    // numbering sits beneath the paragraph style chain.
+    let level_tabs = numbering
+        .as_ref()
+        .and_then(|num| num_map.get_level(num.num_id, num.level))
+        .and_then(|l| l.tab_stops.clone());
+    let tab_stops = match level_tabs.as_deref() {
+        Some(level_tabs) => {
+            let chain = style_chain_tabs.clone().unwrap_or_default();
+            let below_direct = if direct_numbering {
+                merge_tab_stops(&chain, level_tabs)
+            } else {
+                merge_tab_stops(&merge_tab_stops(&[], level_tabs), &chain)
+            };
+            match &direct_para.tab_stops {
+                Some(direct) => merge_tab_stops(&below_direct, direct),
+                None => below_direct,
+            }
+        }
+        None => base_para.tab_stops.clone().unwrap_or_default(),
+    };
+    let tab_stops = tab_stops
         .into_iter()
         .map(|(pos, alignment, leader)| TabStop {
             pos,

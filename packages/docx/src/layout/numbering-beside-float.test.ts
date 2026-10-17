@@ -1,0 +1,68 @@
+/// <reference types="node" />
+import { readFile } from 'node:fs/promises';
+import { beforeAll, describe, expect, it } from 'vitest';
+import init, { DocxArchive } from '../wasm/docx_parser.js';
+import { measureContext } from '../test-support/tab-fitting.test-support.js';
+import { storeZip } from '../conformance/generate.js';
+import { normalizeInternalDocumentModel } from '../parser-model.js';
+import { layoutDocument } from '../document-layout.js';
+import { createLayoutServices } from '../layout-runtime.js';
+
+beforeAll(async () => {
+  await init({ module_or_path: await readFile(new URL('../wasm/docx_parser_bg.wasm', import.meta.url)) });
+});
+
+const W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"';
+
+// A 144pt square-wrapped picture at the 54pt margin, distR 9pt: wrap edge 207pt.
+const float = '<w:r><w:drawing><wp:anchor distT="0" distB="0" distL="114300" distR="114300" simplePos="0" relativeHeight="1" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1"><wp:simplePos x="0" y="0"/><wp:positionH relativeFrom="column"><wp:posOffset>0</wp:posOffset></wp:positionH><wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV><wp:extent cx="1828800" cy="914400"/><wp:effectExtent l="0" t="0" r="0" b="0"/><wp:wrapSquare wrapText="bothSides"/><wp:docPr id="1" name="F"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="1" name="F"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="rIdMissing"/></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1828800" cy="914400"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:anchor></w:drawing></w:r>';
+
+function bytes(ind: string, levelTabs = ''): Uint8Array {
+  const enc = new TextEncoder();
+  const p = (body: string, ppr = '') => `<w:p><w:pPr>${ppr}<w:spacing w:before="0" w:after="0"/></w:pPr>${body}</w:p>`;
+  const item = p('<w:r><w:t>word</w:t></w:r>', '<w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr>');
+  const doc = `<w:document ${W}><w:body>${p(`${float}<w:r><w:t>host</w:t></w:r>`)}${item}<w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1080" w:right="1080" w:bottom="1080" w:left="1080" w:header="720" w:footer="720" w:gutter="0"/></w:sectPr></w:body></w:document>`;
+  const numbering = `<w:numbering ${W}><w:abstractNum w:abstractNumId="1"><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/><w:lvlJc w:val="left"/><w:pPr>${levelTabs}${ind}</w:pPr></w:lvl></w:abstractNum><w:num w:numId="1"><w:abstractNumId w:val="1"/></w:num></w:numbering>`;
+  return storeZip(new Map([
+    ['[Content_Types].xml', enc.encode('<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/></Types>')],
+    ['_rels/.rels', enc.encode('<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>')],
+    ['word/_rels/document.xml.rels', enc.encode('<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdN" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/></Relationships>')],
+    ['word/document.xml', enc.encode(doc)],
+    ['word/numbering.xml', enc.encode(numbering)],
+  ]));
+}
+
+function firstItemLine(input: Uint8Array) {
+  const archive = new DocxArchive(input);
+  let model;
+  try {
+    model = normalizeInternalDocumentModel(JSON.parse(new TextDecoder().decode(archive.parse()))).document;
+  } finally { archive.free(); }
+  const layout = layoutDocument(model, createLayoutServices(model, { measureContext: measureContext(5) }), { currentDateMs: 0 });
+  const paragraphs = layout.pages[0]!.layers.body.filter((node) => node.kind === 'paragraph');
+  const line = paragraphs[1]!.kind === 'paragraph' ? paragraphs[1]!.lines[0]! : undefined;
+  const texts = line!.placements.filter((node) => node.kind === 'text');
+  return {
+    marker: texts.find((node) => node.role === 'numbering-marker')?.bounds.xPt,
+    body: texts.find((node) => node.role !== 'numbering-marker')?.bounds.xPt,
+  };
+}
+
+describe('numbered first line beside a square-wrapped float (#1883)', () => {
+  // Windows Word 16.0 places the marker at max(max(indent, wrap) + firstLine,
+  // wrap) and advances its suffix tab to the paragraph's absolute stops; the
+  // fake measurer gives the "1." marker 10pt.
+  it.each([
+    // left 54 hanging 36: marker at the wrap edge, body at the 234pt default stop.
+    { ind: '<w:ind w:left="1080" w:hanging="720"/>', tabs: '', marker: 207, body: 234 },
+    // left 36 firstLine 18: the positive first-line indent stays an inset; the
+    // marker ends at 235pt, past the 234pt stop.
+    { ind: '<w:ind w:left="720" w:firstLine="360"/>', tabs: '', marker: 225, body: 270 },
+    // A level w:ind without hanging/firstLine has no first-line indent.
+    { ind: '<w:ind w:left="0"/>', tabs: '', marker: 207, body: 234 },
+    // The level's own custom stop (216pt from the margin) wins over defaults.
+    { ind: '<w:ind w:left="1080" w:hanging="720"/>', tabs: '<w:tabs><w:tab w:val="left" w:pos="4320"/></w:tabs>', marker: 207, body: 270 },
+  ])('$ind $tabs', ({ ind, tabs, marker, body }) => {
+    expect(firstItemLine(bytes(ind, tabs))).toEqual({ marker, body });
+  });
+});

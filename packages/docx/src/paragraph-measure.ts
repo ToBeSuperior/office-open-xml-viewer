@@ -375,7 +375,9 @@ export function measureParagraph(
             }),
           }
         : fragment;
-      const markerBox = lineIndex === 0 && !continuation && !placement.wrap
+      // Windows Word 16.0 #1883 controls keep the same marker union beside a
+      // square-wrapped float (a 42pt Symbol bullet raises the first line).
+      const markerBox = lineIndex === 0 && !continuation
         && !context.lineGrid.active
         && (context.lineSpacing == null
           || (context.lineSpacing.rule === 'auto' && context.lineSpacing.value >= 1))
