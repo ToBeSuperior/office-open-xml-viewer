@@ -214,10 +214,10 @@ pub fn parse_grad_fill<R: ThemeResolver + ?Sized>(
                 .children()
                 .filter(|n| n.is_element() && n.tag_name().name() == "gs")
                 .filter_map(|gs| {
+                    // §20.1.8.36: numeric and Strict percent lexemes share one unit parser.
                     let position = attr(gs, "pos")
-                        .and_then(|v| v.parse::<f64>().ok())
-                        .unwrap_or(0.0)
-                        / 100_000.0;
+                        .and_then(|v| crate::units::drawingml_percentage_to_fraction(&v))
+                        .unwrap_or(0.0);
                     let color = parse_color_node(gs, resolver, tint_mode)?;
                     Some(GradStop { position, color })
                 })

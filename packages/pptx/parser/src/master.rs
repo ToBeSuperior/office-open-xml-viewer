@@ -6,8 +6,7 @@
 //! `MasterBundle` → `ParsedMaster` type rename (fields unchanged).
 
 use crate::fill::{
-    parse_background, parse_blip_alpha, parse_cust_geom_with_paint, parse_fill, parse_reflection,
-    parse_xfrm,
+    parse_background, parse_cust_geom_with_paint, parse_fill, parse_reflection, parse_xfrm,
 };
 use crate::shape::{
     extract_decorative_shapes, resolve_picture_shape_properties, PictureShapeProperties,
@@ -2235,7 +2234,7 @@ pub(crate) fn parse_layout_placeholders(
                 image_path,
                 mime_type,
                 src_rect: parse_src_rect(bf),
-                alpha: parse_blip_alpha(bf),
+                alpha: None, /* alpha is baked by the ordered blip chain */
                 // §20.1.8.23 duotone on the layout placeholder blipFill, resolved
                 // through the theme; inherited onto the slide picture placeholder.
                 duotone: parse_blip_duotone(
@@ -2244,11 +2243,19 @@ pub(crate) fn parse_layout_placeholders(
                     ooxml_common::color::TintMode::PowerPointLinear,
                 ),
                 // CT_Blip pixel effects travel with the inherited blipFill.
-                blip_effects: parse_blip_effects(
-                    bf,
-                    &PptxSchemeResolver { theme },
-                    ooxml_common::color::TintMode::PowerPointLinear,
-                ),
+                blip_effects: {
+                    let mut effects = parse_blip_effects(
+                        bf,
+                        &PptxSchemeResolver { theme },
+                        ooxml_common::color::TintMode::PowerPointLinear,
+                    );
+                    ooxml_common::blip::resolve_blip_effect_images(&mut effects, &mut |rid| {
+                        layout_rels
+                            .get(rid)
+                            .map(|target| resolve_path(layout_part, target))
+                    });
+                    effects
+                },
             })
         });
 

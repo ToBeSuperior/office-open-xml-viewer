@@ -1,25 +1,8 @@
 /**
- * End-to-end device-pixel probe for xlsx blip effects (issue #880):
- *  - `<a:duotone>` recolour (ECMA-376 §20.1.8.23), and
- *  - `<a:alphaModFix>` opacity (§20.1.8.6).
- *
- * Real file (sample-9.xlsx, "Gift budget and tracker"): a near-white opaque
- * photo is shown by Excel as PINK and SEMI-TRANSPARENT — the pink comes from a
- * duotone (`black` ↔ light-pink `FFF3F4`, resolved from `DAB6BA` + lumMod/lumOff/
- * tint/satMod), and the translucency from `alphaModFix amt="70000"` (0.70), which
- * blends the picture with the coloured cells beneath. We previously drew the raw
- * opaque white PNG.
- *
- * This probe is FIXTURE-FREE (CI-safe — sample-9 is private/redistribution-
- * restricted): it builds a synthetic worksheet whose single picture is a solid
- * near-white 4×4 PNG carrying `alpha: 0.7` + `duotone {clr1:000000,clr2:FFF3F4}`,
- * over a fully-coloured (pure blue) sheet region. It renders twice through the
- * SAME orchestrator path the browser/worker use, once WITH the effects and once
- * with a raw (effect-stripped) copy, and asserts, at real device pixels:
- *   1. duotone recolours the neutral white photo to a pink cast (R > G ≈ B); and
- *   2. alphaModFix < 1 makes the picture composite over the blue cell beneath
- *      (the drawn pixel is pulled toward blue vs. the opaque control).
- * Gated on skia like the sibling render probes.
+ * Synthetic device-pixel probes for XLSX DrawingML duotone (§20.1.8.23)
+ * and alphaModFix (§20.1.8.6). A neutral PNG above blue cells distinguishes
+ * recoloring, image opacity and duotone endpoint opacity through the same
+ * orchestrator and decoded owner used by browser/worker painting.
  */
 import { describe, it, expect } from 'vitest';
 import { fileURLToPath } from 'node:url';
@@ -116,13 +99,9 @@ function buildSynthetic(): { ws: Worksheet; styles: Styles } {
 const W = 500;
 const H = 400;
 
-async function render(effects: 'full' | 'duotone-opaque' | 'raw'): Promise<{ data: Uint8ClampedArray; w: number; h: number }> {
+async function render(effects: 'full' | 'duotone-opaque' | 'duotone-rgba' | 'raw'): Promise<{ data: Uint8ClampedArray; w: number; h: number }> {
   const { ws, styles } = buildSynthetic();
-  // A mid-grey opaque source PNG. sample-9's photo corners are near-white, but a
-  // mid grey lands the duotone at a mid-pink (leaving clear channel headroom so
-  // the alpha blend over the blue cell is measurable — with a near-white source
-  // the pink endpoint FFF3F4 is itself so close to white that the blend delta is
-  // tiny). The recolour/blend LOGIC is identical for any luminance.
+  // A mid-gray source leaves enough channel headroom to verify compositing.
   const pngBytes = solidPngBytes(150, 150, 150);
   const fetchImage = async (): Promise<Blob> =>
     new Blob([pngBytes as unknown as BlobPart], { type: 'image/png' });
@@ -130,7 +109,8 @@ async function render(effects: 'full' | 'duotone-opaque' | 'raw'): Promise<{ dat
   // Clone + optionally strip effects for the controls.
   const ws2 = JSON.parse(JSON.stringify(ws)) as Worksheet;
   const im = (ws2.images as ImageAnchor[])[0];
-  if (effects === 'duotone-opaque') delete im.alpha;
+  if (effects === 'duotone-opaque' || effects === 'duotone-rgba') delete im.alpha;
+  if (effects === 'duotone-rgba') im.duotone = { clr1: 'FF000080', clr2: 'FF000080' };
   if (effects === 'raw') { delete im.alpha; delete im.duotone; }
 
   const { renderWorksheetViewport } = (await import(ORCH_PATH)) as {
@@ -173,6 +153,13 @@ function mean(data: Uint8ClampedArray, w: number, x0: number, y0: number, x1: nu
 }
 
 describe.skipIf(!skia)('xlsx blip duotone + alphaModFix (issue #880)', () => {
+  it('renders nonopaque duotone endpoints through the duotone-only XLSX adapter', async () => {
+    const image = await render('duotone-rgba');
+    const pixel = mean(image.data, image.w, 155, 140, 195, 180);
+    expect(pixel.r).toBeCloseTo(128, 0);
+    expect(pixel.g).toBe(0);
+    expect(pixel.b).toBeCloseTo(127, 0);
+  });
   it('recolours a white photo to pink (duotone) and composites it over the cell (alphaModFix)', async () => {
     const raw = await render('raw');
     const duoOpaque = await render('duotone-opaque');

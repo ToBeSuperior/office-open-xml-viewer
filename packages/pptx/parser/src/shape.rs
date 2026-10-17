@@ -6,10 +6,9 @@
 
 use crate::chart::{parse_chartex_with_images, parse_legacy_chart_with_style_parts_and_images};
 use crate::fill::{
-    line_properties_to_stroke, parse_blip_alpha, parse_color_node, parse_cust_geom,
-    parse_effect_lst, parse_fill, parse_scene3d, parse_sp3d, parse_stroke,
-    parse_style_matrix_effects, parse_style_matrix_fill_from_source, parse_table_style_fill,
-    parse_xfrm, EffectLst,
+    line_properties_to_stroke, parse_color_node, parse_cust_geom, parse_effect_lst, parse_fill,
+    parse_scene3d, parse_sp3d, parse_stroke, parse_style_matrix_effects,
+    parse_style_matrix_fill_from_source, parse_table_style_fill, parse_xfrm, EffectLst,
 };
 use crate::master::{
     DefaultTextLevels, InheritedShapeGeometry, LayoutPlaceholders, TableTextLevels,
@@ -26,9 +25,7 @@ use crate::{
     table_style_presets, PptxZip, ResolvedTableCellStyle, TableCellBorderStyle, TableLineStyle,
     TablePartStyle, TableStyleDef, TableStyleFlags, TableStyleFont, TableTextStyle,
 };
-use ooxml_common::blip::{
-    mime_from_ext, parse_blip_duotone, parse_blip_effects, parse_src_rect, svg_blip_rid,
-};
+use ooxml_common::blip::{mime_from_ext, parse_blip_duotone, parse_src_rect, svg_blip_rid};
 use ooxml_common::depth::DepthGuard;
 use ooxml_common::line::{
     parse_line_properties, LineDash, LineEnd, LineJoin, LinePaint, LineProperties,
@@ -1494,6 +1491,20 @@ pub(crate) struct BlipSource {
 ///
 /// Shared by `parse_picture` and `parse_ole_preview_picture` so the ordinary and
 /// OLE-preview picture paths resolve blips identically.
+fn parse_picture_blip_effects<R: ooxml_common::color::ThemeResolver + ?Sized>(
+    blip_fill: roxmltree::Node<'_, '_>,
+    resolver: &R,
+    tint_mode: ooxml_common::color::TintMode,
+    part: &str,
+    rels: &HashMap<String, String>,
+) -> Vec<ooxml_common::blip::BlipEffect> {
+    let mut effects = ooxml_common::blip::parse_blip_effects(blip_fill, resolver, tint_mode);
+    ooxml_common::blip::resolve_blip_effect_images(&mut effects, &mut |rid| {
+        rels.get(rid).map(|target| resolve_path(part, target))
+    });
+    effects
+}
+
 pub(crate) fn resolve_blip_source(
     blip_fill: roxmltree::Node<'_, '_>,
     slide_part: &str,
@@ -1606,7 +1617,7 @@ pub(crate) fn parse_picture(
         prst_geom,
         prst_adjust,
         src_rect: parse_src_rect(blip_fill),
-        alpha: parse_blip_alpha(blip_fill),
+        alpha: None, /* alpha is baked by the ordered blip chain */
         // §20.1.8.23 `<a:duotone>` recolour, resolved through the slide's theme
         // palette with PowerPoint's linear tint. `None` ⇒ no effect.
         duotone: parse_blip_duotone(
@@ -1614,10 +1625,12 @@ pub(crate) fn parse_picture(
             &PptxSchemeResolver { theme },
             ooxml_common::color::TintMode::PowerPointLinear,
         ),
-        blip_effects: parse_blip_effects(
+        blip_effects: parse_picture_blip_effects(
             blip_fill,
             &PptxSchemeResolver { theme },
             ooxml_common::color::TintMode::PowerPointLinear,
+            slide_part,
+            rels,
         ),
         cust_geom,
         shadow,
@@ -1677,16 +1690,18 @@ pub(crate) fn parse_ole_preview_picture(
         prst_geom: None,
         prst_adjust: None,
         src_rect: parse_src_rect(blip_fill),
-        alpha: parse_blip_alpha(blip_fill),
+        alpha: None, /* alpha is baked by the ordered blip chain */
         duotone: parse_blip_duotone(
             blip_fill,
             &PptxSchemeResolver { theme },
             ooxml_common::color::TintMode::PowerPointLinear,
         ),
-        blip_effects: parse_blip_effects(
+        blip_effects: parse_picture_blip_effects(
             blip_fill,
             &PptxSchemeResolver { theme },
             ooxml_common::color::TintMode::PowerPointLinear,
+            slide_part,
+            rels,
         ),
         cust_geom: None,
         shadow: None,
@@ -3114,7 +3129,7 @@ fn parse_sp_node(
                     prst_geom,
                     prst_adjust,
                     src_rect: blip_fill_node.and_then(parse_src_rect),
-                    alpha: blip_fill_node.and_then(parse_blip_alpha),
+                    alpha: None, /* alpha is baked by the ordered blip chain */
                     duotone: blip_fill_node.and_then(|bf| {
                         parse_blip_duotone(
                             bf,
@@ -3124,10 +3139,12 @@ fn parse_sp_node(
                     }),
                     blip_effects: blip_fill_node
                         .map(|bf| {
-                            parse_blip_effects(
+                            parse_picture_blip_effects(
                                 bf,
                                 &PptxSchemeResolver { theme },
                                 ooxml_common::color::TintMode::PowerPointLinear,
+                                slide_part,
+                                rels,
                             )
                         })
                         .unwrap_or_default(),
@@ -3312,7 +3329,7 @@ fn parse_pic_node(
                                 prst_geom: None,
                                 prst_adjust: None,
                                 src_rect: blip_fill.and_then(parse_src_rect),
-                                alpha: blip_fill.and_then(parse_blip_alpha),
+                                alpha: None, /* alpha is baked by the ordered blip chain */
                                 duotone: blip_fill.and_then(|bf| {
                                     parse_blip_duotone(
                                         bf,
@@ -3322,10 +3339,12 @@ fn parse_pic_node(
                                 }),
                                 blip_effects: blip_fill
                                     .map(|bf| {
-                                        parse_blip_effects(
+                                        parse_picture_blip_effects(
                                             bf,
                                             &PptxSchemeResolver { theme },
                                             ooxml_common::color::TintMode::PowerPointLinear,
+                                            slide_part,
+                                            rels,
                                         )
                                     })
                                     .unwrap_or_default(),

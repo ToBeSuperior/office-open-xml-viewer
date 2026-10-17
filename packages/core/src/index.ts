@@ -277,8 +277,8 @@ export {
   type SvgImageSource,
   type SvgImageDecodeOptions,
 } from './image/svg-image-by-path';
-export { decodeSvgBlobOnMainThread } from './worker/svg-decode-bridge';
-export type { SvgBlobDecoder, SvgDecodeTarget } from './worker/svg-decode-bridge';
+export { decodeSvgBlobOnMainThread } from './image/svg-raster';
+export type { SvgBlobDecoder, SvgDecodeTarget } from './image/svg-raster';
 // Shared per-document decoded-raster owner: one weighted LRU, decode gate and
 // render-pass lease covers base blips, media posters, and derived effects across
 // all three renderers. `fetchImage` remains the compatibility owner by default,
@@ -425,13 +425,17 @@ export {
 // CT_Blip pixel effects (grayscl, biLevel, clrChange) applied in document
 // order with the duotone, through the same decode cache.
 export {
-  applyBlipPixelEffects,
+  applyBlipPixelEffects, blipEffectImageFills,
   assertBlipPixelEffectsBudget,
   blipLuminance,
   blipPixelEffectsKey,
   type BlipEffect,
+  type BlipEffectContainer,
+  type BlipEffectFill,
+  type BlipEffectImageFill,
   type BlipPixelEffects,
 } from './image/blip-effects';
+export type { BlendMode } from './image/blip-fill';
 export {
   getCachedDuotoneBitmapByPath,
   duotoneCacheKey,
@@ -824,3 +828,5 @@ export type { FindHighlightColors } from './search/find-highlight';
 
 export { resolveDrawingMLGeometry, requireResolvedDrawingMLGeometry, drawingMLGeometryBounds, type ResolvedDrawingMLGeometry } from './shape/drawingml-geometry';
 export { GeometryWorkBudgetError, type GeometryPath, type GeometryPathCommand } from './shape/path-data';
+
+export { hasImageEffectOutset } from './image/image-effect-frame.js';

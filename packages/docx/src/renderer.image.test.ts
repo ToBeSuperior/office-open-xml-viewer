@@ -327,10 +327,10 @@ describe('docx lazy image bytes', () => {
       resizeHeight: 3,
       resizeQuality: 'high',
     });
-    // Exact white becomes transparent first; the still-opaque gray neighbour is
-    // then mapped once through the black→red duotone ramp in the same buffer.
+    // White becomes transparent, then duotone transforms all RGB (including
+    // transparent pixels which a later alpha replacement could reveal).
     expect([...writes[0].slice(0, 8)]).toEqual([
-      255, 255, 255, 0,
+      255, 0, 0, 0,
       128, 0, 0, 255,
     ]);
   });

@@ -1,3 +1,4 @@
+import { rgbToHsl, hslToRgb } from '../shape/color-space.js';
 import type {
   ChartModel,
   ChartRect,
@@ -126,38 +127,6 @@ function rgbHex(rgb: readonly number[]): string {
 
 function interpolateColor(a: readonly number[], b: readonly number[], t: number): string {
   return rgbHex(a.map((value, index) => value + (b[index] - value) * Math.max(0, Math.min(1, t))));
-}
-
-function rgbToHsl([red, green, blue]: readonly number[]): [number, number, number] {
-  const r = red / 255;
-  const g = green / 255;
-  const b = blue / 255;
-  const max = Math.max(r, g, b);
-  const min = Math.min(r, g, b);
-  const lightness = (max + min) / 2;
-  const delta = max - min;
-  if (delta === 0) return [0, 0, lightness];
-  const saturation = delta / (1 - Math.abs(2 * lightness - 1));
-  const rawHue = max === r
-    ? ((g - b) / delta) % 6
-    : max === g
-      ? (b - r) / delta + 2
-      : (r - g) / delta + 4;
-  return [((rawHue * 60) + 360) % 360, saturation, lightness];
-}
-
-function hslToRgb(hue: number, saturation: number, lightness: number): [number, number, number] {
-  const chroma = (1 - Math.abs(2 * lightness - 1)) * saturation;
-  const segment = ((hue % 360) + 360) % 360 / 60;
-  const secondary = chroma * (1 - Math.abs(segment % 2 - 1));
-  const [r1, g1, b1] = segment < 1 ? [chroma, secondary, 0]
-    : segment < 2 ? [secondary, chroma, 0]
-      : segment < 3 ? [0, chroma, secondary]
-        : segment < 4 ? [0, secondary, chroma]
-          : segment < 5 ? [secondary, 0, chroma]
-            : [chroma, 0, secondary];
-  const match = lightness - chroma / 2;
-  return [r1 + match, g1 + match, b1 + match].map((value) => value * 255) as [number, number, number];
 }
 
 /** Excel's omitted Region Map ramp is the first theme accent with DrawingML

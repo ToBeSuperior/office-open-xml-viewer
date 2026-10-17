@@ -1,3 +1,4 @@
+import { assertChartImageWork, rejectChartImageGeometry } from './image-fill-errors.js';
 import type { ImageFill } from '../types/common.js';
 import type {
   ChartDataPointOverride, ChartExElementStyle, ChartModel, ChartSeries, ChartStockBarPaint,
@@ -167,6 +168,9 @@ interface ChartImageTileStaticMetrics {
 /** EG_FillModeProperties is a choice with no schema default. Exactly one
  * authored mode must be present; omitting it must not invent stretch. */
 function imageFillModeIsPaintable(fill: ImageFill): boolean {
+  for (const rect of [fill.srcRect, fill.fillRect]) {
+    if (rect && ![rect.l ?? 0, rect.t ?? 0, rect.r ?? 0, rect.b ?? 0].every(Number.isFinite)) rejectChartImageGeometry();
+  }
   return (fill.tile != null) !== (fill.stretch === true)
     && srcRectHasVisibleArea(fill.srcRect);
 }
@@ -184,7 +188,7 @@ function chartImageTileStaticMetrics(fill: ImageFill): ChartImageTileStaticMetri
     || !Number.isFinite(tx) || !Number.isFinite(ty)
     || !(dpi != null && Number.isFinite(dpi) && dpi > 0)
     || !(Number.isFinite(sx) && (sx as number) > 0)
-    || !(Number.isFinite(sy) && (sy as number) > 0)) return null;
+    || !(Number.isFinite(sy) && (sy as number) > 0)) rejectChartImageGeometry();
   return {
     alignment: algn,
     tx: tx as number,
@@ -200,7 +204,7 @@ function chartImageTileStaticMetrics(fill: ImageFill): ChartImageTileStaticMetri
 /** Return the synchronously preloaded source for a validated chart image fill.
  * Kept internal to chart modules; hosts still own all fetch/decode work. */
 export function chartImageFillSource(fill: ImageFill): CanvasImageSource | null {
-  if (!fillCanProduceVisiblePixels(fill) || !imageFillModeIsPaintable(fill)) return null;
+  if (!imageFillModeIsPaintable(fill) || !fillCanProduceVisiblePixels(fill)) return null;
   return activeLookup?.(fill) ?? null;
 }
 
@@ -220,11 +224,11 @@ export function chartImageTileMetrics(
   if (!authored) return null;
   const natural = imageNaturalSize(image);
   if (!(Number.isFinite(natural.w) && natural.w > 0)
-    || !(Number.isFinite(natural.h) && natural.h > 0)) return null;
+    || !(Number.isFinite(natural.h) && natural.h > 0)) rejectChartImageGeometry();
   const cssPixelsPerImagePixel = 96 / authored.dpi * (ptToPx / PT_TO_PX);
   const tileW = natural.w * authored.sx * cssPixelsPerImagePixel;
   const tileH = natural.h * authored.sy * cssPixelsPerImagePixel;
-  if (!(tileW > 0) || !(tileH > 0)) return null;
+  if (![tileW, tileH].every(v => Number.isFinite(v) && v > 0)) rejectChartImageGeometry();
   return {
     alignment: authored.alignment,
     tileW,
@@ -268,12 +272,13 @@ function imageTileGeometry(
   const columns = Math.ceil(w / tileW) + 2;
   const rows = Math.ceil(h / tileH) + 2;
   const repetitions = columns * rows;
-  if (!Number.isSafeInteger(repetitions)) return null;
+  if (!Number.isSafeInteger(repetitions)) rejectChartImageGeometry();
   return { ...metrics, columns, rows, repetitions };
 }
 
 /** Exact Canvas image-draw work for one picture fill at the destination size.
- * A missing/unsupported authored recipe paints nothing and therefore costs 0. */
+ * Absent/invisible sources cost 0. Malformed geometry and quota crossings
+ * reject the render rather than omitting authored content. */
 export function chartImageFillPaintWork(
   fill: ImageFill,
   lookup: ChartImageLookup | undefined,
@@ -281,15 +286,16 @@ export function chartImageFillPaintWork(
   h: number,
   ptToPx = PT_TO_PX,
 ): number {
+  if (![w, h, ptToPx].every(Number.isFinite) || w < 0 || h < 0) rejectChartImageGeometry();
   if (!(w > 0) || !(h > 0)) return 0;
-  if (!fillCanProduceVisiblePixels(fill) || !imageFillModeIsPaintable(fill)) return 0;
+  if (!imageFillModeIsPaintable(fill) || !fillCanProduceVisiblePixels(fill)) return 0;
   const image = (lookup ?? activeLookup)?.(fill);
   if (!image) return 0;
   if (!fill.tile) return 1;
   const geometry = imageTileGeometry(fill, image, w, h, ptToPx);
-  return geometry && geometry.repetitions <= MAX_CHART_IMAGE_FILL_TILES
-    ? geometry.repetitions
-    : 0;
+  if (!geometry) rejectChartImageGeometry();
+  assertChartImageWork(geometry.repetitions, MAX_CHART_IMAGE_FILL_TILES);
+  return geometry.repetitions;
 }
 
 /** Monotonic work upper bound for a consumer whose destination rectangle is
@@ -302,8 +308,9 @@ export function chartImageFillPaintWorkUpperBound(
   h: number,
   ptToPx = PT_TO_PX,
 ): number {
+  if (![w, h, ptToPx].every(Number.isFinite) || w < 0 || h < 0) rejectChartImageGeometry();
   if (!(w > 0) || !(h > 0)) return 0;
-  if (!fillCanProduceVisiblePixels(fill) || !imageFillModeIsPaintable(fill)) return 0;
+  if (!imageFillModeIsPaintable(fill) || !fillCanProduceVisiblePixels(fill)) return 0;
   const image = (lookup ?? activeLookup)?.(fill);
   if (!image) return 0;
   if (!fill.tile) return 1;
@@ -359,43 +366,43 @@ export function chartImageFillUsageSize(
     || !isPositiveFiniteFactor(usage.metafileWidthFactor)
     || !isPositiveFiniteFactor(usage.metafileHeightFactor)
     || !Number.isFinite(usage.targetWidthFactor) || usage.targetWidthFactor < 0
-    || !Number.isFinite(usage.targetHeightFactor) || usage.targetHeightFactor < 0) return null;
+    || !Number.isFinite(usage.targetHeightFactor) || usage.targetHeightFactor < 0) rejectChartImageGeometry();
   const widthPt = frame.widthPt * usage.metafileWidthFactor;
   const heightPt = frame.heightPt * usage.metafileHeightFactor;
-  if (!isPositiveFiniteFactor(widthPt) || !isPositiveFiniteFactor(heightPt)) return null;
+  if (!isPositiveFiniteFactor(widthPt) || !isPositiveFiniteFactor(heightPt)) rejectChartImageGeometry();
   const targetFrameWidthPx = frame.targetWidthPx;
   const targetFrameHeightPx = frame.targetHeightPx;
   const hasTargetWidth = targetFrameWidthPx != null;
   const hasTargetHeight = targetFrameHeightPx != null;
-  if (hasTargetWidth !== hasTargetHeight) return null;
+  if (hasTargetWidth !== hasTargetHeight) rejectChartImageGeometry();
   if (targetFrameWidthPx == null || targetFrameHeightPx == null) return { widthPt, heightPt };
   if (!isPositiveFiniteFactor(targetFrameWidthPx)
-    || !isPositiveFiniteFactor(targetFrameHeightPx)) return null;
+    || !isPositiveFiniteFactor(targetFrameHeightPx)) rejectChartImageGeometry();
   const rawTargetWidthPx = targetFrameWidthPx * usage.targetWidthFactor;
   const rawTargetHeightPx = targetFrameHeightPx * usage.targetHeightFactor;
   if (!Number.isFinite(rawTargetWidthPx) || rawTargetWidthPx < 0
     || (usage.targetWidthFactor > 0 && rawTargetWidthPx === 0)
     || !Number.isFinite(rawTargetHeightPx) || rawTargetHeightPx < 0
-    || (usage.targetHeightFactor > 0 && rawTargetHeightPx === 0)) return null;
+    || (usage.targetHeightFactor > 0 && rawTargetHeightPx === 0)) rejectChartImageGeometry();
   const targetWidthPx = Math.ceil(rawTargetWidthPx);
   const targetHeightPx = Math.ceil(rawTargetHeightPx);
-  if (!Number.isFinite(targetWidthPx) || !Number.isFinite(targetHeightPx)) return null;
+  if (!Number.isFinite(targetWidthPx) || !Number.isFinite(targetHeightPx)) rejectChartImageGeometry();
   return { widthPt, heightPt, targetWidthPx, targetHeightPx };
 }
 
 function chartImageFillOccurrence(fill: ImageFill): ChartImageFillOccurrence | null {
-  if (!fillCanProduceVisiblePixels(fill) || !imageFillModeIsPaintable(fill)) return null;
+  if (!imageFillModeIsPaintable(fill) || !fillCanProduceVisiblePixels(fill)) return null;
   const logicalWidth = fill.srcRect ? 1 - fill.srcRect.l - fill.srcRect.r : 1;
   const logicalHeight = fill.srcRect ? 1 - fill.srcRect.t - fill.srcRect.b : 1;
   if (!(Number.isFinite(logicalWidth) && logicalWidth > 0)
-    || !(Number.isFinite(logicalHeight) && logicalHeight > 0)) return null;
+    || !(Number.isFinite(logicalHeight) && logicalHeight > 0)) rejectChartImageGeometry();
   const hasSourceCrop = fill.srcRect != null;
   if (fill.tile) {
-    if (!chartImageTileStaticMetrics(fill)) return null;
+    if (!chartImageTileStaticMetrics(fill)) rejectChartImageGeometry();
     const metafileWidthFactor = 1 / logicalWidth;
     const metafileHeightFactor = 1 / logicalHeight;
     if (!isPositiveFiniteFactor(metafileWidthFactor)
-      || !isPositiveFiniteFactor(metafileHeightFactor)) return null;
+      || !isPositiveFiniteFactor(metafileHeightFactor)) rejectChartImageGeometry();
     return {
       preserveNaturalSize: true,
       hasSourceCrop,
@@ -410,15 +417,15 @@ function chartImageFillOccurrence(fill: ImageFill): ChartImageFillOccurrence | n
   const top = rect?.t ?? 0;
   const right = rect?.r ?? 0;
   const bottom = rect?.b ?? 0;
-  if (![left, top, right, bottom].every(Number.isFinite)) return null;
+  if (![left, top, right, bottom].every(Number.isFinite)) rejectChartImageGeometry();
   const destinationWidth = 1 - left - right;
   const destinationHeight = 1 - top - bottom;
   if (!isPositiveFiniteFactor(destinationWidth)
-    || !isPositiveFiniteFactor(destinationHeight)) return null;
+    || !isPositiveFiniteFactor(destinationHeight)) rejectChartImageGeometry();
   const widthFactor = destinationWidth / logicalWidth;
   const heightFactor = destinationHeight / logicalHeight;
   if (!isPositiveFiniteFactor(widthFactor)
-    || !isPositiveFiniteFactor(heightFactor)) return null;
+    || !isPositiveFiniteFactor(heightFactor)) rejectChartImageGeometry();
   return {
     preserveNaturalSize: false,
     hasSourceCrop,
@@ -449,7 +456,6 @@ function mergeChartImageFillUsages(
  * images for markers that cannot be drawn. */
 interface ChartMarkerImageFillResult {
   usages: ChartImageFillUsage[];
-  sourceLimitExceeded: boolean;
   usageRejected: boolean;
 }
 
@@ -459,7 +465,7 @@ function collectChartMarkerImageFillResult(
 ): ChartMarkerImageFillResult {
   const sourceCount = sourceChartStructureCount(chart);
   if (sourceCount > MAX_CANVAS_CHART_POINTS) {
-    return { usages: [], sourceLimitExceeded: false, usageRejected: false };
+    assertChartImageWork(sourceCount, MAX_CANVAS_CHART_POINTS);
   }
   // Match the renderer's first semantic projection. Hidden source points must
   // not consume the decoded-image source ceiling or suppress a visible peer.
@@ -469,7 +475,6 @@ function collectChartMarkerImageFillResult(
   // warmed is exactly the one the renderer can select.
   chart = withEffectiveChartStyleRoles(chart);
   const usages = new Map<string, ChartImageFillUsage>();
-  let sourceLimitExceeded = false;
   let usageRejected = false;
   const add = (fill: unknown) => {
     if (usageRejected) return;
@@ -489,8 +494,7 @@ function collectChartMarkerImageFillResult(
       return;
     }
     if (usages.size >= MAX_CHART_MARKER_IMAGE_SOURCES) {
-      sourceLimitExceeded = true;
-      return;
+      assertChartImageWork(usages.size + 1, MAX_CHART_MARKER_IMAGE_SOURCES);
     }
     usages.set(key, usage);
   };
@@ -1132,8 +1136,7 @@ function collectChartMarkerImageFillResult(
     if (effective?.fillPaint?.fillType === 'image') add(effective.fillPaint);
   });
   return {
-    usages: sourceLimitExceeded || usageRejected ? [] : [...usages.values()],
-    sourceLimitExceeded,
+    usages: usageRejected ? [] : [...usages.values()],
     usageRejected,
   };
 }
@@ -1166,7 +1169,6 @@ export function collectChartImageFillUsagesForCharts(
       // Host frame validation rejects the whole owning chart before either its
       // per-chart source ceiling or the aggregate ceiling can suppress peers.
       if (result.usageRejected) continue;
-      if (result.sourceLimitExceeded) return [];
       for (const usage of result.usages) {
         const key = chartImageFillKey(usage.fill);
         const prior = usages.get(key);
@@ -1174,7 +1176,7 @@ export function collectChartImageFillUsagesForCharts(
           usages.set(key, mergeChartImageFillUsages(prior, usage));
           continue;
         }
-        if (usages.size >= MAX_CHART_MARKER_IMAGE_SOURCES) return [];
+        if (usages.size >= MAX_CHART_MARKER_IMAGE_SOURCES) assertChartImageWork(usages.size + 1, MAX_CHART_MARKER_IMAGE_SOURCES);
         usages.set(key, usage);
       }
     }
@@ -1198,58 +1200,64 @@ export function paintChartImageFill(
   ptToPx = PT_TO_PX,
   shapeRotationDeg = 0,
 ): boolean {
-  if (!fillCanProduceVisiblePixels(fill) || !(w > 0) || !(h > 0)) return false;
-  if (!imageFillModeIsPaintable(fill)) return false;
+  if (![x, y, w, h, ptToPx, shapeRotationDeg].every(Number.isFinite) || w < 0 || h < 0) rejectChartImageGeometry();
+  if (!imageFillModeIsPaintable(fill) || !fillCanProduceVisiblePixels(fill) || !(w > 0) || !(h > 0)) return false;
   const image = activeLookup?.(fill);
   if (!image) return false;
   if (shapeRotationDeg !== 0 && fill.rotWithShape == null) return false;
   ctx.save();
-  ctx.beginPath();
-  ctx.rect(x, y, w, h);
-  ctx.clip();
-  if (fill.rotWithShape === false && shapeRotationDeg !== 0) {
-    ctx.translate(x + w / 2, y + h / 2);
-    ctx.rotate(-shapeRotationDeg * Math.PI / 180);
-    ctx.translate(-(x + w / 2), -(y + h / 2));
-  }
-  if (fill.alpha != null) ctx.globalAlpha *= Math.max(0, Math.min(1, fill.alpha));
-  if (!fill.tile) {
-    const rect = fill.fillRect;
-    const dx = x + (rect?.l ?? 0) * w;
-    const dy = y + (rect?.t ?? 0) * h;
-    const dw = (1 - (rect?.l ?? 0) - (rect?.r ?? 0)) * w;
-    const dh = (1 - (rect?.t ?? 0) - (rect?.b ?? 0)) * h;
-    if (dw > 0 && dh > 0) drawImageCropped(ctx, image, fill.srcRect, dx, dy, dw, dh);
-    ctx.restore();
-    return dw > 0 && dh > 0;
-  }
-
-  const geometry = imageTileGeometry(fill, image, w, h, ptToPx);
-  if (!geometry || geometry.repetitions > MAX_CHART_IMAGE_FILL_TILES) {
-    ctx.restore();
-    return false;
-  }
-  const {
-    tileW, tileH, flipX, flipY, columns, rows,
-  } = geometry;
-  const origin = chartImageTileOrigin(geometry, w, h);
-  const originX = x + origin.x;
-  const originY = y + origin.y;
-  const firstColumn = Math.floor((x - originX) / tileW) - 1;
-  const firstRow = Math.floor((y - originY) / tileH) - 1;
-  for (let row = firstRow; row < firstRow + rows; row++) {
-    for (let column = firstColumn; column < firstColumn + columns; column++) {
-      const dx = originX + column * tileW;
-      const dy = originY + row * tileH;
-      const mirrorX = flipX && Math.abs(column) % 2 === 1;
-      const mirrorY = flipY && Math.abs(row) % 2 === 1;
-      ctx.save();
-      ctx.translate(dx + (mirrorX ? tileW : 0), dy + (mirrorY ? tileH : 0));
-      ctx.scale(mirrorX ? -1 : 1, mirrorY ? -1 : 1);
-      drawImageCropped(ctx, image, fill.srcRect, 0, 0, tileW, tileH);
-      ctx.restore();
+  try {
+    ctx.beginPath();
+    ctx.rect(x, y, w, h);
+    ctx.clip();
+    if (fill.rotWithShape === false && shapeRotationDeg !== 0) {
+      ctx.translate(x + w / 2, y + h / 2);
+      ctx.rotate(-shapeRotationDeg * Math.PI / 180);
+      ctx.translate(-(x + w / 2), -(y + h / 2));
     }
-  }
-  ctx.restore();
-  return true;
+    if (fill.alpha != null) ctx.globalAlpha *= Math.max(0, Math.min(1, fill.alpha));
+    if (!fill.tile) {
+      const rect = fill.fillRect;
+      const dx = x + (rect?.l ?? 0) * w;
+      const dy = y + (rect?.t ?? 0) * h;
+      const dw = (1 - (rect?.l ?? 0) - (rect?.r ?? 0)) * w;
+      const dh = (1 - (rect?.t ?? 0) - (rect?.b ?? 0)) * h;
+      if (![dx, dy, dw, dh].every(Number.isFinite)) rejectChartImageGeometry();
+      if (dw > 0 && dh > 0) drawImageCropped(ctx, image, fill.srcRect, dx, dy, dw, dh);
+      return dw > 0 && dh > 0;
+    }
+
+    const geometry = imageTileGeometry(fill, image, w, h, ptToPx);
+    if (!geometry) rejectChartImageGeometry();
+    assertChartImageWork(geometry.repetitions, MAX_CHART_IMAGE_FILL_TILES);
+    const {
+      tileW, tileH, flipX, flipY, columns, rows,
+    } = geometry;
+    const origin = chartImageTileOrigin(geometry, w, h);
+    const originX = x + origin.x;
+    const originY = y + origin.y;
+    const firstColumn = Math.floor((x - originX) / tileW) - 1;
+    const firstRow = Math.floor((y - originY) / tileH) - 1;
+    // A bounded repetition count does not make a huge starting index iterable.
+    // Resource policy: reject grids whose integer parity cannot be represented.
+    if (![firstColumn, firstRow, firstColumn + columns, firstRow + rows].every(Number.isSafeInteger)) {
+      assertChartImageWork(Number.MAX_SAFE_INTEGER, MAX_CHART_IMAGE_FILL_TILES);
+    }
+    for (let ri = 0; ri < rows; ri++) {
+      const row = firstRow + ri;
+      for (let ci = 0; ci < columns; ci++) {
+        const column = firstColumn + ci;
+        const dx = originX + column * tileW;
+        const dy = originY + row * tileH;
+        const mirrorX = flipX && Math.abs(column) % 2 === 1;
+        const mirrorY = flipY && Math.abs(row) % 2 === 1;
+        ctx.save();
+        ctx.translate(dx + (mirrorX ? tileW : 0), dy + (mirrorY ? tileH : 0));
+        ctx.scale(mirrorX ? -1 : 1, mirrorY ? -1 : 1);
+        drawImageCropped(ctx, image, fill.srcRect, 0, 0, tileW, tileH);
+        ctx.restore();
+      }
+    }
+    return true;
+  } finally { ctx.restore(); }
 }

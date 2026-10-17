@@ -286,3 +286,5 @@ export type {
   ChartManualLayout,
   LegendManualLayout,
 } from './types.js';
+
+export type { BlendMode, BlipEffectContainer, BlipEffectFill, BlipEffectImageFill } from '@silurus/ooxml-core';

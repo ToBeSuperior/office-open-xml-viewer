@@ -1,6 +1,7 @@
 import { acquireVmlImageBrush } from './browser-vml-image-brush.js';
 import {
   withBitmapCacheLease,
+  OoxmlError,
   clampCanvasSize,
   defaultDpr,
   isHTMLCanvas,
@@ -276,10 +277,10 @@ async function resolveChartImages<TTextRun>(
     for (const descriptor of descriptors) {
       if (descriptor.kind !== 'chart') continue;
       for (const occurrence of chartOccurrencesByResource.get(descriptor.resourceKey) ?? []) {
-        if (!Number.isFinite(occurrence.widthPt)
-          || occurrence.widthPt <= 0
-          || !Number.isFinite(occurrence.heightPt)
-          || occurrence.heightPt <= 0) continue;
+        if (!Number.isFinite(occurrence.widthPt) || !Number.isFinite(occurrence.heightPt) || occurrence.widthPt < 0 || occurrence.heightPt < 0) {
+          throw new OoxmlError('unsupported-image-effect', 'Invalid chart image occurrence geometry');
+        }
+        if (occurrence.widthPt <= 0 || occurrence.heightPt <= 0) continue;
         const frame = {
           widthPt: occurrence.widthPt,
           heightPt: occurrence.heightPt,
@@ -535,7 +536,7 @@ async function renderSelectedDocumentPageLeased<TTextRun>(
           : unavailablePaintResourceHandle('optional math renderer unavailable');
       }
       if (descriptor.kind === 'image' || descriptor.kind === 'picture-bullet') {
-        const image = images.get(imageKey(
+        const image = images.get(descriptor.blipEffects?.length ? descriptor.resourceKey : imageKey(
           descriptor.partPath,
           descriptor.colorReplaceFrom,
           descriptor.duotone as Duotone | undefined,

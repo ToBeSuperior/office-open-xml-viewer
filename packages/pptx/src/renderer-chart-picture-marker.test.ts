@@ -109,7 +109,7 @@ describe('PPTX chart picture-marker preload', () => {
       { l: 0.5, t: 0, r: 0.4999999999999999, b: 0 },
     ],
   ] as const)(
-    'excludes %s chart frames before aggregate source gating and preload',
+    'handles %s chart frames without silently dropping invalid image geometry',
     async (_case, hiddenWidth, hiddenHeight, overflowCrop) => {
       coreMocks.decode.mockClear();
       coreMocks.decodeSvg.mockClear();
@@ -125,7 +125,7 @@ describe('PPTX chart picture-marker preload', () => {
         chartType: 'line', categories: ['A'],
         series: [{ name: 'Visible', values: [1], markerFillPaint: visibleFill }],
       } as ChartModel;
-      const sourceCount = overflowCrop ? 257 : 256;
+      const sourceCount = 256;
       const hiddenChart = {
         chartType: 'line',
         categories: Array.from({ length: sourceCount }, (_, index) => String(index)),
@@ -165,10 +165,16 @@ describe('PPTX chart picture-marker preload', () => {
       } as Slide;
       const fetchImage = vi.fn(async () => pngBlob());
 
-      await renderSlide(canvas(), slide, 9_144_000, 6_858_000, {
+      const rendering = renderSlide(canvas(), slide, 9_144_000, 6_858_000, {
         width: 960, dpr: 1, fetchImage,
       });
 
+      if (overflowCrop || !Number.isFinite(hiddenWidth) || !Number.isFinite(hiddenHeight) || hiddenWidth < 0 || hiddenHeight < 0) {
+        await expect(rendering).rejects.toHaveProperty('code');
+        expect(coreMocks.decode).not.toHaveBeenCalled();
+        return;
+      }
+      await rendering;
       expect(coreMocks.decode).toHaveBeenCalledTimes(1);
       expect(coreMocks.decode.mock.calls[0]?.slice(0, 4)).toEqual([
         'ppt/media/visible-chart-fill.png', 'image/png', undefined, fetchImage,

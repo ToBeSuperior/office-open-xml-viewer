@@ -1493,9 +1493,8 @@ export interface ImageRun {
   /** Ordered CT_Blip pixel effects, including §20.1.8.42 picture corrections. */
   blipEffects?: BlipEffect[];
   /**
-   * ECMA-376 §20.1.8.6 `<a:alphaModFix@amt>` opacity as 0..1. Absent ⇒ fully
-   * opaque. When present the renderer multiplies the picture's `globalAlpha` by
-   * this fraction.
+   * Legacy model-source opacity. Parsed alphaModFix is baked once by
+   * blipEffects, so parsed pictures leave this absent.
    */
   alpha?: number;
   /**

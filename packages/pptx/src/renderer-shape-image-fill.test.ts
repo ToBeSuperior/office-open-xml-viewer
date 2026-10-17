@@ -209,6 +209,12 @@ describe('PPTX ordinary-shape image fills', () => {
   });
 
   it.each([false, true])('keeps a shared tile native-sized regardless of consumer order (%s)', async (reversed) => {
+    class TileCanvas {
+      getContext() { return recordingCanvas().ctx; }
+    }
+    vi.stubGlobal('OffscreenCanvas', TileCanvas);
+    const target = recordingCanvas();
+    target.state.createPattern = () => ({});
     const shared = 'ppt/media/tile-and-stretch.png';
     const tiled = {
       ...shape(shared),
@@ -226,7 +232,7 @@ describe('PPTX ordinary-shape image fills', () => {
       },
     };
     mocks.decode.mockClear();
-    await renderSlide(recordingCanvas().canvas, {
+    await renderSlide(target.canvas, {
       index: 0, slideNumber: 1, background: null,
       elements: reversed ? [stretched, tiled] : [tiled, stretched],
     } as unknown as Slide, 9_144_000, 6_858_000, {
@@ -237,16 +243,17 @@ describe('PPTX ordinary-shape image fills', () => {
     expect(mocks.decode).toHaveBeenCalledTimes(1);
     expect(mocks.decode.mock.calls[0][4]).not.toHaveProperty('targetWidthPx');
     expect(mocks.decode.mock.calls[0][4]).not.toHaveProperty('targetHeightPx');
+    vi.unstubAllGlobals();
   });
 
   it.each([
     { sx: Number.POSITIVE_INFINITY, sy: 1, flip: 'none' },
   ])('rejects an unbounded tile auxiliary and restores caller state: %o', (tile) => {
     const { ctx, calls, state } = recordingCanvas();
-    expect(paintPreparedShapeImageFill(ctx, {
+    expect(() => paintPreparedShapeImageFill(ctx, {
       fillType: 'image', imagePath: 'ppt/media/huge.png', mimeType: 'image/png',
       dpi: 96, tile: { algn: 'tl', tx: 0, ty: 0, ...tile },
-    }, { image: mocks.image }, { x: 0, y: 0, w: 100, h: 100 }, 1)).toBe(false);
+    }, { image: mocks.image }, { x: 0, y: 0, w: 100, h: 100 }, 1)).toThrowError(expect.objectContaining({ code: 'unsupported-image-effect' }));
     expect(calls.some(([name]) => name === 'drawImage')).toBe(false);
     expect(state.globalAlpha).toBe(1);
   });

@@ -668,3 +668,11 @@ export function resolvePathShade(
   }, rotation, shapeBox.x + shapeBox.w / 2, shapeBox.y + shapeBox.h / 2));
   return pattern;
 }
+
+/** Conservative peak of this painter's bounded raster workspace: backing +
+ * ImageData + Float64 shade + two Int32 successor grids + Uint8 rank, and
+ * the 1024-color canvas/readback ramp. Callers with a whole-pipeline image
+ * quota charge this before calling resolveFill. */
+export function pathShadeWorkspaceBytes(): number {
+  return MAX_EDGE * MAX_EDGE * (4 + 4 + 8 + 4 + 4 + 1) + MAX_EDGE * (4 + 4 + 1) + 1024 * 8;
+}

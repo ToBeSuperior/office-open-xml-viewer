@@ -1,3 +1,4 @@
+import { setImageEffectFrame } from './image-effect-frame.js';
 import { describe, it, expect, vi } from 'vitest';
 import {
   cropSourceRect,
@@ -172,4 +173,16 @@ describe('image crop overflow', () => {
     drawImageCropped(ctx, fakeImg(100, 80), { l: NaN, t: 0, r: 0, b: 0 }, 0, 0, 40, 20);
     expect(drawImage).toHaveBeenCalledExactlyOnceWith(expect.anything(), 0, 0, 40, 20);
   });
+});
+
+
+it.each(['crop', 'projection'] as const)('rejects a non-finite effect-frame %s before Canvas can omit the picture', kind => {
+  const image = { width: 3, height: 3 } as CanvasImageSource;
+  setImageEffectFrame(image, { x: 1, y: 1, width: 1, height: 1 });
+  const drawImage = vi.fn();
+  expect(() => drawImageCropped({ drawImage } as unknown as CanvasRenderingContext2D, image,
+    kind === 'crop' ? { l: NaN, t: 0, r: 0, b: 0 } : undefined,
+    0, 0, kind === 'projection' ? Number.MAX_VALUE : 1, 1))
+    .toThrowError(expect.objectContaining({ code: 'unsupported-image-effect' }));
+  expect(drawImage).not.toHaveBeenCalled();
 });

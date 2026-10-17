@@ -24,6 +24,7 @@
     ".": "./src/index.ts",
     "./worker": "./src/worker/index.ts",
     "./internal/bundled-asset-url": "./src/internal/bundled-asset-url.ts",
+    "./internal/duotone-only-bitmap": "./src/image/duotone-only-bitmap-by-path.ts",
     "./internal/model-source": "./src/source/model-source.ts",
     "./internal/cfb-directory-names": "./src/source/cfb-directory-names.ts",
     "./types": "./src/types/common.ts",

@@ -84,6 +84,7 @@ pub enum HardResourceLimitKind {
     PptxSlideJsonBytes,
     PptxSharedDependencyXmlBytes,
     XmlDomComplexity,
+    ImageEffectWork,
     ChartexAllocationElements,
     ChartexAllocationBytes,
     ChartCachePoints,
@@ -148,6 +149,7 @@ impl HardResourceLimitKind {
             Self::ChartCustomNumberFormats => ("parsing", "chart-custom-number-formats", "entries"),
             Self::ChartNumberFormatBytes => ("parsing", "chart-number-format-bytes", "bytes"),
             Self::XmlDomComplexity => ("parsing", "xml-dom", "complexity-units"),
+            Self::ImageEffectWork => ("parsing", "image-effect", "work"),
             Self::PptxSharedDependencyProjectionBytes => {
                 ("parsing", "pptx-shared-dependency", "projected-bytes")
             }
@@ -619,6 +621,37 @@ fn observe_limit(
     }))
 }
 
+/// Charge actual parser work across a package session before allocating a
+/// referenced effect recipe. Repeated pictures must not amplify a small XML
+/// definition into unbounded model copies. The caller supplies the existing
+/// image-effect work ceiling; this is resource policy, not an OOXML restriction.
+pub(crate) fn charge_image_effect_work(units: u64, limit: u64) -> Result<(), String> {
+    let Some(governor) = active_governor() else {
+        return Ok(());
+    };
+    let mut state = governor.0.borrow_mut();
+    state.assert_healthy()?;
+    let total = state
+        .hard_limit_totals
+        .entry(HardResourceLimitKind::ImageEffectWork)
+        .or_default();
+    *total = total.saturating_add(units);
+    let observed = *total;
+    if observed <= limit {
+        return Ok(());
+    }
+    let (stage, resource, metric) = HardResourceLimitKind::ImageEffectWork.wire_fields();
+    Err(state.fail(LimitCrossing {
+        stage,
+        resource,
+        metric,
+        part: None,
+        limit,
+        observed,
+        configurable: false,
+    }))
+}
+
 /// Retain one independently owned model instance for the package lifetime.
 ///
 /// The key names both the source part and the concrete retention site. Repeated
@@ -761,6 +794,24 @@ pub(crate) fn observe_inflated(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn image_effect_work_accumulates_before_repeated_recipe_allocation() {
+        let governor = ResourceGovernor::from_wasm(OoxmlFormat::Pptx, None, None, None);
+        let _scope = governor.scope("parse");
+        charge_image_effect_work(6, 10).unwrap();
+        let error = charge_image_effect_work(5, 10).unwrap_err();
+        let envelope: serde_json::Value =
+            serde_json::from_str(error.strip_prefix("OOXML_RESOURCE_LIMIT:").unwrap()).unwrap();
+        let violation = &envelope["details"]["violation"];
+        assert_eq!(envelope["details"]["stage"], "parsing");
+        assert_eq!(violation["resource"], "image-effect");
+        assert_eq!(violation["metric"], "work");
+        assert_eq!(violation["limit"], 10);
+        assert_eq!(violation["observed"], 11);
+        assert_eq!(violation["configurable"], false);
+        assert!(charge_image_effect_work(0, 10).is_err());
+    }
 
     #[test]
     fn zero_wire_value_disables_only_the_public_limit() {

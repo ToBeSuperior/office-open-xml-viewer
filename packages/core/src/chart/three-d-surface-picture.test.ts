@@ -8,6 +8,7 @@ import {
 function paint(
   fill: ImageFill,
   options: {
+    rejectSourceDraw?: boolean;
     imageWidth?: number;
     imageHeight?: number;
     faceWidth?: number;
@@ -44,7 +45,10 @@ function paint(
           return (...args: number[]) => transforms.push(args);
         }
         if (property === 'drawImage') {
-          return (...args: unknown[]) => draws.push(args);
+          return (...args: unknown[]) => {
+            if (options.rejectSourceDraw && args[0] === image) throw new Error('unsafe grid reached paint');
+            draws.push(args);
+          };
         }
         if (property === 'translate' || property === 'scale') {
           return (...values: number[]) => operations.push({ kind: property, values });
@@ -276,13 +280,11 @@ describe('CT_Surface plain stacked pictures', () => {
   });
 
   it('fails closed before drawing when aspect repetition exceeds the image-work ceiling', () => {
-    const result = paint(imageFill, {
+    expect(() => paint(imageFill, {
       imageWidth: 4_097 * 400, imageHeight: 100,
       faceWidth: 400, faceHeight: 100,
       pictureFormat: 'stack',
-    });
-    expect(result.painted).toBe(false);
-    expect(result.draws).toHaveLength(0);
+    })).toThrowError(expect.objectContaining({ code: 'ooxml-decoded-image-limit' }));
   });
 
   it('bounds the aggregate plain-stack work across every thick slab face', () => {
@@ -299,9 +301,8 @@ describe('CT_Surface plain stacked pictures', () => {
     expect(withinLimit.painted).toBe(true);
     expect(withinLimit.draws).toHaveLength(4_094);
 
-    const exceeded = paint(imageFill, { ...common, imageWidth: 400 * 1_365 });
-    expect(exceeded.painted).toBe(false);
-    expect(exceeded.draws).toHaveLength(0);
+    expect(() => paint(imageFill, { ...common, imageWidth: 400 * 1_365 }))
+      .toThrowError(expect.objectContaining({ code: 'ooxml-decoded-image-limit' }));
   });
 });
 
@@ -319,10 +320,12 @@ describe('CT_Surface DrawingML tiles', () => {
       faceHeight: 40,
       projectXScale: 0.4,
     });
-    const projectedCanvas = result.draws
-      .map(call => call[0] as { width?: number })
-      .find(source => source && source !== result.sourceDraws[0]?.[0] && source.width != null);
-    expect(projectedCanvas?.width).toBe(1_080);
+    const projectedDraw = result.draws.find(call => {
+      const source = call[0] as { width?: number };
+      return source && source !== result.sourceDraws[0]?.[0] && source.width != null;
+    });
+    // Assert the source extent passed to real paint, before scratch release.
+    expect(projectedDraw?.[3]).toBe(1_080);
     // 1,080 / 80 = 13.5 tiles: the final half tile leaves 27 visible
     // half-width colour blocks after the complete grid is projected.
     expect(result.sourceDraws).toHaveLength(14);
@@ -336,6 +339,13 @@ describe('CT_Surface tiled pictures', () => {
     dpi: 96,
     tile: { tx: 0, ty: 0, sx: 1, sy: 1, flip: 'none', algn: 'tl' },
   } satisfies ImageFill;
+
+  it('rejects the reviewer’s valid-coordinate unsafe tile indices before painting', () => {
+    expect(() => paint({ ...tiled, dpi: 65535,
+      tile: { ...tiled.tile, tx: 27273042316900, sx: .0001, sy: 10000 } },
+      { imageWidth: 1, imageHeight: 1, faceWidth: 1 / 9525, faceHeight: 1 / 9525, rejectSourceDraw: true }))
+      .toThrowError(expect.objectContaining({ code: 'ooxml-decoded-image-limit' }));
+  });
 
   it('repeats the physical source size in face-local coordinates', () => {
     const result = paint(tiled, {
@@ -431,13 +441,19 @@ describe('CT_Surface tiled pictures', () => {
     expect(exact.painted).toBe(true);
     expect(exact.sourceDraws).toHaveLength(4096);
 
-    const exceeded = paint(tiled, {
+    expect(() => paint(tiled, {
       imageWidth: 1,
       imageHeight: 1,
       faceWidth: 65,
       faceHeight: 64,
-    });
-    expect(exceeded.painted).toBe(false);
-    expect(exceeded.draws).toHaveLength(0);
+    })).toThrowError(expect.objectContaining({ code: 'ooxml-decoded-image-limit' }));
   });
+});
+
+
+it('rejects phase cancellation that would erase a positive chart face even with safe tile indices', () => {
+  expect(() => paint({ ...imageFill, stretch: false, dpi: 96,
+    tile: { algn: 'tl', tx: 2 ** 31 * 9525, ty: 0, sx: 1, sy: 1 } },
+    { imageWidth: 1, imageHeight: 1, faceWidth: Number.EPSILON, faceHeight: 1, rejectSourceDraw: true }))
+    .toThrowError(expect.objectContaining({ code: 'unsupported-image-effect' }));
 });

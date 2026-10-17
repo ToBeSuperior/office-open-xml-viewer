@@ -5600,7 +5600,7 @@ mod tests {
                 assert!((fr.b - (-0.09)).abs() < 1e-9, "b={}", fr.b);
                 assert!(fr.l.abs() < 1e-9 && fr.r.abs() < 1e-9);
                 assert!(tile.is_none(), "stretch fill must not carry tile");
-                assert!((alpha.expect("alpha") - 0.8).abs() < 1e-6);
+                assert!(alpha.is_none(), "ordered effects own alpha modulation");
             }
             other => panic!("expected Fill::Image, got {other:?}"),
         }
@@ -10519,6 +10519,10 @@ mod tests {
     <a:blip r:embed="rIdPng">
       <a:clrChange><a:clrFrom><a:srgbClr val="FFFFFF"/></a:clrFrom>
         <a:clrTo><a:srgbClr val="FFFFFF"><a:alpha val="0"/></a:srgbClr></a:clrTo></a:clrChange>
+      <a:alphaModFix amt="50000"/>
+      <a:duotone><a:srgbClr val="000000"/><a:srgbClr val="FF0000"/></a:duotone>
+      <a:duotone><a:srgbClr val="000000"/><a:srgbClr val="00FF00"/></a:duotone>
+      <a:clrRepl><a:srgbClr val="FF0000"/></a:clrRepl>
       <a:grayscl/>
       <a:biLevel thresh="50000"/>
     </a:blip>
@@ -10538,7 +10542,7 @@ mod tests {
         let mut zip = PptxZip::new(cursor).unwrap();
         let pic = parse_picture(pic_node, "ppt/slides/slide1.xml", &rels, &theme, &mut zip)
             .expect("parse_picture should succeed for a duotone picture");
-        assert!(pic.duotone.is_none());
+        assert!(pic.alpha.is_none(), "alpha is baked once");
         assert_eq!(
             pic.blip_effects,
             vec![
@@ -10549,12 +10553,24 @@ mod tests {
                     to_alpha: 0.0,
                     use_alpha: false,
                 },
+                ooxml_common::blip::BlipEffect::AlphaModFix { amt: 0.5 },
+                ooxml_common::blip::BlipEffect::Duotone {
+                    clr1: "000000".into(),
+                    clr2: "FF0000".into()
+                },
+                ooxml_common::blip::BlipEffect::Duotone {
+                    clr1: "000000".into(),
+                    clr2: "00FF00".into()
+                },
+                ooxml_common::blip::BlipEffect::ColorReplace {
+                    color: "FF0000".into()
+                },
                 ooxml_common::blip::BlipEffect::Grayscale,
                 ooxml_common::blip::BlipEffect::BiLevel { thresh: 0.5 },
             ]
         );
         let json = serde_json::to_value(&pic).unwrap();
-        assert_eq!(json["blipEffects"][1]["type"], "grayscale");
+        assert_eq!(json["blipEffects"][5]["type"], "grayscale");
     }
 
     #[test]

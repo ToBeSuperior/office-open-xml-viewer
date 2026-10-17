@@ -282,7 +282,7 @@ it.each([false, true])(
   },
 );
 
-it('does not let statically invalid tile recipes force native-size decoding', () => {
+it('rejects statically invalid tile recipes before decoding', () => {
   const shared = {
     fillType: 'image' as const,
     imagePath: 'xl/media/invalid-tile.png',
@@ -300,13 +300,11 @@ it('does not let statically invalid tile recipes force native-size decoding', ()
     { ...shared, ...complete, tile: { ...complete.tile, algn: 'unknown' } },
   ];
   for (const tile of invalid) {
-    const usages = collectChartImageFillUsages(baseModel({
+    expect(() => collectChartImageFillUsages(baseModel({
       chartFill: stretch,
       plotAreaFill: tile,
       series: [series({ values: [1] })],
-    }));
-    expect(usages).toHaveLength(1);
-    expect(usages[0]?.preserveNaturalSize).toBe(false);
+    }))).toThrowError(expect.objectContaining({ code: 'unsupported-image-effect' }));
   }
 });
 
@@ -341,10 +339,10 @@ it.each([
     stretch: true,
     ...geometry,
   };
-  expect(collectChartImageFillUsages(baseModel({
+  expect(() => collectChartImageFillUsages(baseModel({
     chartFill: fill,
     series: [series({ values: [1] })],
-  }))).toEqual([]);
+  }))).toThrowError(expect.objectContaining({ code: 'unsupported-image-effect' }));
 });
 
 it.each([
@@ -363,13 +361,13 @@ it.each([
     },
     series: [series({ values: [1] })],
   }))[0]!;
-  expect(chartImageFillUsageSize(usage, {
+  expect(() => chartImageFillUsageSize(usage, {
     widthPt: 1,
     heightPt: 1,
     targetWidthPx: 1,
     targetHeightPx: 1,
     ...override,
-  })).toBeNull();
+  })).toThrowError(expect.objectContaining({ code: 'unsupported-image-effect' }));
 });
 
 it('collects only the effective direct bubble point picture', () => {
@@ -2883,10 +2881,10 @@ describe('classic 3-D compatibility projection', () => {
       ...model('backWall', 'stackScale'),
       valMax: 8_192,
     })).toEqual([picture]);
-    expect(collectChartMarkerImageFills({
+    expect(() => collectChartMarkerImageFills({
       ...model('backWall', 'stackScale'),
       valMax: 8_194,
-    })).toEqual([]);
+    })).toThrowError(expect.objectContaining({ code: 'ooxml-decoded-image-limit' }));
   });
 
   it('projects bounded DrawingML tile grids across planar and thick Surface faces', () => {
@@ -12123,16 +12121,16 @@ describe('CH9 — line/area consume marker detail (§21.2.2.32)', () => {
     for (const key of ['tx', 'ty', 'sx', 'sy', 'algn'] as const) {
       const tile: Partial<typeof complete> = { ...complete };
       delete tile[key];
-      expect(chartImageFillPaintWork({ ...base, tile }, lookup, 20, 20)).toBe(0);
+      expect(() => chartImageFillPaintWork({ ...base, tile }, lookup, 20, 20)).toThrowError(expect.objectContaining({ code: 'unsupported-image-effect' }));
     }
     expect(chartImageFillPaintWork({
       ...base,
       tile: { tx: 0, ty: 0, sx: 1, sy: 1, algn: 'tl' },
     }, lookup, 20, 20)).toBeGreaterThan(0);
-    expect(chartImageFillPaintWork({
+    expect(() => chartImageFillPaintWork({
       ...base,
       tile: { tx: 0, ty: 0, sx: -1, sy: 1, flip: 'none', algn: 'tl' },
-    }, lookup, 20, 20)).toBe(0);
+    }, lookup, 20, 20)).toThrowError(expect.objectContaining({ code: 'unsupported-image-effect' }));
   });
 
   it('prefetches only effective picture-marker consumers', () => {
@@ -12336,7 +12334,7 @@ describe('CH9 — line/area consume marker detail (§21.2.2.32)', () => {
         showMarker: true, markerSymbol: 'picture', markerFillPaint: picture,
       })],
     });
-    expect(collectChartMarkerImageFills(model)).toEqual([]);
+    expect(() => collectChartMarkerImageFills(model)).toThrowError(expect.objectContaining({ code: 'ooxml-decoded-image-limit' }));
   });
 
   it('rejects oversized public chart models before effect-site traversal', () => {
@@ -12368,7 +12366,7 @@ describe('CH9 — line/area consume marker detail (§21.2.2.32)', () => {
         values: [], showMarker: true, markerSymbol: 'picture',
       })),
     });
-    expect(collectChartMarkerImageFills(manySeries)).toEqual([]);
+    expect(() => collectChartMarkerImageFills(manySeries)).toThrowError(expect.objectContaining({ code: 'ooxml-decoded-image-limit' }));
 
     const manyLabels = baseModel({
       chartType: 'line', categories: ['A'],
@@ -12379,7 +12377,7 @@ describe('CH9 — line/area consume marker detail (§21.2.2.32)', () => {
         })),
       })],
     });
-    expect(collectChartMarkerImageFills(manyLabels)).toEqual([]);
+    expect(() => collectChartMarkerImageFills(manyLabels)).toThrowError(expect.objectContaining({ code: 'ooxml-decoded-image-limit' }));
 
     let legendIndexReads = 0;
     const boundedLegend = baseModel({
@@ -12401,7 +12399,7 @@ describe('CH9 — line/area consume marker detail (§21.2.2.32)', () => {
         trendLines: Array.from({ length: 101 }, () => ({ trendlineType: 'linear' })),
       })],
     });
-    expect(collectChartMarkerImageFills(trendlineWork)).toEqual([]);
+    expect(() => collectChartMarkerImageFills(trendlineWork)).toThrowError(expect.objectContaining({ code: 'ooxml-decoded-image-limit' }));
 
     const errorBar = {
       dir: 'y', barType: 'both', plus: values, minus: values, noEndCap: false,
@@ -12410,7 +12408,7 @@ describe('CH9 — line/area consume marker detail (§21.2.2.32)', () => {
       chartType: 'line',
       series: [series({ values, errBars: Array.from({ length: 101 }, () => errorBar) })],
     });
-    expect(collectChartMarkerImageFills(errorBarWork)).toEqual([]);
+    expect(() => collectChartMarkerImageFills(errorBarWork)).toThrowError(expect.objectContaining({ code: 'ooxml-decoded-image-limit' }));
     const emptyErrorBars = baseModel({
       chartType: 'line',
       series: [series({
@@ -12420,7 +12418,7 @@ describe('CH9 — line/area consume marker detail (§21.2.2.32)', () => {
         })),
       })],
     });
-    expect(collectChartMarkerImageFills(emptyErrorBars)).toEqual([]);
+    expect(() => collectChartMarkerImageFills(emptyErrorBars)).toThrowError(expect.objectContaining({ code: 'ooxml-decoded-image-limit' }));
   });
 
   it('matches ChartEx box marker visibility and fill-layer precedence during prefetch', () => {
@@ -12490,8 +12488,8 @@ describe('CH9 — line/area consume marker detail (§21.2.2.32)', () => {
       })],
     });
     expect(collectChartMarkerImageFills(model(256))).toHaveLength(256);
-    expect(collectChartMarkerImageFills(model(257))).toEqual([]);
-    expect(collectChartMarkerImageFillsForCharts([model(128), {
+    expect(() => collectChartMarkerImageFills(model(257))).toThrowError(expect.objectContaining({ code: 'ooxml-decoded-image-limit' }));
+    expect(() => collectChartMarkerImageFillsForCharts([model(128), {
       ...model(129),
       series: [series({
         values: Array.from({ length: 129 }, () => 1), showMarker: false,
@@ -12503,9 +12501,9 @@ describe('CH9 — line/area consume marker detail (§21.2.2.32)', () => {
           },
         })),
       })],
-    }])).toEqual([]);
-    expect(collectChartMarkerImageFillsForCharts([model(257), model(1)])).toEqual([]);
-    expect(collectChartMarkerImageFillsForCharts([model(1), model(257)])).toEqual([]);
+    }])).toThrowError(expect.objectContaining({ code: 'ooxml-decoded-image-limit' }));
+    expect(() => collectChartMarkerImageFillsForCharts([model(257), model(1)])).toThrowError(expect.objectContaining({ code: 'ooxml-decoded-image-limit' }));
+    expect(() => collectChartMarkerImageFillsForCharts([model(1), model(257)])).toThrowError(expect.objectContaining({ code: 'ooxml-decoded-image-limit' }));
     expect(collectChartImageFillUsagesForCharts(
       [model(1), model(257)],
       (usage, chartIndex) => chartIndex === 0

@@ -1683,7 +1683,7 @@ describe('renderEmfToBitmap', () => {
       height: h,
       getContext: () => ({
         drawImage() {},
-        getImageData: () => ({ data: new Uint8ClampedArray(w * h * 4) }),
+        getImageData: () => ({ width: w, height: h, data: new Uint8ClampedArray(w * h * 4) }),
         putImageData() {},
       }),
     }) as unknown as OffscreenCanvas;

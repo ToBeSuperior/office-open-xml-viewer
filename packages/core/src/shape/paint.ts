@@ -3,7 +3,7 @@ import type { Fill, GradientFill, PatternFill, Stroke } from '../types/common';
 import { buildPatternBitmap } from './pattern-bitmaps';
 import { resolveStrokeGeometry, type ResolvedStrokeGeometry } from './stroke-geometry';
 import { createAuxCanvasForContext } from '../canvas/aux-canvas';
-import { resolvePathShade, type FillOutline, type ShadeBox } from './path-gradient';
+import { pathShadeWorkspaceBytes, resolvePathShade, type FillOutline, type ShadeBox } from './path-gradient';
 import { hostStrokeBounds, paintPathSource } from './paint-bounds';
 
 const MAX_GRADIENT_TILE_EDGE = 512;
@@ -200,6 +200,17 @@ export function relativeLuma(hex: string): number {
 export function autoContrastColor(bgHex: string | null): '#000000' | '#FFFFFF' {
   if (!bgHex) return '#000000';
   return relativeLuma(bgHex) < 128 ? '#FFFFFF' : '#000000';
+}
+
+/** Bounded auxiliary surfaces used while producing one shared fill brush.
+ * This excludes the caller-owned destination canvas/readback and decoded
+ * image, which are charged by the image owner/effect planner separately. */
+export function fillPaintWorkspaceBytes(fill: Readonly<Pick<Fill, 'fillType'>> & { readonly gradType?: string; readonly path?: string; readonly tileRect?: unknown }): number {
+  if (fill.fillType === 'pattern') return 64 * 64 * 4;
+  if (fill.fillType !== 'gradient') return 0;
+  if (fill.tileRect) return MAX_GRADIENT_TILE_EDGE ** 2 * 4 * 5;
+  if (fill.gradType === 'radial' && (fill.path === 'shape' || fill.path === 'rect')) return pathShadeWorkspaceBytes();
+  return 0;
 }
 
 /**

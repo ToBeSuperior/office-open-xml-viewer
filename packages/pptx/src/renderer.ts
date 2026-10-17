@@ -105,6 +105,7 @@ import {
   fitSeaWordPrefix,
   graphemeClusterOffsets,
   getCachedSvgImageByPath,
+  decodeSvgBlobOnMainThread,
   getCachedBitmapByPath,
   getCachedDuotoneBitmapByPath,
   chartImageFillKey,
@@ -123,10 +124,12 @@ import {
   dropDecodedBitmapCache,
   preferVectorBlip,
   drawImageCropped,
+  hasImageEffectOutset,
   metafileRasterSize,
   sourceRasterTargetSize,
   isOoxmlDecodedImageLimitError,
   OoxmlResourceLimitError,
+  OoxmlError,
   isTiffDecodeError,
   highlightBox,
   symbolFontToUnicode,
@@ -352,15 +355,29 @@ type PlannedRasterOptions = {
   maxRetainedPixels: number;
 };
 
+/** Authored effect diagnostics are terminal even at image decode/fallback
+ * boundaries. Containing them as a missing image would silently accept only
+ * part of a CT_Blip chain. Resource and codec failures keep their own policy. */
+function isUnsupportedBlipEffectError(error: unknown): boolean {
+  return error instanceof OoxmlError && error.code === 'unsupported-image-effect';
+}
+
 /** The decode-time pixel transform of a blip: its ordered CT_Blip effects
  *  (with the duotone at its position) when it carries any, otherwise just the
  *  duotone, so a duotone-only or plain picture keeps its existing cache key. */
-function pixelTransform(blip: {
+type BlipHostOrientation = { readonly rotation?: number; readonly flipH?: boolean; readonly flipV?: boolean };
+
+function pixelTransform(blip: BlipHostOrientation & {
+  readonly rotWithShape?: boolean;
   readonly duotone?: import('@silurus/ooxml-core').Duotone | null;
   readonly blipEffects?: readonly import('@silurus/ooxml-core').BlipEffect[] | null;
-}): import('@silurus/ooxml-core').Duotone | BlipPixelEffects | undefined {
+}, host: BlipHostOrientation = blip): import('@silurus/ooxml-core').Duotone | BlipPixelEffects | undefined {
   return blip.blipEffects?.length
-    ? { effects: blip.blipEffects, duotone: blip.duotone ?? null }
+    ? { effects: blip.blipEffects, duotone: blip.duotone ?? null,
+        // §20.1.8.14: effects belong to the image-fill brush. If its
+        // painter counter-rotates the brush, its net host rotation is zero;
+        // using the containing shape's rotation here cancels it a second time.
+        hostRotation: blip.rotWithShape === false ? 0 : host.rotation, hostFlipH: host.flipH, hostFlipV: host.flipV }
     : blip.duotone ?? undefined;
 }
 
@@ -386,7 +403,7 @@ function plannedRasterOptions(
 }
 
 function pictureResourcePath(picture: PictureElement): string {
-  return preferVectorBlip(picture)
+  return !picture.blipEffects?.length && preferVectorBlip(picture)
     ? picture.svgImagePath as string
     : picture.imagePath;
 }
@@ -467,7 +484,7 @@ async function planSlideImages(
           }
         : null)
       .catch((error: unknown) => {
-        if (error instanceof OoxmlResourceLimitError || isOoxmlDecodedImageLimitError(error)) throw error;
+        if (error instanceof OoxmlResourceLimitError || isUnsupportedBlipEffectError(error) || isOoxmlDecodedImageLimitError(error)) throw error;
         return null;
       }));
   };
@@ -538,6 +555,10 @@ async function planSlideImages(
         bitmapOwner ?? loader,
       );
     } else if (element.type === 'chart') {
+      if (!Number.isFinite(element.width) || !Number.isFinite(element.height) || element.width < 0 || element.height < 0) {
+        throw new OoxmlError('unsupported-image-effect', 'Invalid chart image frame');
+      }
+      if (!(element.width > 0 && element.height > 0)) continue;
       const frame = {
         widthPt: element.width / PT_TO_EMU,
         heightPt: element.height / PT_TO_EMU,
@@ -589,7 +610,7 @@ async function planSlideImages(
               sourceHeightPx: inspection.dimensions.height,
             }
           : null).catch((error: unknown) => {
-            if (error instanceof OoxmlResourceLimitError || isOoxmlDecodedImageLimitError(error)) throw error;
+            if (error instanceof OoxmlResourceLimitError || isUnsupportedBlipEffectError(error) || isOoxmlDecodedImageLimitError(error)) throw error;
             return null;
           }));
       }
@@ -608,13 +629,14 @@ async function planSlideImages(
  * changing or predicting text-driven growth. If both are zero, preparation
  * uses a budget-checked native decode: text can still grow the painted row. */
 function* elementImageFillUsages(element: SlideElement): Generator<{
-  fill: ImageFill; width: number; height: number;
+  fill: ImageFill; width: number; height: number; host: BlipHostOrientation;
 }> {
   const usage = (fill: Fill | null | undefined, width: number, height: number) =>
     fill?.fillType === 'image' && shapeImageFillModeIsPaintable(fill)
-      ? { fill, width, height }
+      ? { fill, width, height, host: element }
       : null;
   if (element.type === 'shape') {
+    if (element.fill?.fillType === 'image' && (![element.width, element.height].every(Number.isFinite) || element.width < 0 || element.height < 0)) throw new OoxmlError('unsupported-image-effect', 'Invalid image fill frame');
     const own = usage(element.fill, element.width, element.height);
     if (own && element.height > 0) yield own;
   } else if (element.type === 'table') {
@@ -880,7 +902,7 @@ export async function prepareSlideMath(slide: Slide, math: MathRenderer): Promis
     } catch (error) {
       // Resource governance is fail-closed; only conversion failures select
       // an authored preview or the unavailable-equation diagnostic.
-      if (error instanceof OoxmlResourceLimitError || isOoxmlDecodedImageLimitError(error)) throw error;
+      if (error instanceof OoxmlResourceLimitError || isUnsupportedBlipEffectError(error) || isOoxmlDecodedImageLimitError(error)) throw error;
       failedMath.add(r.nodes);
     }
   }
@@ -2257,7 +2279,7 @@ async function prepareBackground(
           },
         };
       }
-      if (error instanceof OoxmlResourceLimitError || isOoxmlDecodedImageLimitError(error) || isTiffDecodeError(error)) {
+      if (error instanceof OoxmlResourceLimitError || isUnsupportedBlipEffectError(error) || isOoxmlDecodedImageLimitError(error) || isTiffDecodeError(error)) {
         return { paint: paintBase, failure: { error } };
       }
       // Decode failed — the white base remains as the fallback.
@@ -2345,7 +2367,7 @@ async function prepareBackground(
             });
             return;
           }
-          if (error instanceof OoxmlResourceLimitError || isOoxmlDecodedImageLimitError(error) || isTiffDecodeError(error)) throw error;
+          if (error instanceof OoxmlResourceLimitError || isUnsupportedBlipEffectError(error) || isOoxmlDecodedImageLimitError(error) || isTiffDecodeError(error)) throw error;
           // Paint failed — the white base painted above remains as the fallback.
         }
       },
@@ -2463,7 +2485,9 @@ function paintTiledBackground(
   const pixelToEmu = EMU_PER_PX_96 * 96 / dpi;
   const tileW = source.width * pixelToEmu * (tile.sx ?? 1) * scale;
   const tileH = source.height * pixelToEmu * (tile.sy ?? 1) * scale;
-  if (!(tileW > 0) || !(tileH > 0)) return false;
+  if (![tileW, tileH].every(v => Number.isFinite(v) && v > 0)) {
+    throw new OoxmlError('unsupported-image-effect', 'Unrepresentable picture tile size');
+  }
 
   const flipX = tile.flip === 'x' || tile.flip === 'xy';
   const flipY = tile.flip === 'y' || tile.flip === 'xy';
@@ -2476,7 +2500,9 @@ function paintTiledBackground(
   // createAuxCanvas rounds each requested axis up. Charge the actual allocation,
   // not the fractional geometry, so two individually-safe fractions cannot
   // cross the retained scratch-area limit after independent ceil operations.
-  if (!Number.isFinite(cellW) || !Number.isFinite(cellH)) return false;
+  if (!Number.isFinite(cellW) || !Number.isFinite(cellH)) {
+    throw new OoxmlError('unsupported-image-effect', 'Unrepresentable picture tile cell');
+  }
   // Preserve the previous rasterization for cells that fit: draw at the
   // authored size into the ceil-sized canvas and repeat those integer pixels.
   // Normalizing even fractional cells to their exact extent changes sampling
@@ -2502,9 +2528,9 @@ function paintTiledBackground(
   const rasterScaleX = oversized ? scratchW / cellW : 1;
   const rasterScaleY = oversized ? scratchH / cellH : 1;
   const aux = createAuxCanvas(scratchW, scratchH);
-  if (!aux) return false;
+  if (!aux) throw new OoxmlError('unsupported-image-effect', 'Picture tile surface unavailable');
   const actx = aux.getContext('2d') as CanvasRenderingContext2D | null;
-  if (!actx) return false;
+  if (!actx) throw new OoxmlError('unsupported-image-effect', 'Picture tile surface unavailable');
 
   actx.scale(rasterScaleX, rasterScaleY);
   const drawCell = (cx: number, cy: number, mx: boolean, my: boolean) => {
@@ -2521,7 +2547,7 @@ function paintTiledBackground(
   if (flipX && flipY) drawCell(tileW, tileH, true, true);
 
   const pattern = ctx.createPattern(aux as unknown as CanvasImageSource, 'repeat');
-  if (!pattern) return false;
+  if (!pattern) throw new OoxmlError('unsupported-image-effect', 'Picture tile surface unavailable');
 
   // Phase: register the grid against the alignment anchor, then add tx/ty.
   // PowerPoint registers an omitted algn at the top-left. CT_TileInfoProperties
@@ -2530,6 +2556,7 @@ function paintTiledBackground(
   const { ax, ay } = tileAnchorOffset(tile.algn ?? 'tl', canvasW, canvasH, tileW, tileH);
   const px = ax + emuToPx(tile.tx ?? 0, scale);
   const py = ay + emuToPx(tile.ty ?? 0, scale);
+  if (![px, py].every(Number.isFinite)) throw new OoxmlError('unsupported-image-effect', 'Unrepresentable picture tile phase');
   // `setTransform` exists where DOMMatrix is available (browser + skia-canvas).
   // The translate aligns a cell origin with (px, py); `repeat` covers the box.
   if (typeof pattern.setTransform === 'function' && typeof DOMMatrix !== 'undefined') {
@@ -2560,10 +2587,13 @@ interface PreparedShapeFill {
  * that share a PNG but differ in grayscl/biLevel/clrChange/lum/duotone need
  * distinct prepared images. `imagePlanKey` is the same path + ordered-effect
  * key the decode cache uses. */
-function shapeFillKey(fill: ImageFill): string {
+function shapeFillKey(fill: ImageFill, widthEmu: number, heightEmu: number, host: BlipHostOrientation = {}): string {
   return JSON.stringify([
     fill.svgImagePath ?? null,
-    imagePlanKey(fill.imagePath, pixelTransform(fill)),
+    imagePlanKey(fill.imagePath, pixelTransform(fill, host)),
+    // §20.1.8.15 rad uses physical coordinates. Prepared identity and paint
+    // lookup must retain the same authored frame as the effect decoder.
+    ...(fill.blipEffects?.length ? [widthEmu, heightEmu] : []),
   ]);
 }
 
@@ -2588,6 +2618,9 @@ export function paintPreparedShapeImageFill(
   evenOdd = false,
   shapeTransform: Readonly<{ rotation: number; flipH: boolean; flipV: boolean }> = { rotation: 0, flipH: false, flipV: false },
 ): boolean {
+  if (![bounds.x, bounds.y, bounds.w, bounds.h, scale].every(Number.isFinite) || bounds.w < 0 || bounds.h < 0) {
+    throw new OoxmlError('unsupported-image-effect', 'Invalid image fill geometry');
+  }
   if (!prepared || !(bounds.w > 0) || !(bounds.h > 0)) return false;
   if (!shapeImageFillModeIsPaintable(fill)) return false;
   const { x, y, w, h } = bounds;
@@ -2627,6 +2660,7 @@ export function paintPreparedShapeImageFill(
     const dy = y + (rect.t ?? 0) * h;
     const dw = (1 - (rect.l ?? 0) - (rect.r ?? 0)) * w;
     const dh = (1 - (rect.t ?? 0) - (rect.b ?? 0)) * h;
+    if (![dx, dy, dw, dh].every(Number.isFinite)) throw new OoxmlError('unsupported-image-effect', 'Unrepresentable image fill rectangle');
     if (!(dw > 0) || !(dh > 0)) return false;
     drawImageCropped(ctx, prepared.image, fill.srcRect, dx, dy, dw, dh);
     return true;
@@ -4103,7 +4137,7 @@ function renderShape(ctx: CanvasRenderingContext2D, el: ShapeElement, scale: num
     ? el.fill
     : null;
   const preparedImageFill = imageFill
-    ? rc.shapeFillImages?.get(shapeFillKey(imageFill))
+    ? rc.shapeFillImages?.get(shapeFillKey(imageFill, el.width, el.height, el))
     : undefined;
   const hasPreparedImageFill = Boolean(imageFill && preparedImageFill);
 
@@ -6877,7 +6911,7 @@ async function preparePicture(
     // `null` is reachable when the raster path resolves to an unsupported
     // metafile (a true EMF, or a WMF with no geometry); guarded below.
     let bitmap: ImageBitmap | HTMLImageElement | null;
-    if (preferVectorBlip(el)) {
+    if (!el.blipEffects?.length && preferVectorBlip(el)) {
       // No crop: prefer the vector original (shared gate; see preferVectorBlip).
       // With an a:srcRect crop we skip this branch — the crop math below
       // multiplies fractional srcRect edges by the source's pixel dims, and an
@@ -6891,7 +6925,7 @@ async function preparePicture(
       try {
         bitmap = await getCachedSvgImageByPath(el.svgImagePath, fetchImage, svgOptions);
       } catch (error) {
-        if (error instanceof OoxmlResourceLimitError || isOoxmlDecodedImageLimitError(error)) throw error;
+        if (error instanceof OoxmlResourceLimitError || isUnsupportedBlipEffectError(error) || isOoxmlDecodedImageLimitError(error)) throw error;
         // §20.1.8.23 duotone recolour applies only to the raster fallback — an
         // SVG vector original has no readable pixel grid (matches xlsx).
         bitmap = dataIsSvg
@@ -6903,13 +6937,15 @@ async function preparePicture(
               tiff,
             });
       }
-    } else if (dataIsSvg) {
+    } else if (dataIsSvg && !el.blipEffects?.length) {
       // SVG-only picture (here either because it has a crop, or — defensively —
       // because no svgImagePath was surfaced): decode through the SVG path since
       // createImageBitmap can't. A duotone on a vector picture is a rare edge
       // case left un-recoloured (no readable pixel grid), matching xlsx.
       bitmap = await getCachedSvgImageByPath(el.imagePath, fetchImage, svgOptions);
     } else {
+      // Ordered effects need pixels even for SVG-only sources. The shared
+      // decoder rasterizes SVG via the host bridge before applying the chain.
       // §20.1.8.23 duotone recolour on the raster blip (once, at decode time,
       // cached under a colour-suffixed key). No duotone ⇒ this is exactly the
       // former `getCachedBitmapByPath` decode.
@@ -6918,7 +6954,7 @@ async function preparePicture(
         el.mimeType,
         pixelTransform(el),
         fetchImage,
-        { widthPt, heightPt, ...(target ?? {}), tiff },
+        { widthPt, heightPt, ...(target ?? {}), tiff, svgDecoder },
       );
     }
     // Skip a picture whose blip is an unsupported metafile (null bitmap), the
@@ -6941,7 +6977,7 @@ function pictureFailure(el: PictureElement, scale: number, error: unknown): Prep
   if (isOptionalImageCodecUnavailableError(error, 'tiff')) {
     return { paint: (ctx) => paintUnavailablePicture(ctx, el, scale) };
   }
-  if (error instanceof OoxmlResourceLimitError || isOoxmlDecodedImageLimitError(error) || isTiffDecodeError(error)) {
+  if (error instanceof OoxmlResourceLimitError || isUnsupportedBlipEffectError(error) || isOoxmlDecodedImageLimitError(error) || isTiffDecodeError(error)) {
     return { ...NO_PAINT, failure: { error } };
   }
   return NO_PAINT;
@@ -7037,7 +7073,10 @@ function paintResolvedPicture(
       cw: number,
       ch: number,
     ): void => {
-      if (el.prstGeom || (el.custGeom && el.custGeom.length > 0)) {
+      // §20.1.8.15 grow=true extends the image's coverage; an explicit
+      // rectangular preset must not re-clip that authored blur outset.
+      const grownRectangle = el.prstGeom === 'rect' && !el.custGeom?.length && hasImageEffectOutset(bitmap);
+      if (!grownRectangle && (el.prstGeom || (el.custGeom && el.custGeom.length > 0))) {
         tracePictureSilhouette(target, cx, cy, cw, ch);
         target.clip();
       }
@@ -7404,7 +7443,7 @@ async function prepareMedia(
       if (isOptionalImageCodecUnavailableError(error, 'tiff')) {
         posterCodecUnavailable = true;
       } else {
-        if (error instanceof OoxmlResourceLimitError || isOoxmlDecodedImageLimitError(error) || isTiffDecodeError(error)) {
+        if (error instanceof OoxmlResourceLimitError || isUnsupportedBlipEffectError(error) || isOoxmlDecodedImageLimitError(error) || isTiffDecodeError(error)) {
           return { ...NO_PAINT, failure: { error } };
         }
         // fall through to plain fill
@@ -7824,11 +7863,11 @@ export function renderTable(
   // rasterizer difference is not a colour compensation rule for Canvas.
   // Image fills share shape decoding, effects, crop/tile placement and cache
   // ownership; ordinary fills keep the canvas-aware gradient/pattern resolver.
-  const paintTableFill = (fill: Fill | null, x: number, y: number, w: number, h: number) => {
+  const paintTableFill = (fill: Fill | null, x: number, y: number, w: number, h: number, authoredWidth: number, authoredHeight: number) => {
     if (fill?.fillType === 'image') {
       ctx.beginPath();
       ctx.rect(x, y, w, h);
-      paintPreparedShapeImageFill(ctx, fill, rc.shapeFillImages?.get(shapeFillKey(fill)),
+      paintPreparedShapeImageFill(ctx, fill, rc.shapeFillImages?.get(shapeFillKey(fill, authoredWidth, authoredHeight, el)),
         { x, y, w, h }, scale, false, el);
     } else {
       const paint = resolveShapeFill(fill, ctx, x, y, w, h, el.rotation, scale * PT_TO_EMU);
@@ -7838,11 +7877,21 @@ export function renderTable(
       }
     }
   };
-  paintTableFill(el.background ?? null, x0, y0, tableW, tableHeight);
+  // Use the authored frame for both preparation and lookup, including rows
+  // whose painted box grows with text. Prefix sums match merged-cell preload
+  // arithmetic and keep this pass linear in the table grid.
+  const authoredCols = [0], authoredRows = [0];
+  for (const width of el.cols) authoredCols.push(authoredCols[authoredCols.length - 1] + width);
+  for (const row of el.rows) authoredRows.push(authoredRows[authoredRows.length - 1] + row.height);
+  const authoredTableWidth = authoredCols[authoredCols.length - 1];
+  const authoredTableHeight = authoredRows[authoredRows.length - 1] || el.height;
+  paintTableFill(el.background ?? null, x0, y0, tableW, tableHeight, authoredTableWidth, authoredTableHeight);
 
   // Pass 1: fills + text bodies.
   for (const { cell, colX, rowY, cellW, cellH, ci, ri } of jobs) {
-    paintTableFill(cell.fill, colX, rowY, cellW, cellH);
+    const authoredWidth = (authoredCols[Math.min(ci + (cell.gridSpan || 1), el.cols.length)] ?? 0) - (authoredCols[ci] ?? 0);
+    const authoredHeight = (authoredRows[Math.min(ri + (cell.rowSpan || 1), el.rows.length)] - authoredRows[ri]) || el.height;
+    paintTableFill(cell.fill, colX, rowY, cellW, cellH, authoredWidth, authoredHeight);
     // Text body — default run colour comes from the table style's tcTxStyle
     // (e.g. white header text on an accent fill); a run's explicit colour wins.
     // ECMA-376 Part 1 DrawingML CT_TableCell permits txBody to be absent. Empty
@@ -8308,6 +8357,11 @@ async function renderSlideLeased(
   bitmapOwner?: PosterFetchImage,
   superseded: () => boolean = () => false,
 ): Promise<HTMLCanvasElement | OffscreenCanvas> {
+  // Explicit image capability: use the host bridge in workers and the same
+  // bounded HTML image/Canvas rasterizer on Window. The shared bitmap owner
+  // remains decoder-agnostic (including Node's injected bitmap factory).
+  const svgDecoder = opts.svgDecoder
+    ?? (typeof Image !== 'undefined' ? decodeSvgBlobOnMainThread : undefined);
   // Cancellation guard. renderSlide is async (it awaits image / equation decode),
   // so rapid navigation can start a newer render of the SAME canvas before this
   // one finishes. The caller stamps a per-canvas token; once a newer render
@@ -8469,7 +8523,7 @@ async function renderSlideLeased(
     scale,
     opts.fetchImage,
     opts.tiff,
-    opts.svgDecoder,
+    svgDecoder,
     imagePlan,
   ));
   if (superseded()) return canvas;
@@ -8490,7 +8544,7 @@ async function renderSlideLeased(
           opts.fetchImage,
           opts.tiff,
           effectiveDpr,
-          opts.svgDecoder,
+          svgDecoder,
           imagePlan,
         );
       }
@@ -8503,7 +8557,7 @@ async function renderSlideLeased(
           bitmapOwner,
           opts.tiff,
           effectiveDpr,
-          opts.svgDecoder,
+          svgDecoder,
           imagePlan,
         );
       }
@@ -8523,6 +8577,7 @@ async function renderSlideLeased(
     const fetchImage = opts.fetchImage;
     const shapeFills = new Map<string, {
       fill: ImageFill;
+      host: BlipHostOrientation;
       widthPt: number;
       heightPt: number;
       targetWidthPx?: number;
@@ -8530,9 +8585,9 @@ async function renderSlideLeased(
       preserveNaturalSize: boolean;
       hasSourceCrop: boolean;
     }>();
-    for (const { fill, width, height } of slideImageFillUsages(slide)) {
+    for (const { fill, width, height, host } of slideImageFillUsages(slide)) {
       if (!(width > 0) || !(height >= 0)) continue;
-      const key = shapeFillKey(fill);
+      const key = shapeFillKey(fill, width, height, host);
       const prior = shapeFills.get(key);
       const widthPt = width / PT_TO_EMU;
       const heightPt = height / PT_TO_EMU;
@@ -8545,7 +8600,7 @@ async function renderSlideLeased(
       );
       shapeFills.set(key, prior
         ? {
-            fill: prior.fill,
+            fill: prior.fill, host: prior.host,
             widthPt: Math.max(prior.widthPt, widthPt),
             heightPt: Math.max(prior.heightPt, heightPt),
             targetWidthPx: Math.max(prior.targetWidthPx ?? 0, target?.targetWidthPx ?? 0) || undefined,
@@ -8554,7 +8609,7 @@ async function renderSlideLeased(
             hasSourceCrop: prior.hasSourceCrop || fill.srcRect != null,
           }
         : {
-            fill, widthPt, heightPt,
+            fill, host, widthPt, heightPt,
             targetWidthPx: target?.targetWidthPx,
             targetHeightPx: target?.targetHeightPx,
             preserveNaturalSize: fill.tile != null,
@@ -8706,7 +8761,7 @@ async function renderSlideLeased(
           const image = mimeType === 'image/svg+xml'
             ? await getCachedSvgImageByPath(path, fetchImage, {
                 ...target,
-                workerDecoder: opts.svgDecoder,
+                workerDecoder: svgDecoder,
               })
             : await getCachedBitmapByPath(path, mimeType, fetchImage, {
                 tiff: opts.tiff,
@@ -8718,7 +8773,7 @@ async function renderSlideLeased(
             pictureBulletImages.set(path, null);
             return;
           }
-          if (error instanceof OoxmlResourceLimitError || isOoxmlDecodedImageLimitError(error) || isTiffDecodeError(error)) throw error;
+          if (error instanceof OoxmlResourceLimitError || isUnsupportedBlipEffectError(error) || isOoxmlDecodedImageLimitError(error) || isTiffDecodeError(error)) throw error;
           pictureBulletImages.set(path, null);
         }
       });
@@ -8738,7 +8793,7 @@ async function renderSlideLeased(
           const decodeFallback = () => fill.mimeType === 'image/svg+xml'
             ? pixelTransform(fill) ? Promise.resolve(null) : getCachedSvgImageByPath(fill.imagePath, fetchImage, {
                 ...(target ?? {}),
-                workerDecoder: opts.svgDecoder,
+                workerDecoder: svgDecoder,
               })
             : getCachedDuotoneBitmapByPath(
                 fill.imagePath, fill.mimeType, pixelTransform(fill), fetchImage,
@@ -8759,10 +8814,10 @@ async function renderSlideLeased(
             try {
               bitmap = await getCachedSvgImageByPath(blip.svgImagePath, fetchImage, {
                 ...(target ?? {}),
-                workerDecoder: opts.svgDecoder,
+                workerDecoder: svgDecoder,
               });
             } catch (error) {
-              if (error instanceof OoxmlResourceLimitError || isOoxmlDecodedImageLimitError(error)) throw error;
+              if (error instanceof OoxmlResourceLimitError || isUnsupportedBlipEffectError(error) || isOoxmlDecodedImageLimitError(error)) throw error;
               bitmap = await decodeFallback();
             }
           } else {
@@ -8774,23 +8829,23 @@ async function renderSlideLeased(
             chartMarkerImages.set(key, null);
             return;
           }
-          if (error instanceof OoxmlResourceLimitError || isOoxmlDecodedImageLimitError(error) || isTiffDecodeError(error)) throw error;
+          if (error instanceof OoxmlResourceLimitError || isUnsupportedBlipEffectError(error) || isOoxmlDecodedImageLimitError(error) || isTiffDecodeError(error)) throw error;
           chartMarkerImages.set(key, null);
         }
       });
       const shapePromises: Promise<void>[] = [...shapeFills].map(async (
         [key, {
-          fill, widthPt, heightPt, targetWidthPx, targetHeightPx,
+          fill, host, widthPt, heightPt, targetWidthPx, targetHeightPx,
           preserveNaturalSize, hasSourceCrop,
         }],
       ) => {
-        const vector = !pixelTransform(fill)
-          && (fill.mimeType === 'image/svg+xml' || preferVectorBlip({
+        const vector = fill.mimeType === 'image/svg+xml' || (!pixelTransform(fill, host)
+          && preferVectorBlip({
             svgImagePath: fill.svgImagePath,
             srcRect: hasSourceCrop ? true : null,
           }));
-        const planned = !preserveNaturalSize && !pixelTransform(fill)
-          ? plannedRasterOptions(imagePlan, imagePlanKey(fill.imagePath, pixelTransform(fill)))
+        const planned = !preserveNaturalSize && !pixelTransform(fill, host)
+          ? plannedRasterOptions(imagePlan, imagePlanKey(fill.imagePath, pixelTransform(fill, host)))
           : undefined;
         const rawTarget = !preserveNaturalSize && targetWidthPx && targetHeightPx
           ? { targetWidthPx, targetHeightPx }
@@ -8801,34 +8856,34 @@ async function renderSlideLeased(
             ? (await inspectCachedRasterSource(fill.imagePath, fill.mimeType, fetchImage))
                 .dimensions ?? undefined
             : undefined;
-          const fallback = () => fill.mimeType === 'image/svg+xml'
-            ? pixelTransform(fill)
+          const fallback = () => fill.mimeType === 'image/svg+xml' && !fill.blipEffects?.length
+            ? pixelTransform(fill, host)
               ? Promise.resolve(null)
               : getCachedSvgImageByPath(fill.imagePath, fetchImage, {
-                  ...(target ?? {}), workerDecoder: opts.svgDecoder,
+                  ...(target ?? {}), workerDecoder: svgDecoder,
                 })
             : getCachedDuotoneBitmapByPath(
-                fill.imagePath, fill.mimeType, pixelTransform(fill), fetchImage,
+                fill.imagePath, fill.mimeType, pixelTransform(fill, host), fetchImage,
                 {
                   widthPt,
                   heightPt,
                   ...(target ?? {}),
                   failClosedOnDuotoneFailure: true,
                   tiff: opts.tiff,
-                  svgDecoder: opts.svgDecoder,
+                  svgDecoder: svgDecoder,
                 },
               );
           let image: SvgImageSource | null;
-          if (!pixelTransform(fill) && preferVectorBlip({
+          if (!pixelTransform(fill, host) && preferVectorBlip({
             svgImagePath: fill.svgImagePath,
             srcRect: hasSourceCrop ? true : null,
           })) {
             try {
               image = await getCachedSvgImageByPath(fill.svgImagePath as string, fetchImage, {
-                ...(target ?? {}), workerDecoder: opts.svgDecoder,
+                ...(target ?? {}), workerDecoder: svgDecoder,
               });
             } catch (error) {
-              if (error instanceof OoxmlResourceLimitError || isOoxmlDecodedImageLimitError(error)) throw error;
+              if (error instanceof OoxmlResourceLimitError || isUnsupportedBlipEffectError(error) || isOoxmlDecodedImageLimitError(error)) throw error;
               image = await fallback();
             }
           } else {
@@ -8840,7 +8895,7 @@ async function renderSlideLeased(
             shapeFillImages.set(key, null);
             return;
           }
-          if (error instanceof OoxmlResourceLimitError || isOoxmlDecodedImageLimitError(error) || isTiffDecodeError(error)) throw error;
+          if (error instanceof OoxmlResourceLimitError || isUnsupportedBlipEffectError(error) || isOoxmlDecodedImageLimitError(error) || isTiffDecodeError(error)) throw error;
           shapeFillImages.set(key, null);
         }
       });

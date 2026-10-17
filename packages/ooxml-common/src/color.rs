@@ -101,6 +101,12 @@ pub fn apply_tint_channels(rgb: (f64, f64, f64), val: f64, tint_mode: TintMode) 
     }
 }
 
+// ECMA-376 EG_ColorChoice carries hexadecimal RGB; resolved transforms may
+// append an alpha byte. Validate bytes before slicing UTF-8 at channel offsets.
+fn is_rgb_hex(hex: &str) -> bool {
+    matches!(hex.len(), 6 | 8) && hex.as_bytes().iter().all(u8::is_ascii_hexdigit)
+}
+
 /// Apply a generated signed DrawingML shade/tint to a hex colour.
 ///
 /// `amount < 0` shades toward black by `-amount`; `amount > 0` tints toward
@@ -110,7 +116,7 @@ pub fn apply_tint_channels(rgb: (f64, f64, f64), val: f64, tint_mode: TintMode) 
 /// RGB and eight-character RGBA input are both preserved; malformed input is
 /// returned unchanged.
 pub fn apply_signed_tint_or_shade(hex: &str, amount: f64, tint_mode: TintMode) -> String {
-    if hex.len() < 6 || !amount.is_finite() {
+    if !is_rgb_hex(hex) || !amount.is_finite() {
         return hex.to_owned();
     }
     let (Ok(r), Ok(g), Ok(b)) = (
@@ -153,7 +159,9 @@ pub fn apply_signed_tint_or_shade(hex: &str, amount: f64, tint_mode: TintMode) -
 /// declared as direct children of `node`. Returns 6-char hex when fully
 /// opaque, or 8-char hex (RRGGBBAA) when alpha < 1.
 pub fn apply_color_transforms(hex: &str, node: Node, tint_mode: TintMode) -> String {
-    if hex.len() < 6 {
+    // The system-color resolver also uses legacy ASCII enum fallbacks.
+    // Preserve that policy, but never slice a non-ASCII string into channels.
+    if hex.len() < 6 || !hex.is_ascii() {
         return hex.to_owned();
     }
     let r = u8::from_str_radix(hex.get(0..2).unwrap_or(""), 16).unwrap_or(0);
@@ -170,10 +178,12 @@ pub fn apply_color_transforms(hex: &str, node: Node, tint_mode: TintMode) -> Str
     };
 
     let attr_pct = |t: &Node, name: &str, default: f64| -> f64 {
+        // ST_Percentage accepts both Transitional integers and Strict
+        // percentage lexemes (ECMA-376 §20.1.10.40). All color transforms,
+        // including fill/duotone alpha, share the same unit conversion.
         t.attribute(name)
-            .and_then(|v| v.parse::<f64>().ok())
-            .unwrap_or(default)
-            / 100_000.0
+            .and_then(crate::units::drawingml_percentage_to_fraction)
+            .unwrap_or(default / 100_000.0)
     };
 
     for t in node.children().filter(|n| n.is_element()) {
@@ -627,7 +637,9 @@ pub fn resolve_color_source<R: ThemeResolver + ?Sized>(
     tint_mode: TintMode,
 ) -> Option<String> {
     match source {
-        ColorSource::SrgbClr { val, node } => Some(apply_color_transforms(&val, node, tint_mode)),
+        ColorSource::SrgbClr { val, node } => {
+            is_rgb_hex(&val).then(|| apply_color_transforms(&val, node, tint_mode))
+        }
         ColorSource::ScrgbClr { r, g, b, node } => {
             // Linear-light r/g/b (0..1) → sRGB display hex, then transforms.
             let base = format!(
@@ -665,7 +677,14 @@ pub fn resolve_color_source<R: ThemeResolver + ?Sized>(
         } => {
             // Prefer the cached lastClr; fall back to the enum name only when
             // lastClr is absent (docx's historical behavior — see ColorSource).
-            let hex = last_clr.or(val)?;
+            let hex = match last_clr {
+                Some(hex) if is_rgb_hex(&hex) => hex,
+                Some(_) => return None,
+                None => val?,
+            };
+            if !hex.is_ascii() {
+                return None;
+            }
             Some(apply_color_transforms(&hex, node, tint_mode))
         }
         ColorSource::PrstClr { val, node } => {
@@ -675,7 +694,7 @@ pub fn resolve_color_source<R: ThemeResolver + ?Sized>(
         }
         ColorSource::SchemeClr { val, node } => {
             let base = resolver.resolve_scheme_color(&val)?;
-            Some(apply_color_transforms(&base, node, tint_mode))
+            is_rgb_hex(&base).then(|| apply_color_transforms(&base, node, tint_mode))
         }
     }
 }
@@ -813,6 +832,22 @@ mod tests {
     }
 
     const NS: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
+
+    #[test]
+    fn malformed_hex_cannot_panic_at_a_utf8_byte_boundary() {
+        for value in ["A😀B", "ABC😀D", "nothex", "12345", "123456789"] {
+            let xml =
+                format!(r#"<a:solidFill xmlns:a="{NS}"><a:srgbClr val="{value}"/></a:solidFill>"#);
+            let doc = roxmltree::Document::parse(&xml).unwrap();
+            assert!(
+                parse_color_node(doc.root_element(), &MapResolver, TintMode::WordLiteral).is_none()
+            );
+            assert_eq!(
+                apply_signed_tint_or_shade(value, 0.5, TintMode::WordLiteral),
+                value
+            );
+        }
+    }
 
     /// srgbClr resolves to its (uppercased) hex, no `#`, under either TintMode.
     #[test]
@@ -1064,6 +1099,22 @@ mod tests {
         assert_eq!(
             apply_signed_tint_or_shade("156082", 0.35, TintMode::PowerPointLinear),
             "A1AFBB"
+        );
+    }
+
+    #[test]
+    fn strict_percentage_color_transforms_match_transitional_values() {
+        let parse = |modifiers: &str| {
+            let xml = format!(
+                r#"<a:solidFill xmlns:a="{NS}"><a:srgbClr val="FF0000">{modifiers}</a:srgbClr></a:solidFill>"#
+            );
+            let doc = roxmltree::Document::parse(&xml).unwrap();
+            parse_color_node(doc.root_element(), &MapResolver, TintMode::WordLiteral)
+        };
+        assert_eq!(parse(r#"<a:alpha val="50%"/>"#), Some("FF000080".into()));
+        assert_eq!(
+            parse(r#"<a:satMod val="50%"/><a:lumMod val="75%"/><a:tint val="80%"/>"#),
+            parse(r#"<a:satMod val="50000"/><a:lumMod val="75000"/><a:tint val="80000"/>"#)
         );
     }
 

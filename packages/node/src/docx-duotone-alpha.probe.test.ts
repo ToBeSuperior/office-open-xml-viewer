@@ -72,17 +72,20 @@ function storedZip(files: Record<string, string | Uint8Array>): Uint8Array {
 /** A `<w:drawing>` inline picture, optionally carrying a duotone and/or an
  *  alphaModFix on its blip. cx/cy in EMU (12700 EMU/pt). */
 interface PictureOptions {
+  effects?: string;
+  sizesPt?: number[];
+  sizePt?: number;
   duotone?: boolean;
   alpha?: string;
   bright?: string;
   contrast?: string;
   inHeader?: boolean;
-  effects?: string;
   grouped?: boolean;
+  rotation?: number;
 }
 
 function inlinePicXml(opts: PictureOptions): string {
-  const cx = 200 * 12700; // 200pt square
+  const cx = (opts.sizePt ?? 200) * 12700; // 200pt square
   const effects = opts.effects ?? (
     (opts.duotone
       ? '<a:duotone><a:srgbClr val="000000"/><a:srgbClr val="DAB6BA"/></a:duotone>'
@@ -98,7 +101,7 @@ function inlinePicXml(opts: PictureOptions): string {
     `<a:blip r:embed="rIdImg">${effects}</a:blip>` +
     '<a:stretch><a:fillRect/></a:stretch>' +
     '</pic:blipFill>' +
-    '<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="' + cx + '" cy="' + cx + '"/></a:xfrm>' +
+    '<pic:spPr><a:xfrm rot="' + (opts.rotation ?? 0) * 60000 + '"><a:off x="0" y="0"/><a:ext cx="' + cx + '" cy="' + cx + '"/></a:xfrm>' +
     '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic>' +
     (opts.grouped ? '</wpg:wgp>' : '') +
     '</a:graphicData></a:graphic></wp:inline>' +
@@ -131,7 +134,7 @@ function buildDocx(pngBytes: Uint8Array, opts: PictureOptions): Uint8Array {
     : imageRels;
   const document =
     `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document ${NS}><w:body>` +
-    (opts.inHeader ? '<w:p/>' : inlinePicXml(opts)) +
+    (opts.inHeader ? '<w:p/>' : (opts.sizesPt ?? [opts.sizePt ?? 200]).map(sizePt => inlinePicXml({ ...opts, sizePt })).join('')) +
     '<w:sectPr>' +
     (opts.inHeader ? '<w:headerReference w:type="default" r:id="rIdHeader"/>' : '') +
     '<w:pgSz w:w="12240" w:h="15840"/>' +
@@ -204,6 +207,21 @@ function sampleInside(r: Rendered): [number, number, number] {
 }
 
 describe.skipIf(!skia || !docxMod || !rendererMod)('docx duotone + alphaModFix picture render', () => {
+  it('preserves host orientation through DOCX body and header resource acquisition', async () => {
+    const png = await flatPngBytes(16, 16, '#FF0000');
+    const paint = async (rotWithShape: boolean, inHeader: boolean) => {
+      const effects = `<a:alphaMod><a:cont type="tree"><a:outerShdw dist="1270000" dir="0" rotWithShape="${rotWithShape}"><a:srgbClr val="000000"/></a:outerShdw></a:cont></a:alphaMod>`;
+      const bytes = buildDocx(png, { effects, rotation: 90, inHeader });
+      const result = await render(bytes, png);
+      // Inside the east-shifted mask, outside the south-shifted mask.
+      const i = ((48 + 40) * result.w + 48 + 160) * 4;
+      return [...result.data.slice(i, i + 3)];
+    };
+    for (const inHeader of [false, true]) {
+      expect(await paint(true, inHeader), `rotating shadow, header=${inHeader}`).toEqual([255, 255, 255]);
+      expect(await paint(false, inHeader), `page-fixed shadow, header=${inHeader}`).toEqual([255, 0, 0]);
+    }
+  });
   it('renders authored brightness and contrast through DOCX parsing and paint (§20.1.8.42)', async () => {
     const black = await flatPngBytes(16, 16, '#000000');
     expect(sampleInside(await render(buildDocx(black, {}), black))).toEqual([0, 0, 0]);
@@ -244,6 +262,40 @@ describe.skipIf(!skia || !docxMod || !rendererMod)('docx duotone + alphaModFix p
     expect(sampleInside(await render(buildDocx(png, { effects }), png))).toEqual([255, 0, 0]);
   });
 
+  it('preserves alpha-sensitive replacement and independent palettes through body and header paint', async () => {
+    const black = await flatPngBytes(16, 16, '#000000');
+    const chains = [
+      { effects: '<a:alphaModFix amt="50000"/><a:clrChange useA="1">'
+        + '<a:clrFrom><a:srgbClr val="000000"><a:alpha val="50000"/></a:srgbClr></a:clrFrom>'
+        + '<a:clrTo><a:srgbClr val="FF0000"/></a:clrTo></a:clrChange>', expected: [255, 0, 0] },
+      { effects: '<a:lum bright="90000"/>'
+        + '<a:duotone><a:srgbClr val="000000"/><a:srgbClr val="FF0000"/></a:duotone>'
+        + '<a:duotone><a:srgbClr val="000000"/><a:srgbClr val="00FF00"/></a:duotone>', expected: [0, 69, 0] },
+      { effects: '<a:lum bright="90000"/><a:clrRepl><a:srgbClr val="FF0000"/></a:clrRepl>', expected: [255, 0, 0] },
+    ];
+    for (const chain of chains) {
+      for (const inHeader of [false, true]) {
+        const actual = sampleInside(await render(buildDocx(black, { effects: chain.effects, inHeader }), black));
+        actual.forEach((value, index) => expect(Math.abs(value - chain.expected[index])).toBeLessThanOrEqual(1));
+      }
+    }
+  });
+
+  it('renders recursive alpha, blur, HSL, tint and fill overlay in body and header pictures', async () => {
+    const black = await flatPngBytes(16, 16, '#000000');
+    const effects = '<a:clrRepl><a:srgbClr val="FF0000"/></a:clrRepl>'
+      + '<a:hsl hue="7200000"/><a:tint hue="14400000" amt="50000"/>'
+      + '<a:fillOverlay blend="over"><a:solidFill><a:srgbClr val="FF0000"><a:alpha val="50000"/></a:srgbClr></a:solidFill></a:fillOverlay>'
+      + '<a:alphaMod><a:cont type="tree"><a:alphaRepl a="50%"/></a:cont></a:alphaMod>'
+      + '<a:blur rad="12700" grow="false"/>';
+    // Green hue rotation -> cyan tint -> half-red overlay -> half alpha over
+    // white: independently computed byte result (191,159,159).
+    for (const inHeader of [false, true]) {
+      const actual = sampleInside(await render(buildDocx(black, { effects, inHeader }), black));
+      actual.forEach((value, index) => expect(Math.abs(value - [191, 159, 159][index])).toBeLessThanOrEqual(1));
+    }
+  });
+
   it('duotone remaps a mid-grey picture along the clr1→clr2 ramp (§20.1.8.23)', async () => {
     const png = await flatPngBytes(16, 16, '#808080');
     const t = lum(128, 128, 128);
@@ -279,4 +331,17 @@ describe.skipIf(!skia || !docxMod || !rendererMod)('docx duotone + alphaModFix p
     expect(Math.abs(semi[0] - expectedComposite)).toBeLessThan(14);
     expect(semi[0]).toBeGreaterThan(opaque[0] + 30);
   });
+});
+
+
+it.skipIf(!skia || !docxMod || !rendererMod)('keeps the DOCX 8pt picture unchanged beside an 80pt copy sharing its PNG and 1pt blur', async () => {
+  const png = await flatPngBytes(16, 16, '#ff0000');
+  const effects = '<a:blur rad="12700" grow="false"/>';
+  const alone = await render(buildDocx(png, { effects, sizesPt: [8] }), png);
+  const copies = await render(buildDocx(png, { effects, sizesPt: [8, 80] }), png);
+  // The first paragraph and its full 8pt image occupy the same page region.
+  const region = (r: Rendered) => Array.from({ length: 8 }, (_, y) =>
+    [...r.data.slice(((36 + y) * r.w + 36) * 4, ((36 + y) * r.w + 44) * 4)]).flat();
+  expect(region(copies)).toEqual(region(alone));
+  expect(region(alone).some((v, i) => i % 4 === 1 && v > 0 && v < 255)).toBe(true);
 });

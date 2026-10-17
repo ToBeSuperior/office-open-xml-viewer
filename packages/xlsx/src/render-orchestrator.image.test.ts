@@ -566,7 +566,7 @@ describe('render-orchestrator image decode (lazy bytes)', () => {
     },
   );
 
-  it('excludes a chart whose finite frame overflows one usage before no-viewport aggregate gating', async () => {
+  it('propagates an overflowing chart usage before no-viewport aggregate decoding', async () => {
     const png = new Uint8Array(24);
     png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
     png.set([0x49, 0x48, 0x44, 0x52], 12);
@@ -581,7 +581,7 @@ describe('render-orchestrator image decode (lazy bytes)', () => {
       imagePath: 'xl/media/visible-overflow-gate.png',
       mimeType: 'image/png',
     };
-    const sourceCount = 257;
+    const sourceCount = 256;
     const overflowChart = {
       chartType: 'line',
       categories: Array.from({ length: sourceCount }, (_, index) => String(index)),
@@ -626,17 +626,11 @@ describe('render-orchestrator image decode (lazy bytes)', () => {
       new Blob([png as BlobPart], { type: mime }));
     const cache = new Map<string, CanvasImageSource | null>();
 
-    await prefetchImages(ws, cache, fetchImage, { effectiveDpr: 1 });
-
-    expect(fetchImage).toHaveBeenCalledOnce();
-    expect(fetchImage).toHaveBeenCalledWith('xl/media/visible-overflow-gate.png', 'image/png');
-    expect(decode).toHaveBeenCalledOnce();
-    expect(decode.mock.calls[0]?.[1]).toMatchObject({
-      resizeWidth: 4_096,
-      resizeQuality: 'high',
-    });
-    expect(cache.size).toBe(1);
-    expect(cache.has(chartImageFillKey(visibleFill))).toBe(true);
+    await expect(prefetchImages(ws, cache, fetchImage, { effectiveDpr: 1 }))
+      .rejects.toMatchObject({ code: 'unsupported-image-effect' });
+    expect(fetchImage).not.toHaveBeenCalled();
+    expect(decode).not.toHaveBeenCalled();
+    expect(cache.size).toBe(0);
   });
 
   it.each([false, true])(

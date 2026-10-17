@@ -1,3 +1,4 @@
+import { applyBlipPixelEffects } from '../image/blip-effects.js';
 import { describe, expect, it } from 'vitest';
 import {
   HARD_MAX_CHARTEX_ALLOCATION_BYTES,
@@ -38,6 +39,11 @@ describe('worker error wire', () => {
     'OOXML_RESOURCE_LIMIT:{"code":"ooxml-resource-limit","details":{"stage":"decompression","violation":{"format":"xlsx","operation":"parse","resource":"archive-entry","part":"xl/worksheets/sheet1.xml","metric":"actual-inflated-bytes","limit":5,"observed":6,"configurable":true,"usage":{"archiveEntryCount":1,"declaredInflatedBytes":6,"largestInflatedEntryBytes":6,"distinctInflatedBytes":6,"operationInflatedBytes":6}}}}';
 
   it.each([
+    {
+      stage: 'parsing', resource: 'image-effect', metric: 'work',
+      part: undefined, limit: 134217728, observed: 134217729,
+      message: 'OOXML resource limit exceeded (image-effect, parsing): work 134217729 > 134217728',
+    },
     {
       stage: 'serialization', resource: 'docx-retained-model-json', metric: 'bytes',
       part: 'word/document.xml', limit: 134217728, observed: 134217729,
@@ -739,4 +745,23 @@ it('keeps measured resource errors distinct when a source owner bundles another 
   const restored = deserializeWorkerError(structuredClone(serializeWorkerError(new SourceBundleQuota('quota'))));
   expect(restored).toBeInstanceOf(OoxmlResourceLimitError);
   expect((restored as OoxmlResourceLimitError).details).toEqual(original.details);
+});
+
+it('round-trips typed CT_Blip diagnostics from render worker to viewer', () => {
+  const error = new OoxmlError('unsupported-image-effect', 'Malformed CT_Blip effect data');
+  const restored = deserializeWorkerError(serializeWorkerError(error));
+  expect(restored).toBeInstanceOf(OoxmlError);
+  expect(restored).toMatchObject({ code: 'unsupported-image-effect', message: error.message });
+});
+
+it('transports an actual recursive image-effect budget failure with its typed quota', () => {
+  const effects = { effects: [{ type: 'alphaMod' as const, container: { kind: 'tree' as const,
+    effects: [{ type: 'blur' as const, radius: 1e15, grow: true }],
+  } }] };
+  let failure: unknown;
+  try { applyBlipPixelEffects({ width: 1, height: 1, data: new Uint8ClampedArray([1, 2, 3, 255]) }, effects); }
+  catch (error) { failure = error; }
+  const received = deserializeWorkerError(serializeWorkerError(failure));
+  expect(received).toBeInstanceOf(OoxmlDecodedImageLimitError);
+  expect(received).toMatchObject({ code: 'ooxml-decoded-image-limit', metric: 'image-effect-work' });
 });
