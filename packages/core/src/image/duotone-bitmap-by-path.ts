@@ -3,8 +3,8 @@ import { ImageEffectWorkLedger } from './image-effect-work.js';
 import { preferVectorBlip } from './blip-gate.js';
 import { acquireCurrentBitmapCacheLease } from './bitmap-image-by-path.js';
 import { MAX_IMAGE_EFFECT_PIXEL_WORK, OoxmlDecodedImageLimitError } from './pixel-budget.js';
-// Ordered DrawingML blip effects for hosts that retain complete CT_Blip
-// chains. XLSX's duotone-only adapter imports the algorithm-free owner directly.
+// Ordered DrawingML blip effects for complete CT_Blip chains (DOCX, PPTX and
+// XLSX); a lone legacy duotone keeps the algorithm-free duotone-only owner.
 import { getCachedPixelTransformBitmapByPath } from './pixel-transform-bitmap-by-path.js';
 import { getCachedDuotoneOnlyBitmapByPath, duotoneOnlyCacheKey } from './duotone-only-bitmap-by-path.js';
 import { applyImageDataTransform, type Duotone } from './duotone.js';

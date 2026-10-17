@@ -101,12 +101,6 @@ pub fn apply_tint_channels(rgb: (f64, f64, f64), val: f64, tint_mode: TintMode) 
     }
 }
 
-// ECMA-376 EG_ColorChoice carries hexadecimal RGB; resolved transforms may
-// append an alpha byte. Validate bytes before slicing UTF-8 at channel offsets.
-fn is_rgb_hex(hex: &str) -> bool {
-    matches!(hex.len(), 6 | 8) && hex.as_bytes().iter().all(u8::is_ascii_hexdigit)
-}
-
 /// Apply a generated signed DrawingML shade/tint to a hex colour.
 ///
 /// `amount < 0` shades toward black by `-amount`; `amount > 0` tints toward
@@ -116,7 +110,7 @@ fn is_rgb_hex(hex: &str) -> bool {
 /// RGB and eight-character RGBA input are both preserved; malformed input is
 /// returned unchanged.
 pub fn apply_signed_tint_or_shade(hex: &str, amount: f64, tint_mode: TintMode) -> String {
-    if !is_rgb_hex(hex) || !amount.is_finite() {
+    if hex.len() < 6 || !amount.is_finite() {
         return hex.to_owned();
     }
     let (Ok(r), Ok(g), Ok(b)) = (
@@ -159,9 +153,7 @@ pub fn apply_signed_tint_or_shade(hex: &str, amount: f64, tint_mode: TintMode) -
 /// declared as direct children of `node`. Returns 6-char hex when fully
 /// opaque, or 8-char hex (RRGGBBAA) when alpha < 1.
 pub fn apply_color_transforms(hex: &str, node: Node, tint_mode: TintMode) -> String {
-    // The system-color resolver also uses legacy ASCII enum fallbacks.
-    // Preserve that policy, but never slice a non-ASCII string into channels.
-    if hex.len() < 6 || !hex.is_ascii() {
+    if hex.len() < 6 {
         return hex.to_owned();
     }
     let r = u8::from_str_radix(hex.get(0..2).unwrap_or(""), 16).unwrap_or(0);
@@ -637,9 +629,7 @@ pub fn resolve_color_source<R: ThemeResolver + ?Sized>(
     tint_mode: TintMode,
 ) -> Option<String> {
     match source {
-        ColorSource::SrgbClr { val, node } => {
-            is_rgb_hex(&val).then(|| apply_color_transforms(&val, node, tint_mode))
-        }
+        ColorSource::SrgbClr { val, node } => Some(apply_color_transforms(&val, node, tint_mode)),
         ColorSource::ScrgbClr { r, g, b, node } => {
             // Linear-light r/g/b (0..1) → sRGB display hex, then transforms.
             let base = format!(
@@ -677,14 +667,7 @@ pub fn resolve_color_source<R: ThemeResolver + ?Sized>(
         } => {
             // Prefer the cached lastClr; fall back to the enum name only when
             // lastClr is absent (docx's historical behavior — see ColorSource).
-            let hex = match last_clr {
-                Some(hex) if is_rgb_hex(&hex) => hex,
-                Some(_) => return None,
-                None => val?,
-            };
-            if !hex.is_ascii() {
-                return None;
-            }
+            let hex = last_clr.or(val)?;
             Some(apply_color_transforms(&hex, node, tint_mode))
         }
         ColorSource::PrstClr { val, node } => {
@@ -694,7 +677,7 @@ pub fn resolve_color_source<R: ThemeResolver + ?Sized>(
         }
         ColorSource::SchemeClr { val, node } => {
             let base = resolver.resolve_scheme_color(&val)?;
-            is_rgb_hex(&base).then(|| apply_color_transforms(&base, node, tint_mode))
+            Some(apply_color_transforms(&base, node, tint_mode))
         }
     }
 }
@@ -832,22 +815,6 @@ mod tests {
     }
 
     const NS: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
-
-    #[test]
-    fn malformed_hex_cannot_panic_at_a_utf8_byte_boundary() {
-        for value in ["A😀B", "ABC😀D", "nothex", "12345", "123456789"] {
-            let xml =
-                format!(r#"<a:solidFill xmlns:a="{NS}"><a:srgbClr val="{value}"/></a:solidFill>"#);
-            let doc = roxmltree::Document::parse(&xml).unwrap();
-            assert!(
-                parse_color_node(doc.root_element(), &MapResolver, TintMode::WordLiteral).is_none()
-            );
-            assert_eq!(
-                apply_signed_tint_or_shade(value, 0.5, TintMode::WordLiteral),
-                value
-            );
-        }
-    }
 
     /// srgbClr resolves to its (uppercased) hex, no `#`, under either TintMode.
     #[test]

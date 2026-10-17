@@ -1,6 +1,7 @@
-// The duotone-only path used by XLSX must not import the DOCX/PPTX ordered
-// effect interpreter. Both adapters inject their algorithm into the same
-// document-owned cache/decode primitive; no second cache or error policy.
+// The lone-duotone path keeps the established duotone cache key and does not
+// need the ordered effect interpreter. Both adapters inject their algorithm
+// into the same document-owned cache/decode primitive; no second cache or
+// error policy.
 import { getCachedPixelTransformBitmapByPath } from './pixel-transform-bitmap-by-path.js';
 import { applyDuotone, type Duotone } from './duotone.js';
 
