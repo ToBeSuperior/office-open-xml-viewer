@@ -93,6 +93,7 @@ VS Code extensions.
 
 **Settings:**
 - `ooxmlViewer.mcpServer.enabled`: `auto` (default — prompt only when the workspace contains OOXML files), `always`, or `never`.
+- `ooxmlViewer.mcpServer.restrictToWorkspaceFolders`: `true` (default) lets the MCP file tools read only files inside the local workspace folders; symlinks are resolved before the check, and other paths — including a preview opened from outside the workspace — are rejected with `path_outside_allowed_roots`. A window without a local folder is not restricted. Set it to `false` to let the agent read any local file.
 - `ooxmlViewer.mcpServer.binaryPath`: optional override pointing at a pre-installed binary.
 
 **Commands (Command Palette):**
