@@ -221,6 +221,9 @@ self.onmessage = async (e: MessageEvent<RenderWorkerWireRequest | WorkerSvgDecod
       requestedGeneration = ++parseGeneration;
       for (const resolve of hostFontMeasurements.values()) resolve([]);
       hostFontMeasurements.clear();
+      // A superseded parse's measurement reply is discarded by the host.
+      for (const resolve of nativeRouteMeasurements.values()) resolve([]);
+      nativeRouteMeasurements.clear();
       layoutAbort?.abort();
       layoutAbort = null;
       await documentPull.reset();
@@ -392,6 +395,7 @@ self.onmessage = async (e: MessageEvent<RenderWorkerWireRequest | WorkerSvgDecod
           ? await loadNativeRouteSentinels(activeFontSet()) : null;
         if (sentinels) {
           officeFaces = [...officeFaces, ...sentinels];
+          if (requestedGeneration !== parseGeneration) throw new Error('render-worker parse was superseded');
           const lines = await new Promise<(NativeRouteNormalLine | null)[]>(resolve => {
             nativeRouteMeasurements.set(id, resolve);
             post({ type: 'measureNativeRouteLines', forId: id, requests: nativeRouteRequests });

@@ -806,7 +806,7 @@ export {
   verifyNativeRouteNormalLines,
   type NativeRouteLineRequest,
   type NativeRouteNormalLine,
-  type NativeRoutePrimaryEm,
+  type NativeRoutePrimaryAdmission,
 } from './fonts/native-route-line-metrics';
 // Deprecated compatibility export; production layout no longer calls it.
 export { fontAdvanceBiasEm } from './text/font-advance-metrics';

@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { chromium, type Browser, type Page } from '@playwright/test';
+import { chromium, firefox, webkit, type Browser, type Page } from '@playwright/test';
 import { createServer, type ViteDevServer } from 'vite';
 import { existsSync } from 'node:fs';
 import { storeZip } from './conformance/generate.js';
@@ -62,7 +62,7 @@ describe.skipIf(!existsSync(chromium.executablePath()))('DOCX native route line 
       const line = prepared.lines[0];
       const admitted = api.admitDocxNativeRouteLines(prepared.lines, document.fonts);
       const measured = api.createLayoutServices(model, { measureContext: ctx, nativeRouteMetrics: admitted });
-      const values = ['ABC', '漢字', 'ABC漢字', 'é', 'अक'].map(text => {
+      const values = ['ABC', '漢字', 'ABC漢字', 'e\u0301', '\u0905\u0915', '\u2764\ufe0f'].map(text => {
         const run = { type: 'text' as const, text, fontFamily: absent, fontFamilyHighAnsi: absent,
           fontFamilyEastAsia: absent, fontFamilyCs: absent, fontSize: 20, bold: false, italic: false,
           underline: false, strikethrough: false, color: null, isLink: false,
@@ -82,7 +82,7 @@ describe.skipIf(!existsSync(chromium.executablePath()))('DOCX native route line 
       return { primary: line?.primaryFamily ?? null, admitted: Object.keys(admitted).length, values };
     }, ABSENT);
     if (result.primary !== 'Arial' || result.admitted !== 1) test.skip();
-    const [latin, han, mixed, combining, devanagari] = result.values;
+    const [latin, han, mixed, combining, devanagari, emoji] = result.values;
     expect(latin![0].owned.every(value => value.resource)).toBe(true);
     // 20 pt Arial: (1854 + 434 + 67) / 2048 em, the face's own normal line.
     const extent = (sides: number[][]) => sides[0]![0]! + sides[0]![1]!;
@@ -90,7 +90,7 @@ describe.skipIf(!existsSync(chromium.executablePath()))('DOCX native route line 
     expect(extent(latin![1].sides)).toBeLessThan(extent(latin![0].sides));
     // Han and Devanagari fall through to later faces: no borrowed geometry,
     // exactly the Canvas-box result of the route without a measurement.
-    for (const value of [han!, devanagari!]) {
+    for (const value of [han!, devanagari!, emoji!]) {
       expect(value[0].owned.every(entry => !entry.resource)).toBe(true);
       expect(value[0].sides).toEqual(value[1].sides);
     }
@@ -138,4 +138,50 @@ describe.skipIf(!existsSync(chromium.executablePath()))('DOCX native route line 
     if (!result.arialPaints) test.skip();
     expect(result.values[0].runs[0][0].h).toBeCloseTo(11 * 4 / 3 * 2355 / 2048, 6);
   }, 60_000);
+
+  // The oracle itself, in every engine: clusters an engine draws outside the
+  // family list (emoji presentation, unsupported variation sequences) or with
+  // a zero-advance fallback mark must never count as owned.
+  for (const engine of [chromium, firefox, webkit]) {
+    it(`judges cluster ownership soundly in ${engine.name()}`, async (test) => {
+      if (!existsSync(engine.executablePath())) test.skip();
+      const other = await engine.launch();
+      try {
+        const enginePage = await other.newPage();
+        await enginePage.route('**/native-route.html', route => route.fulfill({
+          contentType: 'text/html', body: '<!doctype html><body></body>',
+        }));
+        await enginePage.goto('http://127.0.0.1:6685/native-route.html');
+        await enginePage.addScriptTag({ type: 'module', content: `
+          import * as oracle from ${JSON.stringify('/@fs' + new URL('../../core/src/fonts/native-route-line-metrics.ts', import.meta.url).pathname)};
+          window.oracle = oracle;
+        ` });
+        await enginePage.waitForFunction(() => 'oracle' in window, undefined, { timeout: 30_000 });
+        const result = await enginePage.evaluate(async (absent) => {
+          const oracle = (window as unknown as { oracle: Pick<typeof import('@silurus/ooxml-core'),
+            'loadNativeRouteSentinels' | 'measureNativeRouteNormalLines'> & {
+            nativeRouteOwnershipFonts(list: string, weight: number, style: 'normal'): readonly [string, string];
+            nativeRouteClusterOwned(fonts: readonly [string, string], cluster: string): boolean | undefined;
+          } }).oracle;
+          const faces = await oracle.loadNativeRouteSentinels(document.fonts);
+          if (!faces) return null;
+          const list = `"${absent}", "Arial"`;
+          const [line] = oracle.measureNativeRouteNormalLines([{ familyList: list, weight: 400, style: 'normal' }],
+            document, () => true);
+          if (line?.primaryFamily !== 'Arial') return null;
+          const fonts = oracle.nativeRouteOwnershipFonts(line.primaryFamilyList, 400, 'normal');
+          return Object.fromEntries(['A', 'e\u0301', ' ', '\u6f22', '\u2764\ufe0f', '1\ufe0f\u20e3', 'a\u1ab0', '\u{1f600}']
+            .map(cluster => [cluster, oracle.nativeRouteClusterOwned(fonts, cluster)]));
+        }, ABSENT);
+        if (!result) test.skip();
+        expect(result!['A']).toBe(true);
+        expect(result![' ']).toBe(true);
+        for (const cluster of ['\u6f22', '\u2764\ufe0f', '1\ufe0f\u20e3', 'a\u1ab0', '\u{1f600}']) {
+          expect(result![cluster], cluster).not.toBe(true);
+        }
+      } finally {
+        await other.close();
+      }
+    }, 60_000);
+  }
 });

@@ -7,7 +7,6 @@ import {
   type NativeRouteNormalLine,
   unloadOfficeFontFallbacks,
 } from '@silurus/ooxml-core';
-import { containsHanScript } from '@silurus/ooxml-core/internal/script-preload-accumulator';
 import { docxRenderedTextUsages } from './document-content.js';
 import { nativeRouteMetricKey, type NativeRouteLineMetric } from './layout/font-service.js';
 import type { TextLayoutService } from './layout/text.js';
@@ -32,7 +31,7 @@ import type { DocxDocumentModel } from './types.js';
  *    first available face with the same Canvas box ({@link admitDocxNativeRouteLines}),
  *    so main-thread and worker layout resolve one table and paginate alike.
  *
- * Policy for the first available face (this function's em): CSS cannot read
+ * Policy for the first available face (this predicate): CSS cannot read
  * OS/2, so the reference-font-metrics catalog supplies the code-page class.
  * Only a named family whose every catalogued profile is non-Far-East is
  * measured. Far East faces keep today's Canvas box: their line allocation
@@ -40,13 +39,9 @@ import type { DocxDocumentModel } from './types.js';
  * unclassified families and generic keywords (an unnamed face) decline for the
  * same reason. A declined route keeps the v0.88 Canvas-box behaviour.
  */
-export function docxNativeRoutePrimaryEm(
-  primaryFamily: string, weight: number, style: 'normal' | 'italic',
-): number | undefined {
+export function docxNativeRoutePrimaryAdmitted(primaryFamily: string): boolean {
   const profiles = findReferenceFontMetrics(primaryFamily);
-  if (profiles.length === 0 || profiles.some((profile) => profile.farEastCodePage !== false)) return undefined;
-  // A known design UPM avoids CSS-pixel quantization of the probe.
-  return (findReferenceFontMetrics(primaryFamily, { weight, style })[0] ?? profiles[0]!).unitsPerEm;
+  return profiles.length > 0 && profiles.every((profile) => profile.farEastCodePage === false);
 }
 
 const ENUMERATION_HAN_PROBE = '漢';
@@ -62,20 +57,21 @@ export function docxNativeRouteRequests(
   const visited = new Set<string>();
   const visit = (
     family: string | null | undefined, bold: boolean, italic: boolean,
-    han: boolean, eastAsiaLanguage: string | undefined,
+    eastAsiaLanguage: string | undefined,
   ) => {
     const name = family?.trim();
     if (!name) return;
     const weight = bold ? 700 : 400;
     const style = italic ? 'italic' as const : 'normal' as const;
-    const key = JSON.stringify([name, weight, style, han, han ? eastAsiaLanguage ?? null : null]);
+    const key = JSON.stringify([name, weight, style, eastAsiaLanguage ?? null]);
     if (visited.has(key)) return;
     visited.add(key);
     const fonts = { ascii: name, highAnsi: name, eastAsia: name, complexScript: name };
     // Regional lists apply only to Han spans (language only in the eastAsia
-    // slot); a text with Han also shapes non-Han spans with the plain list.
+    // slot). Every usage is also resolved as Han: generated field results
+    // (number formats, dates) can produce Han that the cached text lacks.
     for (const slot of ['ascii', 'eastAsia', 'complexScript'] as const) {
-      for (const probe of han ? ['', ENUMERATION_HAN_PROBE] : ['']) {
+      for (const probe of ['', ENUMERATION_HAN_PROBE]) {
         const resolved = text.resolve({ text: probe, eastAsiaLanguage, fonts, slot, weight, style });
         if (resolved.source !== 'native' || resolved.installedFamily) continue;
         const request = { familyList: resolved.route.familyList, weight: resolved.weight, style: resolved.style };
@@ -83,16 +79,15 @@ export function docxNativeRouteRequests(
       }
     }
   };
-  visit(doc.majorFont, false, false, false, undefined);
-  visit(doc.minorFont, false, false, false, undefined);
+  visit(doc.majorFont, false, false, undefined);
+  visit(doc.minorFont, false, false, undefined);
   for (const usage of docxRenderedTextUsages(doc, 'google-preload')) {
-    const han = containsHanScript(usage.text);
     const bold = usage.bold === true;
     const italic = usage.italic === true;
-    for (const family of usage.fontFamilies) visit(family, bold, italic, han, usage.eastAsiaLanguage);
+    for (const family of usage.fontFamilies) visit(family, bold, italic, usage.eastAsiaLanguage);
     if (usage.text && (usage.latinFontFamily === null
       || (usage.latinFontFamily === undefined && !usage.fontFamilies.some(Boolean)))) {
-      visit(doc.minorFont, bold, italic, han, usage.eastAsiaLanguage);
+      visit(doc.minorFont, bold, italic, usage.eastAsiaLanguage);
     }
   }
   return [...requests.values()];
@@ -111,7 +106,7 @@ export async function measureDocxNativeRouteLines(
   if (!faces) return { lines: requests.map(() => null), faces: [] };
   let lines: (NativeRouteNormalLine | null)[] = requests.map(() => null);
   try {
-    lines = measureNativeRouteNormalLines(requests, owner, docxNativeRoutePrimaryEm);
+    lines = measureNativeRouteNormalLines(requests, owner, docxNativeRoutePrimaryAdmitted);
   } catch { /* Declined: Canvas boxes remain. */ }
   if (retainSentinels) return { lines, faces };
   unloadOfficeFontFallbacks(faces);
@@ -128,7 +123,7 @@ export function admitDocxNativeRouteLines(
   fontSet: FontFaceSet | null,
 ): Record<string, NativeRouteLineMetric> {
   const measured = lines.filter((line): line is NativeRouteNormalLine => line !== null
-    && docxNativeRoutePrimaryEm(line.primaryFamily, line.weight, line.style) !== undefined);
+    && docxNativeRoutePrimaryAdmitted(line.primaryFamily));
   const verified = verifyNativeRouteNormalLines(measured, fontSet);
   const metrics: Record<string, NativeRouteLineMetric> = {};
   measured.forEach((line, index) => {

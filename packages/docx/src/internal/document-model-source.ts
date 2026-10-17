@@ -369,8 +369,13 @@ export async function loadDocxModelSource(
         const nativeRoutes = await prepareMainThreadNativeRouteMetrics(
           doc._source, doc._document, serviceOptions,
         );
+        // destroy() may have drained this document's faces while the
+        // sentinels loaded: release a late acquisition before aborting.
+        if (signal?.aborted) {
+          unloadOfficeFontFallbacks(nativeRoutes.faces);
+          throw new PaginationAbortError();
+        }
         doc._officeFontFaces = [...doc._officeFontFaces, ...nativeRoutes.faces];
-        checkAbort();
         runtime.services = createLayoutServices(doc._source, {
           ...serviceOptions,
           nativeRouteMetrics: nativeRoutes.nativeRouteMetrics,

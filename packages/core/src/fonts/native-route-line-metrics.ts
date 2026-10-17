@@ -29,11 +29,11 @@ export interface NativeRouteNormalLine extends NativeRouteLineRequest {
   readonly lineGapRatio: number;
 }
 
-/** Format policy: the probe em for an identified first available family, or
- * undefined to decline measuring that family. */
-export type NativeRoutePrimaryEm = (
+/** Format policy: whether an identified first available family may be
+ * measured and admitted. */
+export type NativeRoutePrimaryAdmission = (
   primaryFamily: string, weight: number, style: 'normal' | 'italic',
-) => number | undefined;
+) => boolean;
 
 // ── Route sentinels ─────────────────────────────────────────────────────────
 //
@@ -44,25 +44,28 @@ export type NativeRoutePrimaryEm = (
 // (cmap format 13: many-to-one ranges, the format of a last-resort font) to one
 // glyph, and they differ only in their advance and font box:
 //
-//   sentinel A: advance 0.50 em, box 0.70 / 0.20 em
-//   sentinel B: advance 0.75 em, box 0.60 / 0.30 em
+//   sentinel A: advance 0.50 em, box 0.70 / 0.20 em (512, 716 / 204 units)
+//   sentinel B: advance 0.75 em, box 0.60 / 0.30 em (768, 614 / 307 units)
 //
 // Appending a sentinel to a family-list prefix ends font fallback there: every
 // cluster the prefix cannot draw is drawn by the sentinel, never by a later
 // family or a system fallback face.
 //
-// - First available family: `prefix, A` and `prefix, B` report the same Canvas
-//   font box exactly when some family of the prefix is available (the box is
-//   the first available face's); otherwise they report the two sentinel
-//   boxes. The first available family is the shortest prefix whose boxes agree.
+// - First available family: `family, A` and `family, B` report the same Canvas
+//   font box exactly when the family resolves to a face (the box is that
+//   face's); otherwise they report the two sentinel boxes. The first available
+//   family of a list is its first family whose boxes agree.
 // - Ownership: with the prefix ending at that family, a cluster is drawn by the
 //   prefix's faces in both `prefix, A` and `prefix, B`, or (partly) by a
-//   sentinel in each. Equal advances therefore prove that no sentinel glyph,
-//   i.e. no face after the prefix, drew any part of the cluster; any sentinel
-//   glyph changes the advance by 0.25 em. Families before the first available
-//   one are system families that matched nothing: callers decline a route
-//   when one of them is a registered FontFace (a unicode-range resource can
-//   draw some clusters without being the first available face).
+//   sentinel in each. Equal advance and ink extents therefore prove that no
+//   sentinel glyph, i.e. no face after the prefix, drew any part of it; any
+//   sentinel glyph changes the advance or the ink box. This holds only for a
+//   cluster the engine routes through the family list at all, which a
+//   sentinel-only control establishes first (nativeRouteClusterOwned).
+//   Families before the first available one are system families that matched
+//   nothing: callers decline a route when one of them is a registered
+//   FontFace (a unicode-range resource can draw some clusters without being
+//   the first available face).
 //
 // This proves which faces of the list draw a cluster without a coverage table,
 // a family-name guess or size-adjust (WebKit keeps ink extents under
@@ -71,12 +74,19 @@ export type NativeRoutePrimaryEm = (
 // load or measure them declines.
 
 const SENTINELS = [
-  { family: '__ooxml_route_sentinel_a_6d2e91__', advance: 500, ascent: 700, descent: 200 },
-  { family: '__ooxml_route_sentinel_b_6d2e91__', advance: 750, ascent: 600, descent: 300 },
+  { family: '__ooxml_route_sentinel_a_6d2e91__', advance: 512, ascent: 716, descent: 204 },
+  { family: '__ooxml_route_sentinel_b_6d2e91__', advance: 768, ascent: 614, descent: 307 },
 ] as const;
-const SENTINEL_UPM = 1000;
+/** Equal to the probe size, so every sentinel metric is a whole pixel. */
+const SENTINEL_UPM = 1024;
 const SENTINEL_FAMILIES = SENTINELS.map((sentinel) => sentinel.family);
-const PROBE_EM = 100;
+/** One size for every probe, which is also the half-size strut: engines cache
+ * font lookups per size, so the listed families are resolved at two sizes in
+ * all. The strut starts at twice this size, where engines round the normal
+ * line of a 2048-unit face to whole design units; an engine that clamps that
+ * size (Firefox, near 2000 px) halves it through the linear-scale check. */
+const PROBE_EM = 1024;
+const STRUT_EM = 2 * PROBE_EM;
 
 /** Minimal TrueType face: .notdef plus one box glyph that every scalar maps to. */
 function sentinelFontBytes(advance: number, ascent: number, descent: number, name: string): Uint8Array {
@@ -294,8 +304,11 @@ function registeredFamilies(fontSet: FontFaceSet | null | undefined): Set<string
   return names;
 }
 
-/** Shortest prefix whose first available face is not a sentinel, judged by
- * the Canvas font box (see the sentinel notes above). */
+/** Index of the first available family, judged by the Canvas font box (see
+ * the sentinel notes above). The first available face of a list is that of
+ * its first family that resolves to any face, so availability is judged per
+ * family (`family, sentinel`) and memoized: routes share most of their
+ * families, and each family costs one pair of probes per preparation. */
 function primaryIndex(
   context: CanvasFontBoxProbeContext,
   entries: readonly FamilyEntry[],
@@ -303,14 +316,15 @@ function primaryIndex(
   style: 'normal' | 'italic',
   memo: Map<string, boolean>,
 ): number | undefined {
-  let prefix = '';
   for (let index = 0; index < entries.length; index += 1) {
-    prefix = index === 0 ? entries[0]!.text : `${prefix}, ${entries[index]!.text}`;
-    const key = `${style} ${weight} ${prefix}`;
+    const entry = entries[index]!;
+    // A generic keyword always resolves; callers decline it unprobed.
+    if (entry.generic) return index;
+    const key = `${style} ${weight} ${entry.text}`;
     let available = memo.get(key);
     if (available === undefined) {
       const boxes = SENTINEL_FAMILIES.map((family) => {
-        context.font = `${style} ${weight} ${PROBE_EM}px ${prefix}, ${quoteCssFontFamily(family)}`;
+        context.font = `${style} ${weight} ${PROBE_EM}px ${entry.text}, ${quoteCssFontFamily(family)}`;
         const box = context.measureText('');
         return [box.fontBoundingBoxAscent, box.fontBoundingBoxDescent] as const;
       });
@@ -364,13 +378,13 @@ const LINEAR_PROBE_ATTEMPTS = 4;
  * linear-scale attempt, never one per route or per segment.
  *
  * Requires the sentinels to be loaded in `owner.fonts`. A request whose first
- * available family cannot be identified, that `primaryEm` declines, whose
+ * available family cannot be identified, that `admitted` declines, whose
  * computed list differs, or whose box does not scale linearly yields null.
  */
 export function measureNativeRouteNormalLines(
   requests: readonly NativeRouteLineRequest[],
   owner: Document,
-  primaryEm: NativeRoutePrimaryEm,
+  admitted: NativeRoutePrimaryAdmission,
 ): (NativeRouteNormalLine | null)[] {
   const results: (NativeRouteNormalLine | null)[] = requests.map(() => null);
   const context = owner.body ? newProbeContext(owner) : null;
@@ -390,9 +404,8 @@ export function measureNativeRouteNormalLines(
     if (!entries) return;
     const primary = identifiedPrimary(context, entries, request.weight, request.style, registered, memo);
     if (primary === undefined) return;
-    const em = primaryEm(entries[primary]!.name, request.weight, request.style);
-    if (em === undefined || !Number.isFinite(em) || em <= 0) return;
-    pending.push({ request: index, entries, primary, em });
+    if (!admitted(entries[primary]!.name, request.weight, request.style)) return;
+    pending.push({ request: index, entries, primary, em: STRUT_EM });
   });
   for (let attempt = 0; attempt < LINEAR_PROBE_ATTEMPTS && pending.length > 0; attempt += 1) {
     const host = owner.createElement('div');
@@ -485,7 +498,7 @@ export function verifyNativeRouteNormalLines(
 
 // ── Ownership ───────────────────────────────────────────────────────────────
 
-/** The two font strings whose advances are compared for one route: the route
+/** The two font strings whose geometry is compared for one route: the route
  * truncated after its first available family, then one sentinel. */
 export function nativeRouteOwnershipFonts(
   primaryFamilyList: string, weight: number, style: 'normal' | 'italic',
@@ -496,17 +509,29 @@ export function nativeRouteOwnershipFonts(
   ];
 }
 
+const SENTINEL_ONLY_FONTS = [
+  `${PROBE_EM}px ${quoteCssFontFamily(SENTINEL_FAMILIES[0])}`,
+  `${PROBE_EM}px ${quoteCssFontFamily(SENTINEL_FAMILIES[1])}`,
+] as const;
+
 const ownershipContexts: (CanvasFontBoxProbeContext | null)[] = [];
 const ownershipFonts: (string | undefined)[] = [];
+/** Route-independent control results, bounded like the per-route caches. */
+const sentinelControls = new Map<string, boolean>();
 
-/** Whether the route's first available family (or an absent family before
- * it) draws every part of `cluster`; undefined when the realm cannot judge.
- * Each sentinel has its own private context, so a font string is parsed only
- * when the route changes. */
-export function nativeRouteClusterOwned(
-  fonts: readonly [string, string], cluster: string,
-): boolean | undefined {
-  const widths: number[] = [];
+/** Advance and ink extents: a sentinel glyph changes at least one of them
+ * (0.25 em of advance, 0.25 em of ink width, 0.05 em of ink height), also
+ * when the shaper zeroes the advance of a mark it draws. */
+function geometry(context: CanvasFontBoxProbeContext, text: string): readonly number[] {
+  const measured = context.measureText(text);
+  return [
+    measured.width, measured.actualBoundingBoxLeft, measured.actualBoundingBoxRight,
+    measured.actualBoundingBoxAscent, measured.actualBoundingBoxDescent,
+  ];
+}
+
+function measurePair(fonts: readonly [string, string], cluster: string): (readonly number[])[] | undefined {
+  const results: (readonly number[])[] = [];
   for (let index = 0; index < 2; index += 1) {
     ownershipContexts[index] ??= newProbeContext();
     const context = ownershipContexts[index];
@@ -515,9 +540,42 @@ export function nativeRouteClusterOwned(
       context.font = fonts[index]!;
       ownershipFonts[index] = fonts[index];
     }
-    widths.push(context.measureText(cluster).width);
+    results.push(geometry(context, cluster));
   }
-  return Number.isFinite(widths[0]) && widths[0] === widths[1];
+  return results;
+}
+
+const sameGeometry = (a: readonly number[], b: readonly number[]) =>
+  a.every((value, index) => Number.isFinite(value) && Object.is(value, b[index]));
+
+/** Whether the route's first available family (or an absent family before
+ * it) draws every part of `cluster`; undefined when the realm cannot judge.
+ *
+ * The comparison is evidence only for a cluster the engine actually routes
+ * through the CSS family list. An engine may draw some clusters outside it
+ * (CSS Fonts 4 §5.4 cluster matching lets emoji presentation and unsupported
+ * variation sequences use system fallback), which would make both sentinel
+ * routes agree without the listed face drawing anything. So the cluster must
+ * first pass a control: with a sentinel as the only family, the two
+ * registrations must give different geometry, i.e. a sentinel demonstrably
+ * draws the cluster when no listed face does. A cluster failing the control
+ * is not owned (the span keeps its Canvas box). Each sentinel has its own
+ * private context, so a font string is parsed only when the route changes. */
+export function nativeRouteClusterOwned(
+  fonts: readonly [string, string], cluster: string,
+): boolean | undefined {
+  let routed = sentinelControls.get(cluster);
+  if (routed === undefined) {
+    const control = measurePair(SENTINEL_ONLY_FONTS, cluster);
+    if (!control) return undefined;
+    routed = !sameGeometry(control[0]!, control[1]!);
+    if (sentinelControls.size >= 4096) sentinelControls.delete(sentinelControls.keys().next().value!);
+    sentinelControls.set(cluster, routed);
+  }
+  if (!routed) return false;
+  const measured = measurePair(fonts, cluster);
+  if (!measured) return undefined;
+  return sameGeometry(measured[0]!, measured[1]!);
 }
 
 /** The sentinels are registered and applied in this realm (once per prepared
