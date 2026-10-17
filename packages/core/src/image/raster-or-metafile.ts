@@ -24,13 +24,14 @@ import {
   type TiffRenderer,
 } from './tiff-contract.js';
 import { OptionalImageCodecUnavailableError } from './optional-image-fallback.js';
-import { isEmf, isWmf, wmfRasterTarget } from './metafile-format.js';
+import { isEmf, isWmf, renderWmfToBitmap, wmfRasterTarget } from './wmf.js';
 
-// The metafile players are loaded on the first WMF/EMF picture, not with the
-// viewer: most documents carry none, and the EMF/EMF+/WMF players are a large
-// share of the default bundle. Decoding is asynchronous already, so the only
-// change is one module load before the first metafile is played.
-const loadWmfPlayer = () => import('./wmf.js');
+// The EMF/EMF+ player is loaded on the first EMF picture, not with the viewer:
+// most documents carry none, and it is a large share of the default bundle.
+// Decoding is asynchronous already, so the only change is one module load
+// before the first EMF is played. The WMF player stays static: it shares its
+// DIB, canvas and symbol-font helpers with eagerly used chart and image code,
+// so the bundler would keep it in the eager graph anyway.
 const loadEmfPlayer = () => import('./emf.js');
 
 /**
@@ -233,7 +234,6 @@ export async function decodeRasterOrMetafileWithInspection(
   if (isWmf(head)) {
     const { w, h } = wmfRasterTarget(widthPt, heightPt);
     let unsupported: readonly string[] = [];
-    const { renderWmfToBitmap } = await loadWmfPlayer();
     const bitmap = await renderWmfToBitmap(
       new Uint8Array(await data.arrayBuffer()), w, h,
       (records) => { unsupported = records; },

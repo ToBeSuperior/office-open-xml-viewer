@@ -6,7 +6,7 @@ import {
   type RasterDimensions,
 } from './raster-dimensions.js';
 import { isTiff } from './tiff-contract.js';
-import { isEmf, isWmf } from './metafile-format.js';
+import { isEmf, isWmf } from './wmf.js';
 
 export type RasterFormat = 'png' | 'jpeg' | 'gif' | 'bmp' | 'webp' | 'tiff' | 'wmf' | 'emf';
 

@@ -56,7 +56,7 @@ import {
   type ImageResourceOptions,
 } from './adaptive-image-budget.js';
 import type { TiffRenderer } from './tiff-contract.js';
-import { wmfRasterTarget } from './metafile-format.js';
+import { wmfRasterTarget } from './wmf.js';
 import type { SvgBlobDecoder } from '../worker/svg-decode-bridge.js';
 
 type FetchImage = (path: string, mime: string) => Promise<Blob>;
