@@ -4,7 +4,7 @@ import type {
   ChartDataPointOverride, ChartExElementStyle, ChartModel, ChartSeries, ChartStockBarPaint,
 } from '../types/chart.js';
 import { drawImageCropped, imageNaturalSize, srcRectHasVisibleArea } from '../image/crop.js';
-import { imageEffectFrame } from '../image/image-effect-frame.js';
+import { imageEffectFrame, imageEffectOutsetPeriods } from '../image/image-effect-frame.js';
 import type { BlipPixelEffects } from '../image/blip-effects.js';
 import type { Duotone } from '../image/duotone.js';
 import { fillCanProduceVisiblePixels } from '../shape/paint.js';
@@ -204,6 +204,9 @@ interface TileGeometry extends ChartImageTileMetrics {
   columns: number;
   rows: number;
   repetitions: number;
+  /** Extra neighbour periods per side reached by an effect outset. */
+  padX: number;
+  padY: number;
 }
 
 interface ChartImageTileStaticMetrics {
@@ -325,11 +328,14 @@ function imageTileGeometry(
   const metrics = chartImageTileMetrics(fill, image, ptToPx);
   if (!metrics) return null;
   const { tileW, tileH } = metrics;
-  const columns = Math.ceil(w / tileW) + 2;
-  const rows = Math.ceil(h / tileH) + 2;
+  // Neighbouring tiles whose effect outset reaches into the box are drawn and
+  // charged too; the authored period is unchanged.
+  const pad = imageEffectOutsetPeriods(image, fill.srcRect != null);
+  const columns = Math.ceil(w / tileW) + 2 + 2 * pad.x;
+  const rows = Math.ceil(h / tileH) + 2 + 2 * pad.y;
   const repetitions = columns * rows;
   if (!Number.isSafeInteger(repetitions)) rejectChartImageGeometry();
-  return { ...metrics, columns, rows, repetitions };
+  return { ...metrics, columns, rows, repetitions, padX: pad.x, padY: pad.y };
 }
 
 /** Exact Canvas image-draw work for one picture fill at the destination size.
@@ -1292,8 +1298,8 @@ export function paintChartImageFill(
     const origin = chartImageTileOrigin(geometry, w, h);
     const originX = x + origin.x;
     const originY = y + origin.y;
-    const firstColumn = Math.floor((x - originX) / tileW) - 1;
-    const firstRow = Math.floor((y - originY) / tileH) - 1;
+    const firstColumn = Math.floor((x - originX) / tileW) - 1 - geometry.padX;
+    const firstRow = Math.floor((y - originY) / tileH) - 1 - geometry.padY;
     // A bounded repetition count does not make a huge starting index iterable.
     // Resource policy: reject grids whose integer parity cannot be represented.
     if (![firstColumn, firstRow, firstColumn + columns, firstRow + rows].every(Number.isSafeInteger)) {

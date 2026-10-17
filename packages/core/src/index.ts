@@ -440,6 +440,7 @@ export {
 } from './image/blip-effects';
 export type { BlendMode } from './image/blip-fill';
 export { imageEffectError } from './image/image-effect-error';
+export { imageEffectFrame, imageEffectOutsetPeriods } from './image/image-effect-frame';
 export {
   getCachedDuotoneBitmapByPath,
   duotoneCacheKey,

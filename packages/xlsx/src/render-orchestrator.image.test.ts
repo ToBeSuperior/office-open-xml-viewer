@@ -702,6 +702,21 @@ describe('render-orchestrator image decode (lazy bytes)', () => {
     expect(fetchImage).toHaveBeenCalledTimes(1);
   });
 
+  it('prefetchImages acquires an off-viewport picture whose CT_Blip outset may reach it', async () => {
+    vi.stubGlobal('createImageBitmap', vi.fn(async (blob: Blob) => new FakeBitmap(blob.type)));
+    const fetchImage = vi.fn(async (path: string, mime: string) =>
+      new Blob([new TextEncoder().encode(path)], { type: mime }));
+    const ws = worksheetWithImages();
+    const leaf = ws.shapeGroups![0]!.shapes[0]!.geom;
+    if (leaf.type !== 'image') throw new Error('fixture leaf must be a picture');
+    leaf.blipEffects = [{ type: 'blur', radius: 914400, grow: true }];
+    await prefetchImages(ws, new Map(), fetchImage, {
+      viewport: { row: 1, col: 1, rows: 2, cols: 2 },
+    }).catch(() => undefined);
+    // The blurred picture is acquired although its rectangle is off-viewport.
+    expect(fetchImage.mock.calls.map(([path]) => path)).toContain('xl/media/image2.png');
+  });
+
   it('prefetchImages retains an off-cell anchor whose signed offset reaches the viewport', async () => {
     vi.stubGlobal('createImageBitmap', vi.fn(async (blob: Blob) => new FakeBitmap(blob.type)));
     const fetchImage = vi.fn(async (path: string, mime: string) =>

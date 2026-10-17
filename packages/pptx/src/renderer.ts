@@ -109,6 +109,7 @@ import {
   getCachedBitmapByPath,
   getCachedDuotoneBitmapByPath,
   imageEffectError,
+  imageEffectOutsetPeriods,
   chartImageFillKey,
   chartImageFillPixelTransform,
   chartImageFillHostKey,
@@ -131,6 +132,8 @@ import {
   metafileRasterSize,
   sourceRasterTargetSize,
   isOoxmlDecodedImageLimitError,
+  OoxmlDecodedImageLimitError,
+  MAX_IMAGE_EFFECT_PASSES,
   OoxmlResourceLimitError,
   OoxmlError,
   isTiffDecodeError,
@@ -419,7 +422,7 @@ function plannedRasterOptions(
 }
 
 function pictureResourcePath(picture: PictureElement): string {
-  return !picture.blipEffects?.length && preferVectorBlip(picture)
+  return !pixelTransform(picture) && preferVectorBlip(picture)
     ? picture.svgImagePath as string
     : picture.imagePath;
 }
@@ -2556,11 +2559,28 @@ function paintTiledBackground(
     drawImageCropped(actx, bitmap, srcRect, 0, 0, tileW, tileH);
     actx.restore();
   };
-  // Top-left tile is always un-mirrored; mirror the X/Y neighbours.
-  drawCell(0, 0, false, false);
-  if (flipX) drawCell(tileW, 0, true, false);
-  if (flipY) drawCell(0, tileH, false, true);
-  if (flipX && flipY) drawCell(tileW, tileH, true, true);
+  // A CT_Blip effect outset (blur grow, glow, shadow) overlaps neighbouring
+  // tiles (§20.1.8.58 repeats the authored frame). The pattern cell is one
+  // period, so draw every neighbour whose outset reaches it, wrapped by whole
+  // cells; the period itself is unchanged.
+  const reach = imageEffectOutsetPeriods(bitmap, srcRect != null);
+  const padCellsX = Math.ceil(reach.x / (flipX ? 2 : 1));
+  const padCellsY = Math.ceil(reach.y / (flipY ? 2 : 1));
+  const wrapDraws = (2 * padCellsX + 1) * (2 * padCellsY + 1) * (flipX ? 2 : 1) * (flipY ? 2 : 1);
+  if (!Number.isSafeInteger(wrapDraws) || wrapDraws > MAX_IMAGE_EFFECT_PASSES * MAX_IMAGE_EFFECT_PASSES) {
+    throw new OoxmlDecodedImageLimitError('image-effect-work', MAX_IMAGE_EFFECT_PASSES * MAX_IMAGE_EFFECT_PASSES,
+      Number.isSafeInteger(wrapDraws) ? wrapDraws : Number.MAX_SAFE_INTEGER);
+  }
+  for (let j = -padCellsY; j <= padCellsY; j++) {
+    for (let i = -padCellsX; i <= padCellsX; i++) {
+      const ox = i * cellW, oy = j * cellH;
+      // Top-left tile is always un-mirrored; mirror the X/Y neighbours.
+      drawCell(ox, oy, false, false);
+      if (flipX) drawCell(ox + tileW, oy, true, false);
+      if (flipY) drawCell(ox, oy + tileH, false, true);
+      if (flipX && flipY) drawCell(ox + tileW, oy + tileH, true, true);
+    }
+  }
 
   const pattern = ctx.createPattern(aux as unknown as CanvasImageSource, 'repeat');
   if (!pattern) throw new OoxmlError('unsupported-image-effect', 'Picture tile surface unavailable');
@@ -6927,7 +6947,9 @@ async function preparePicture(
     // `null` is reachable when the raster path resolves to an unsupported
     // metafile (a true EMF, or a WMF with no geometry); guarded below.
     let bitmap: ImageBitmap | HTMLImageElement | null;
-    if (!el.blipEffects?.length && preferVectorBlip(el)) {
+    // Any pixel transform (ordered chain or a lone duotone) needs a readable
+    // raster: the vector original is preferred only for untransformed pictures.
+    if (!pixelTransform(el) && preferVectorBlip(el)) {
       // No crop: prefer the vector original (shared gate; see preferVectorBlip).
       // With an a:srcRect crop we skip this branch — the crop math below
       // multiplies fractional srcRect edges by the source's pixel dims, and an
@@ -6953,11 +6975,10 @@ async function preparePicture(
               tiff,
             });
       }
-    } else if (dataIsSvg && !el.blipEffects?.length) {
+    } else if (dataIsSvg && !pixelTransform(el)) {
       // SVG-only picture (here either because it has a crop, or — defensively —
       // because no svgImagePath was surfaced): decode through the SVG path since
-      // createImageBitmap can't. A duotone on a vector picture is a rare edge
-      // case left un-recoloured (no readable pixel grid), matching xlsx.
+      // createImageBitmap can't. A transformed SVG takes the raster path below.
       bitmap = await getCachedSvgImageByPath(el.imagePath, fetchImage, svgOptions);
     } else {
       // Ordered effects need pixels even for SVG-only sources. The shared

@@ -207,10 +207,15 @@ function anchorMayIntersectViewport(
     readonly freezeRows: number;
     readonly freezeCols: number;
   },
+  spatialEffectsMayReach = false,
 ): boolean {
   // Tagged acquisition facts share paint's validity policy even for a whole
   // sheet preload. Preserve the historical eager preload for untagged models.
-  if (!viewport) return anchor.anchorTag === undefined
+  // A picture carrying a CT_Blip chain can paint a spatial outset (blur grow,
+  // glow, shadow, reflection) beyond its rectangle whose extent is only known
+  // once the chain is evaluated, so it is acquired without viewport culling;
+  // paint culls it by its prepared effect frame.
+  if (!viewport || spatialEffectsMayReach) return anchor.anchorTag === undefined
     || anchorDisplaySize(anchor, ws, geometry, frame?.scale ?? 1) !== null;
   const axes = geometry ?? getGridGeometryForWorksheet(ws);
   const scale = frame?.scale ?? 1;
@@ -327,9 +332,9 @@ export async function decodeImageSource(
       // encoding. SVG-only blips first acquire a readable raster via the same
       // host decoder used by workers, then share the raster effect cache,
       // pixel budgets and teardown. A raster twin still owns effects when present.
-      svgDecoder: dataIsSvg
-        ? svgDecoder ?? (typeof Image !== 'undefined' ? decodeSvgBlobOnMainThread : undefined)
-        : undefined,
+      // Also forwarded for raster pictures: a nested CT_Blip image fill
+      // (fillOverlay/fill) may reference an SVG that needs the same bridge.
+      svgDecoder: svgDecoder ?? (typeof Image !== 'undefined' ? decodeSvgBlobOnMainThread : undefined),
       ...(target ?? {}),
       ...(plannedPixelLimit ? { maxRetainedPixels: plannedPixelLimit } : {}),
     });
@@ -444,6 +449,7 @@ export async function prefetchImages(
         opts?.viewport,
         geometry,
         frame,
+        Boolean(img.blipEffects?.length),
       )) continue;
       const display = anchorDisplaySize(img, ws, geometry, opts?.cellScale ?? 1);
       // Key by (path + duotone colours) so a recoloured picture is looked up
@@ -491,6 +497,7 @@ export async function prefetchImages(
         opts?.viewport,
         geometry,
         frame,
+        grp.shapes.some(shape => shape.geom.type === 'image' && Boolean(shape.geom.blipEffects?.length)),
       )) continue;
       for (const shape of grp.shapes) {
         if (shape.geom.type === 'image') {

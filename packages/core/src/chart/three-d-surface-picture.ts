@@ -4,6 +4,7 @@ import type { ChartThreeDSurface } from '../types/chart.js';
 import { createAuxCanvasForContext, type AuxCanvas, type AuxContext } from '../canvas/aux-canvas.js';
 import { MAX_CANVAS_AREA, MAX_CANVAS_DIMENSION } from '../canvas/clamp.js';
 import { cropSourceMapping, drawImageCropped, imageNaturalSize, checkedImageCropProjection } from '../image/crop.js';
+import { imageEffectFrame } from '../image/image-effect-frame.js';
 import { drawProjected, projectQuadPoint } from '../shape/scene3d-draw.js';
 import { chartImageTileMetrics, chartImageTileOrigin } from './image-fill.js';
 import {
@@ -118,14 +119,23 @@ export function paintChartThreeDSurfacePicture(
   const plan = planChartThreeDSurfacePicture(fill, surface, kind, valueSpan);
   if (!plan) return false;
   if (geometry.inner.length !== 4) rejectChartImageGeometry();
-  const natural = imageNaturalSize(image);
+  // A spatial CT_Blip effect can grow the decoded grid around the authored
+  // picture frame. The frame (not the grown grid) is the picture that maps
+  // onto the face (§20.1.8.14/.55); its outset lies outside the clipped face.
+  const effectFrame = imageEffectFrame(image);
+  const grid = imageNaturalSize(image);
+  const natural = effectFrame ? { w: effectFrame.width, h: effectFrame.height } : grid;
   if (![natural.w, natural.h].every(v => Number.isFinite(v) && v > 0)) rejectChartImageGeometry();
   let projection: ReturnType<typeof checkedImageCropProjection>;
   try { projection = checkedImageCropProjection(fill.srcRect); } catch { rejectChartImageGeometry(); }
-  const crop = cropSourceMapping(image, fill.srcRect, projection);
+  const frameGrid = effectFrame
+    ? { width: effectFrame.width, height: effectFrame.height } as unknown as CanvasImageSource
+    : image;
+  const crop = cropSourceMapping(frameGrid, fill.srcRect, projection);
+  const fx = effectFrame?.x ?? 0, fy = effectFrame?.y ?? 0;
   const sourceRect = crop
-    ? { x0: crop.sx, y0: crop.sy, x1: crop.sx + crop.sw, y1: crop.sy + crop.sh }
-    : undefined;
+    ? { x0: fx + crop.sx, y0: fy + crop.sy, x1: fx + crop.sx + crop.sw, y1: fy + crop.sy + crop.sh }
+    : effectFrame ? { x0: fx, y0: fy, x1: fx + natural.w, y1: fy + natural.h } : undefined;
   // Preserve the established planar mapping exactly. Positive-thickness
   // joining faces need their own screen-upright ordering because each face has
   // a different scene-space axis pair.
@@ -286,7 +296,7 @@ export function paintChartThreeDSurfacePicture(
       for (let index = 1; index < quad.length; index++) ctx.lineTo(quad[index].x, quad[index].y);
       ctx.closePath();
       ctx.clip();
-      drawProjected(image, ctx, natural.w, natural.h, destination, 0.5, sourceRect);
+      drawProjected(image, ctx, grid.w, grid.h, destination, 0.5, sourceRect);
       ctx.restore();
     }
   } else {
@@ -353,22 +363,22 @@ export function paintChartThreeDSurfacePicture(
         if (surfacePictureFaceUsesStackedMapping(plan, faceIndex)) {
           for (let index = 0; index < Math.ceil(1 / stackFraction); index++) {
             drawProjected(
-              image, ctx, natural.w, natural.h,
+              image, ctx, grid.w, grid.h,
               stackQuad(face, index * stackFraction, (index + 1) * stackFraction),
               0.5, sourceRect,
             );
           }
         } else {
-          drawProjected(image, ctx, natural.w, natural.h, quad, 0.5, sourceRect);
+          drawProjected(image, ctx, grid.w, grid.h, quad, 0.5, sourceRect);
         }
       } else if (plan.stackUnit != null && surfacePictureFaceUsesValueAxis(plan, faceIndex)) {
         for (let index = 0; index < repetitions; index++) {
           const lower = index * plan.stackUnit / valueSpan;
           const upper = (index + 1) * plan.stackUnit / valueSpan;
-          drawProjected(image, ctx, natural.w, natural.h, stackQuad(face, lower, upper), 0.5, sourceRect);
+          drawProjected(image, ctx, grid.w, grid.h, stackQuad(face, lower, upper), 0.5, sourceRect);
         }
       } else if (plan.stackUnit != null) {
-        drawProjected(image, ctx, natural.w, natural.h, quad, 0.5, sourceRect);
+        drawProjected(image, ctx, grid.w, grid.h, quad, 0.5, sourceRect);
       }
       ctx.restore();
     }

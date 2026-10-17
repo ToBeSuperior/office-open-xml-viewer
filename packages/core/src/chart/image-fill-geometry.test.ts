@@ -94,6 +94,9 @@ it('tiles a chart fill by the authored frame of an effect-grown source', () => {
   expect(withChartImageLookup(() => grown, () => paintChartImageFill(ctx, fill, 0, 0, 40, 10))).toBe(true);
   // 96 dpi: one source pixel per CSS pixel, so the period is the 10 px frame.
   expect(recorded[1]! - recorded[0]!).toBeCloseTo(10, 6);
+  // The 5 px outset reaches one neighbouring period on each horizontal side:
+  // 4 + 2 boundary + 2 outset columns, 1 + 2 boundary rows.
+  expect(recorded).toHaveLength(8 * 3);
 });
 
 it('evaluates a chart fill chain on the source grid at the fill DPI', () => {

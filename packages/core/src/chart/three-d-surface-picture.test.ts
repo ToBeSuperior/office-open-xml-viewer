@@ -1,3 +1,4 @@
+import { setImageEffectFrame } from '../image/image-effect-frame';
 import { describe, expect, it } from 'vitest';
 import type { ImageFill } from '../types/common.js';
 import {
@@ -19,6 +20,7 @@ function paint(
     thicknessPercent?: number;
     faceIndex?: number;
     faceIndices?: readonly number[];
+    effectFrame?: { x: number; y: number; width: number; height: number };
   } = {},
 ): {
   painted: boolean;
@@ -34,6 +36,7 @@ function paint(
     width: options.imageWidth ?? 100,
     height: options.imageHeight ?? 100,
   } as unknown as CanvasImageSource;
+  if (options.effectFrame) setImageEffectFrame(image, options.effectFrame);
   const makeContext = (canvas: object): CanvasRenderingContext2D => {
     const state: Record<string, unknown> = { globalAlpha: 1, canvas };
     return new Proxy(state, {
@@ -450,3 +453,17 @@ describe('CT_Surface tiled pictures', () => {
   });
 });
 
+
+it('maps only the authored frame of an effect-grown picture onto a stretched face', () => {
+  const result = paint(imageFill, { effectFrame: { x: 25, y: 25, width: 50, height: 50 } });
+  expect(result.painted).toBe(true);
+  expect(result.sourceDraws.length).toBeGreaterThan(0);
+  for (const draw of result.sourceDraws) {
+    const [, sx, sy, sw, sh] = draw as number[];
+    // drawProjected pads each source cell by half a pixel against seams.
+    expect(sx).toBeGreaterThanOrEqual(24.5 - 1e-9);
+    expect(sy).toBeGreaterThanOrEqual(24.5 - 1e-9);
+    expect(sx + sw).toBeLessThanOrEqual(75.5 + 1e-9);
+    expect(sy + sh).toBeLessThanOrEqual(75.5 + 1e-9);
+  }
+});

@@ -29,7 +29,7 @@ import type {
   ChartRegionMapRenderer,
   ChartExRenderer,
 } from '@silurus/ooxml-core';
-import { blipPixelEffectsKey, type BlipEffect, type BlipPixelEffects } from '@silurus/ooxml-core';
+import { blipPixelEffectsKey, imageEffectFrame, type BlipEffect, type BlipPixelEffects } from '@silurus/ooxml-core';
 import { usesPathShade, trackPaintPath, currentStrokeBounds, chartImageFillKey, paintOptionalImagePlaceholder, pathFillModeOverlay, withDrawingMLShapeTransform, buildPresetGeometryFillPath } from '@silurus/ooxml-core';
 import { placePhoneticRuns } from './phonetic.js';
 import { crispOffset, renderChart, renderSparkline, renderPresetShape, createAuxCanvas, PT_TO_PX, EMU_PER_PX, mathToMathML, rasterizeMathSvg, tintMathRaster, classifyCjkFont, classifyFontGeneric, googleCjkFontAlias, cjkFallbackChain, NON_CJK_SANS_FALLBACKS, NON_CJK_SERIF_FALLBACKS, isCjkBreakChar, xlsxBorderDashArray, drawImageCropped, hexToRgba, verticalTrLongMark, verticalVertGlyphReachable, applyStroke, resolveFill, type SparklineModel, type MathNode, type MathRenderer, type RasterizedMathSvg } from '@silurus/ooxml-core';
@@ -77,6 +77,18 @@ export { colWidthToPx, pxToColWidth, rowHeightToPx, pxToRowHeight };
  *  synchronous lookup. Kept here (not in the orchestrator) so both the
  *  synchronous renderer and the async orchestrator share one definition without
  *  a circular import. */
+/** Painted extent of an effect-grown source drawn into a frame rectangle,
+ *  or null when the source has no effect outset. */
+function effectOutsetRect(
+  img: CanvasImageSource, x: number, y: number, w: number, h: number,
+): { x: number; y: number; width: number; height: number } | null {
+  const frame = imageEffectFrame(img);
+  if (!frame || !(frame.width > 0) || !(frame.height > 0)) return null;
+  const size = img as { width: number; height: number };
+  const sx = w / frame.width, sy = h / frame.height;
+  return { x: x - frame.x * sx, y: y - frame.y * sy, width: size.width * sx, height: size.height * sy };
+}
+
 export function imageCacheKey(
   imagePath: string,
   transform?: Duotone | BlipPixelEffects | null,
@@ -4582,8 +4594,11 @@ function renderImages(
 
     // A rotated rectangle can intersect the viewport even when its unrotated
     // box does not. Flips preserve the same axis-aligned bounds.
+    // A prepared CT_Blip effect can extend beyond the authored frame (blur
+    // grow, glow, shadow); cull by the painted extent, not the frame alone.
+    const outset = img && !anchor.srcRect ? effectOutsetRect(img, canvasX, canvasY, imgW, imgH) : null;
     const bounds = rotatedImageBounds(
-      { x: canvasX, y: canvasY, width: imgW, height: imgH },
+      outset ?? { x: canvasX, y: canvasY, width: imgW, height: imgH },
       anchor.rotation,
     );
     if (bounds.x + bounds.width < clipX || bounds.x > clipX + scrollAreaW) continue;
@@ -4677,8 +4692,11 @@ function renderShapeGroups(
     const canvasX = sheetAnchoredRectX(logicalCanvasX, w, canvasW, rtl);
     const canvasY = scrollAreaY + (y1 - scrollOriginSheetY) - scrollOffsetY;
 
-    if (canvasX + w < clipX || canvasX > clipX + scrollAreaW) continue;
-    if (canvasY + h < scrollAreaY || canvasY > scrollAreaY + scrollAreaH) continue;
+    // A picture leaf with a CT_Blip chain may paint an effect outset beyond
+    // the group rectangle; such groups are not culled by that rectangle.
+    const effectLeaf = anchor.shapes.some(shape => shape.geom.type === 'image' && Boolean(shape.geom.blipEffects?.length));
+    if (!effectLeaf && (canvasX + w < clipX || canvasX > clipX + scrollAreaW)) continue;
+    if (!effectLeaf && (canvasY + h < scrollAreaY || canvasY > scrollAreaY + scrollAreaH)) continue;
 
     for (const shape of anchor.shapes) {
       const sx = canvasX + shape.x * w;
