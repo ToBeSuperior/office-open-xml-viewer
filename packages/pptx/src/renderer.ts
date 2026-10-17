@@ -4141,11 +4141,10 @@ function renderShape(ctx: CanvasRenderingContext2D, el: ShapeElement, scale: num
     target.beginPath();
     if (el.custGeom && el.custGeom.length > 0) {
       buildCustomPath(target, el.custGeom, bx, by, bw, bh);
-    } else if (usePresetEngine) {
-      // Silhouette of a preset shape. buildShapePath resolves spec-defined
-      // names through the ECMA-376 preset engine (all of its paths).
-      buildShapePath(target, geom, bx, by, bw, bh, el.adj, el.adj2, el.adj3, el.adj4);
     } else {
+      // Silhouette of a preset shape (or any other geometry name).
+      // buildShapePath resolves spec-defined names through the ECMA-376
+      // preset engine (all of its paths).
       buildShapePath(target, geom, bx, by, bw, bh, el.adj, el.adj2, el.adj3, el.adj4);
     }
     // Arc bodies render through the preset engine above, which owns arc's
