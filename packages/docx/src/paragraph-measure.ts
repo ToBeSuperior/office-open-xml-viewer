@@ -40,6 +40,9 @@ export interface ParagraphMeasurementEnvironment extends LineLayoutEnvironment {
   readonly documentHasEastAsianText: boolean;
   readonly paragraphMarkShapeInput?: NumberingMarkerShapeInput;
   /** Selected-face text marker box, resolved by retained numbering before line acquisition. */
+  /** Ascent (with line gap) of a numbered paragraph's text marker; an empty
+   * item's mark line takes part with it (#1884). */
+  readonly markOnlyTextMarkerAscentPt?: number;
   /** WrapLayoutCtx.numberingFirstLine for a numbered paragraph's first line. */
   readonly numberingFirstLine?: NonNullable<WrapLayoutCtx['numberingFirstLine']>;
   readonly firstLineNumberingMarkerBox?: Readonly<{ ascentPt: number; descentPt: number; intendedSinglePt?: number }>;
@@ -208,6 +211,22 @@ export function measureParagraph(
     });
   }
 
+  // Windows Word 16.0 #1884 controls (Arial 10pt / Times New Roman 12pt
+  // marks; 6-20pt Symbol bullets and Arial numbers; exact 12/18/30, atLeast
+  // 18/30/60, auto 1/1.5/2): an empty item's text marker joins its mark line
+  // like a picture bullet (max of the two ascents over the mark's descent,
+  // then the line rule). The baseline sits four fifths down an exact line,
+  // the mark's descent above the bottom of an atLeast line, and at the union
+  // ascent of an automatic line, whose added leading falls below it.
+  const textMarkerAscentPt = !continuation && firstLinePictureMarkerHeightPt === undefined
+    && !context.lineGrid.active && !context.hasRuby
+    ? environment.markOnlyTextMarkerAscentPt : undefined;
+  const textMarkerMarkBelowBaselinePt = (advancePt: number, ascentPt: number, descentPt: number) => {
+    const spacing = context.lineSpacing;
+    if (spacing?.rule === 'exact' && spacing.value > 0) return advancePt / 5;
+    if (spacing?.rule === 'atLeast') return Math.min(advancePt, descentPt);
+    return Math.max(0, advancePt - ascentPt);
+  };
   const measureMarkOnly = (): MeasuredParagraph => {
     let markTopPt = cursorPt;
     const markMetrics = paragraphMarkLineMetrics(
@@ -223,7 +242,7 @@ export function measureParagraph(
       environment.layoutServices?.text,
       environment.paragraphMarkShapeInput,
       environment.useFeLayout === true,
-      firstLinePictureMarkerHeightPt ?? 0,
+      firstLinePictureMarkerHeightPt ?? textMarkerAscentPt ?? 0,
     );
     const markAdvancePt = markMetrics.advancePx;
     let markWrapBounds: MeasuredParagraph['markWrapBounds'];
@@ -271,9 +290,9 @@ export function measureParagraph(
       uniformRubyAdvancePt: 0,
       contentStartYPt: markTopPt,
       contentEndYPt: markTopPt + markAdvancePt,
-      lastLineBelowBaselinePt: lineBelowBaselinePx(
-        markAdvancePt, markMetrics.ascentPx, markMetrics.descentPx,
-      ),
+      lastLineBelowBaselinePt: textMarkerAscentPt === undefined
+        ? lineBelowBaselinePx(markAdvancePt, markMetrics.ascentPx, markMetrics.descentPx)
+        : textMarkerMarkBelowBaselinePt(markAdvancePt, markMetrics.ascentPx, markMetrics.descentPx),
       markGridAfterLeadingPt: markMetrics.gridAfterLeadingPx,
       placement: recordedPlacement,
     };
@@ -379,24 +398,23 @@ export function measureParagraph(
       // square-wrapped float (a 42pt Symbol bullet raises the first line).
       const markerBox = lineIndex === 0 && !continuation
         && !context.lineGrid.active
-        && (context.lineSpacing == null
+        && (context.lineSpacing == null || context.lineSpacing.rule === 'atLeast'
           || (context.lineSpacing.rule === 'auto' && context.lineSpacing.value >= 1))
         && !context.hasRuby
         && !originalLine.uniformPositionAuto && !originalLine.inlinePictureTextSingle
         ? environment.firstLineNumberingMarkerBox : undefined;
+      // Windows Word 16.0 (#1884 controls: Arial 10pt / Times New Roman 12pt
+      // bodies, 6-20pt Symbol bullets and Arial numbers, auto 1/1.5/2 and
+      // atLeast 18/30/60): a taller marker raises the first line by its own
+      // ascent (with its line gap, as text ascents carry it); the line keeps
+      // the text's descent, so the next line follows one text line below.
       const markerAscent = markerBox?.ascentPt;
-      const markerDescent = markerBox?.descentPt;
-      const line = markerAscent !== undefined && markerDescent !== undefined
-        && Number.isFinite(markerAscent) && Number.isFinite(markerDescent)
+      const line = markerAscent !== undefined && Number.isFinite(markerAscent)
+        && markerAscent > originalLine.ascent
         ? {
             ...originalLine,
-            ascent: Math.max(originalLine.ascent, markerAscent),
-            descent: Math.max(originalLine.descent, markerDescent),
+            ascent: markerAscent,
             visibleAscent: Math.max(originalLine.visibleAscent ?? originalLine.ascent, markerAscent),
-            visibleDescent: Math.max(originalLine.visibleDescent ?? originalLine.descent, markerDescent),
-            intendedSingle: Math.max(originalLine.intendedSingle, markerBox?.intendedSinglePt ?? 0),
-            visibleIntendedSingle: Math.max(originalLine.visibleIntendedSingle ?? originalLine.intendedSingle,
-              markerBox?.intendedSinglePt ?? 0),
           }
         : originalLine;
       const textSinglePt = Math.max(
@@ -412,12 +430,13 @@ export function measureParagraph(
       // This selected-face projection is limited to non-grid text markers; other classes
       // retain their established allocation.
       void WORD_NUMBERING_MARKER_FIRST_LINE_UNION;
-      const markerNaturalPt = Math.max(line.ascent + line.descent, markerBox?.intendedSinglePt ?? 0);
+      const markerNaturalPt = line.ascent + line.descent;
       const markerRaisesBox = line !== originalLine
         && markerNaturalPt > textSinglePt;
-      const specified = specifiedParagraph && !paragraph.numbering
+      const specified = specifiedParagraph
         ? specifiedTextLineMetrics(line, context, paragraph, environment.compatibilityMode,
-            environment.verticalPageFrame === true, environment.paragraphMarkShapeInput)
+            environment.verticalPageFrame === true, environment.paragraphMarkShapeInput,
+            markerRaisesBox ? markerNaturalPt : undefined)
         : null;
       // WORD_PICTURE_BULLET_LINE_PARTICIPATION: a picture bullet that supplies
       // an East Asian line's ascent counts grid cells together with the

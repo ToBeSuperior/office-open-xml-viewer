@@ -2537,9 +2537,14 @@ function planMeasuredLines(
   const specifiedParagraph = specifiedTextParagraphIsHomogeneous(paragraph);
   return retainPhysicalLines(measured.lines.map((measuredLine, lineIndex) => {
     const raw = measuredLine.layout;
-    const specified = specifiedParagraph && !paragraph.numbering
+    // The measured allocation's first-line marker union (paragraph-measure.ts):
+    // a taller marker raises the line by its ascent over the text's descent.
+    const markerAscentPt = lineIndex === 0 && numberingPlan?.markerText
+      ? numberingPlan.lineBox?.ascentPt : undefined;
+    const specified = specifiedParagraph
       ? specifiedTextLineMetrics(raw, context, paragraph, compatibilityMode, verticalPageFrame,
-          paragraphMarkShapeInput)
+          paragraphMarkShapeInput,
+          markerAscentPt === undefined ? undefined : Math.max(markerAscentPt, raw.ascent) + raw.descent)
       : null;
     const baselinePt = specified
       ? measuredLine.topYPt + specified.baselineOffsetPt
@@ -5107,6 +5112,9 @@ export function acquireParagraphResult(
         firstLineNumberingMarkerBox: numberingPlan.lineBox,
       } : {}),
       ...(numberingFirstLine ? { numberingFirstLine } : {}),
+      ...(numberingPlan?.markerText && numberingPlan.lineBox ? {
+        markOnlyTextMarkerAscentPt: numberingPlan.lineBox.ascentPt,
+      } : {}),
       ...(paragraph.numbering?.picBulletImagePath ? {
         // The same display height the marker placement below paints.
         firstLinePictureMarkerHeightPt: paragraph.numbering.picBulletHeightPt

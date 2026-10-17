@@ -184,7 +184,9 @@ describe('numbering marker + body eastAsia font routing (§17.3.2.26 / §17.9.6)
     const smallMarker = await renderedSuccessorTop(8);
     const tallMarker = await renderedSuccessorTop(20);
     expect(smallMarker).toBeCloseTo(plain);
-    expect(tallMarker - plain).toBeCloseTo(10);
+    // Windows Word 16.0 (#1884): the 20pt marker raises the line by its 16pt
+    // ascent over the 8pt text ascent; its descent does not join the union.
+    expect(tallMarker - plain).toBeCloseTo(8);
   });
   it('routes the CJK title to the eastAsia (MS Gothic / sans) face', async () => {
     const { runs } = await render(numbering());

@@ -8,7 +8,7 @@ import type { ParagraphLayout } from './layout/types.js';
 // usWin boxes): coordinates are quantized to
 // 0.24pt. Expectations below are the measured nominal geometry, not Canvas
 // font boxes (the deliberately different stub cannot supply the Word rule).
-function render(font: string, size: number, spacing: LineSpacing, grid = false, hostSize?: number, mode = 15, underline = false, markSize = size, wrap = false, localAlias: boolean | 'provided' = false, decoratedLast = false, markCsFace?: string) {
+function render(font: string, size: number, spacing: LineSpacing, grid = false, hostSize?: number, mode = 15, underline = false, markSize = size, wrap = false, localAlias: boolean | 'provided' = false, decoratedLast = false, markCsFace?: string, numbered?: { markerSize: number; empty?: boolean }) {
   let canvasFont = '';
   const context = {
     get font() { return canvasFont; }, set font(v: string) { canvasFont = v; },
@@ -35,9 +35,15 @@ function render(font: string, size: number, spacing: LineSpacing, grid = false, 
     anchorXPt: 80, anchorYPt: 0, anchorXRelativeFrom: 'margin',
     anchorYRelativeFrom: 'margin', anchorYFromPara: false,
     wrapMode: 'square', wrapSide: 'bothSides' } as DocRun);
-  const paragraph = { type: 'paragraph', runs, alignment: 'left', indentLeft: 0,
-    indentRight: 0, indentFirst: 0, spaceBefore: 0, spaceAfter: 0,
-    lineSpacing: spacing, tabStops: [], numbering: null, defaultFontSize: markSize,
+  const paragraph = { type: 'paragraph', runs: numbered?.empty ? [] : runs, alignment: 'left',
+    indentLeft: numbered ? 36 : 0,
+    indentRight: 0, indentFirst: numbered ? -36 : 0, spaceBefore: 0, spaceAfter: 0,
+    lineSpacing: spacing, tabStops: [],
+    numbering: numbered ? {
+      numId: 1, level: 0, format: 'decimal', text: '1.', indentLeft: 36, tab: 36, suff: 'tab',
+      fontFamily: font, fontFacts: { fontSize: numbered.markerSize, fontFamily: font },
+    } : null,
+    defaultFontSize: markSize,
     defaultFontFamily: font, widowControl: false,
     ...(markCsFace ? { paragraphMarkFontFacts: { fontFamily: font, fontFamilyCs: markCsFace,
       fontSize: markSize } } : {}),
@@ -61,6 +67,28 @@ function render(font: string, size: number, spacing: LineSpacing, grid = false, 
   }));
   return layout.pages[0].layers.body.find(n => n.kind === 'paragraph') as ParagraphLayout;
 }
+
+describe('Word specified spacing for numbered lines (#1884)', () => {
+  // Windows Word 16.0 #1884 controls: numbered text lines and empty items keep
+  // the plain partition; a taller marker raises an atLeast line by its ascent.
+  it.each([false, true])('keeps four fifths of an exact line, empty=%s', (empty) => {
+    const paragraph = render('Arial', 10, { rule: 'exact', value: 18, explicit: true },
+      false, undefined, 15, false, 10, false, false, false, undefined, { markerSize: 10, empty });
+    expect(paragraph.lines[0].baselinePt - paragraph.lines[0].bounds.yPt).toBeCloseTo(14.4, 10);
+  });
+
+  it.each([
+    // The stub's 30pt marker ascent (21pt) over the text's design descent.
+    { empty: false, baseline: 21 + 24 - 21 - 434 / 2048 * 10 },
+    // An empty item stands on its mark's own (stub) 3pt descent.
+    { empty: true, baseline: 21 },
+  ])('raises an atLeast line by a taller marker ascent, empty=$empty', ({ empty, baseline }) => {
+    const tall = render('Arial', 10, { rule: 'atLeast', value: 18, explicit: true },
+      false, undefined, 15, false, 10, false, false, false, undefined, { markerSize: 30, empty });
+    const line = tall.lines[0];
+    expect(line.baselinePt - line.bounds.yPt).toBeCloseTo(baseline, 6);
+  });
+});
 
 describe('Word specified spacing for ordinary Latin text', () => {
   it.each([
@@ -148,10 +176,12 @@ describe('Word specified spacing for ordinary Latin text', () => {
     expect(paragraph.lines.map(line => line.baselinePt - line.bounds.yPt)).toEqual([17, 17, 17]);
   });
 
-  it('preserves a paragraph mark with a different script-axis face', () => {
+  it('keeps four fifths beside a same-size paragraph mark of another face', () => {
+    // Windows Word 16.0 #1884: a mark of another face at the text size keeps
+    // the exact partition of the homogeneous controls.
     const paragraph = render('Arial', 10, { rule: 'exact', value: 30, explicit: true },
       false, undefined, 15, false, 10, false, false, false, 'Times New Roman');
-    expect(paragraph.lines[0].baselinePt - 72).toBe(17);
+    expect(paragraph.lines[0].baselinePt - 72).toBe(24);
   });
 
   it('allocates whole grid cells for the explicit single-line diagnostic', () => {
