@@ -2402,6 +2402,12 @@ pub enum ShapeFill {
         alpha: Option<f64>,
         #[serde(skip_serializing_if = "Option::is_none")]
         duotone: Option<Duotone>,
+        /// Ordered CT_Blip effects (§20.1.8.13) of a DrawingML blipFill,
+        /// shared with pictures: alphaModFix is baked at its authored position
+        /// (so `alpha` stays empty) and each duotone owns its palette. VML
+        /// fills have no CT_Blip and leave this empty.
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        blip_effects: Vec<BlipEffect>,
         #[serde(skip_serializing_if = "Option::is_none")]
         vml: Option<VmlImageFill>,
     },

@@ -105,6 +105,7 @@ function collectDescriptorCandidates(
           }),
           ...(shape.fill.alpha === undefined ? {} : { alpha: shape.fill.alpha }),
           ...(shape.fill.duotone === undefined ? {} : { duotone: shape.fill.duotone }),
+          ...(shape.fill.blipEffects?.length ? { blipEffects: shape.fill.blipEffects } : {}),
           ...(shape.fill.vml === undefined ? {} : { vmlFill: shape.fill.vml }),
         },
       );

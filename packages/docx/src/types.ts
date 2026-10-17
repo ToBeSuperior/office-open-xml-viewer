@@ -1201,6 +1201,9 @@ export type ShapeFill =
       tile?: TileInfo;
       alpha?: number;
       duotone?: Duotone;
+      /** Ordered CT_Blip effects (§20.1.8.13) of a DrawingML blipFill; parsed
+       *  fills carry alphaModFix here rather than in {@link alpha}. */
+      blipEffects?: BlipEffect[];
     };
 
 export type ShapeStrokeFill =

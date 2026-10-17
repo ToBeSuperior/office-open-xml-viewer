@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { installImageBitmapShim, installOffscreenCanvasShim } from './render.ts';
 import type { NodeCanvasFactory } from './render.ts';
-import type { Worksheet, Styles, ViewportRange, ImageAnchor } from '@silurus/ooxml-xlsx';
+import type { Worksheet, Styles, ViewportRange, ImageAnchor, BlipEffect } from '@silurus/ooxml-xlsx';
 import { loadSkiaForTests } from './test-imports';
 
 const skia = await loadSkiaForTests();
@@ -99,7 +99,10 @@ function buildSynthetic(): { ws: Worksheet; styles: Styles } {
 const W = 500;
 const H = 400;
 
-async function render(effects: 'full' | 'duotone-opaque' | 'duotone-rgba' | 'raw'): Promise<{ data: Uint8ClampedArray; w: number; h: number }> {
+async function render(
+  effects: 'full' | 'duotone-opaque' | 'duotone-rgba' | 'raw',
+  blipEffects?: BlipEffect[],
+): Promise<{ data: Uint8ClampedArray; w: number; h: number }> {
   const { ws, styles } = buildSynthetic();
   // A mid-gray source leaves enough channel headroom to verify compositing.
   const pngBytes = solidPngBytes(150, 150, 150);
@@ -112,6 +115,7 @@ async function render(effects: 'full' | 'duotone-opaque' | 'duotone-rgba' | 'raw
   if (effects === 'duotone-opaque' || effects === 'duotone-rgba') delete im.alpha;
   if (effects === 'duotone-rgba') im.duotone = { clr1: 'FF000080', clr2: 'FF000080' };
   if (effects === 'raw') { delete im.alpha; delete im.duotone; }
+  if (blipEffects) im.blipEffects = blipEffects;
 
   const { renderWorksheetViewport } = (await import(ORCH_PATH)) as {
     renderWorksheetViewport: (
@@ -153,13 +157,36 @@ function mean(data: Uint8ClampedArray, w: number, x0: number, y0: number, x1: nu
 }
 
 describe.skipIf(!skia)('xlsx blip duotone + alphaModFix (issue #880)', () => {
-  it('renders nonopaque duotone endpoints through the duotone-only XLSX adapter', async () => {
+  it('renders nonopaque duotone endpoints through the XLSX decoder', async () => {
     const image = await render('duotone-rgba');
     const pixel = mean(image.data, image.w, 155, 140, 195, 180);
     expect(pixel.r).toBeCloseTo(128, 0);
     expect(pixel.g).toBe(0);
     expect(pixel.b).toBeCloseTo(127, 0);
   });
+  // Parsed XLSX pictures carry the shared ordered CT_Blip chain (§20.1.8.13):
+  // alphaModFix modulates alpha before a later alpha-sensitive clrChange, and
+  // each duotone applies its own palette in order.
+  it('applies ordered alpha and independent duotone palettes through the orchestrator', async () => {
+    const box = [155, 140, 195, 180] as const;
+    const ordered = await render('raw', [
+      { type: 'alphaModFix', amt: 0.5 },
+      { type: 'colorChange', from: '969696', fromAlpha: 128 / 255, to: 'FF0000', toAlpha: 1, useAlpha: true },
+    ]);
+    const replaced = mean(ordered.data, ordered.w, ...box);
+    expect(replaced.r).toBeCloseTo(255, 0);
+    expect(replaced.g).toBeCloseTo(0, 0);
+    expect(replaced.b).toBeCloseTo(0, 0);
+    const palettes = await render('raw', [
+      { type: 'duotone', clr1: '000000', clr2: 'FF0000' },
+      { type: 'duotone', clr1: '000000', clr2: '00FF00' },
+    ]);
+    const second = mean(palettes.data, palettes.w, ...box);
+    expect(second.r).toBeCloseTo(0, 0);
+    expect(Math.abs(second.g - 45)).toBeLessThanOrEqual(1);
+    expect(second.b).toBeCloseTo(0, 0);
+  });
+
   it('recolours a white photo to pink (duotone) and composites it over the cell (alphaModFix)', async () => {
     const raw = await render('raw');
     const duoOpaque = await render('duotone-opaque');

@@ -873,6 +873,7 @@ fn picture_leaf(order: u64, picture: &drawing_anchors::PictureReference) -> xlsx
             ),
             alpha: None,
             duotone: None,
+            blip_effects: Vec::new(),
         },
         text: None,
     }

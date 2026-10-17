@@ -28,6 +28,7 @@ import {
   type TiffRenderer,
   type SrcRect,
   type Duotone,
+  type BlipPixelEffects,
   type OffscreenFactory,
   type SvgBlobDecoder,
   type ImageResourceOptions,
@@ -46,6 +47,10 @@ import {
   prepareWorksheetMath,
   worksheetHasUncachedMath,
   imageCacheKey,
+  imagePixelTransform,
+  imageAnchorEffectFrame,
+  groupLeafEffectFrame,
+  blipEffectFramePt,
   getGridGeometryForWorksheet,
   applyAutoRowHeights,
   hasPreparedAutoRowHeights,
@@ -97,10 +102,11 @@ interface ImageRef {
    *  metafile, scales the raster up to the full picture frame so the fractional
    *  crop lands correctly (see `metafileRasterSize`). */
   srcRect?: SrcRect | null;
-  /** The picture's `<a:duotone>` recolour (§20.1.8.23), when present. The base
-   *  bitmap is decoded, then recoloured along the `clr1`→`clr2` ramp; the result
-   *  is cached under {@link imageCacheKey}(imagePath, duotone). */
-  duotone?: Duotone | null;
+  /** The picture's decode-time pixel transform: its ordered CT_Blip effects
+   *  (§20.1.8.13) or a lone `<a:duotone>` recolour (§20.1.8.23). The base
+   *  bitmap is decoded, then transformed once; the result is cached under
+   *  {@link imageCacheKey}(imagePath, transform). */
+  duotone?: Duotone | BlipPixelEffects | null;
   /** Chart marker effects are authored paint. If the pixel pipeline cannot
    * apply them, omit the marker instead of substituting the original image. */
   failClosedOnDuotoneFailure?: boolean;
@@ -293,7 +299,7 @@ export async function decodeImageSource(
   widthPt = 0,
   heightPt = 0,
   srcRect: SrcRect | null = null,
-  duotone: Duotone | null = null,
+  duotone: Duotone | BlipPixelEffects | null = null,
   offscreenFactory?: OffscreenFactory,
   failClosedOnDuotoneFailure = false,
   tiff?: TiffRenderer,
@@ -440,23 +446,28 @@ export async function prefetchImages(
       const display = anchorDisplaySize(img, ws, geometry, opts?.cellScale ?? 1);
       // Key by (path + duotone colours) so a recoloured picture is looked up
       // separately from the raw blip (§20.1.8.23).
-      setImageRef(refs, imageCacheKey(img.imagePath, img.duotone), {
+      const effectFrame = imageAnchorEffectFrame(img);
+      const transform = imagePixelTransform(img, effectFrame);
+      // CT_Blip spatial effects are evaluated on the authored physical frame
+      // (see blipEffectFramePt); plain and duotone pictures keep display sizing.
+      const physical = img.blipEffects?.length ? blipEffectFramePt(effectFrame) : null;
+      setImageRef(refs, imageCacheKey(img.imagePath, transform, effectFrame), {
         imagePath: img.imagePath,
         mimeType: img.mimeType,
         svgImagePath: img.svgImagePath,
         // Tagged placement and WMF/EMF raster preparation share the resolved
         // display size, including a retained viewer reference. Untagged models
         // preserve native sizing; decodeImageSource expands crop once.
-        widthPt: img.anchorTag !== undefined
+        widthPt: physical ? physical.widthPt : img.anchorTag !== undefined
           ? (display?.width ?? 0) * (EMU_PER_PX / EMU_PER_PT)
           : img.nativeExtCx > 0 ? img.nativeExtCx / EMU_PER_PT : 0,
-        heightPt: img.anchorTag !== undefined
+        heightPt: physical ? physical.heightPt : img.anchorTag !== undefined
           ? (display?.height ?? 0) * (EMU_PER_PX / EMU_PER_PT)
           : img.nativeExtCy > 0 ? img.nativeExtCy / EMU_PER_PT : 0,
         // An `<a:srcRect>` crop forces the raster decode (native pixel grid)
         // and, for a metafile, the full-frame raster size.
         srcRect: img.srcRect ?? null,
-        duotone: img.duotone ?? null,
+        duotone: transform,
         ...(() => {
           const target = display && opts?.effectiveDpr
             ? sourceRasterTargetSize(
@@ -482,22 +493,25 @@ export async function prefetchImages(
       for (const shape of grp.shapes) {
         if (shape.geom.type === 'image') {
           const display = anchorDisplaySize(grp, ws, geometry, opts?.cellScale ?? 1);
-          setImageRef(refs, imageCacheKey(shape.geom.imagePath, shape.geom.duotone), {
+          const effectFrame = groupLeafEffectFrame(grp, shape);
+          const transform = imagePixelTransform(shape.geom, effectFrame);
+          const physical = shape.geom.blipEffects?.length ? blipEffectFramePt(effectFrame) : null;
+          setImageRef(refs, imageCacheKey(shape.geom.imagePath, transform, effectFrame), {
             imagePath: shape.geom.imagePath,
             mimeType: shape.geom.mimeType,
             svgImagePath: shape.geom.svgImagePath,
             // Resolve the group's display extent, then apply the existing
             // normalized leaf transform. Crop expansion remains in the decoder.
-            widthPt: grp.anchorTag !== undefined
+            widthPt: physical ? physical.widthPt : grp.anchorTag !== undefined
               ? (display?.width ?? 0) * shape.w * (EMU_PER_PX / EMU_PER_PT)
               : grp.nativeExtCx > 0 ? (grp.nativeExtCx * shape.w) / EMU_PER_PT : 0,
-            heightPt: grp.anchorTag !== undefined
+            heightPt: physical ? physical.heightPt : grp.anchorTag !== undefined
               ? (display?.height ?? 0) * shape.h * (EMU_PER_PX / EMU_PER_PT)
               : grp.nativeExtCy > 0 ? (grp.nativeExtCy * shape.h) / EMU_PER_PT : 0,
             // A crop forces the raster decode (native pixel grid for the crop)
             // and, for a metafile, the full-frame raster size.
             srcRect: shape.geom.srcRect ?? null,
-            duotone: shape.geom.duotone ?? null,
+            duotone: transform,
             ...(() => {
               const target = display && opts?.effectiveDpr
                 ? sourceRasterTargetSize(

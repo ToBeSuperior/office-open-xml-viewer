@@ -262,7 +262,8 @@ retained_struct!(ImageAnchor {
     svg_image_path,
     src_rect,
     alpha,
-    duotone
+    duotone,
+    blip_effects
 });
 
 retained_struct!(NumFmt {
@@ -492,13 +493,15 @@ impl RetainedBytes for ShapeGeom {
                 src_rect,
                 alpha,
                 duotone,
+                blip_effects,
             } => 0u64
                 .saturating_add(image_path.heap_bytes())
                 .saturating_add(mime_type.heap_bytes())
                 .saturating_add(svg_image_path.heap_bytes())
                 .saturating_add(src_rect.heap_bytes())
                 .saturating_add(alpha.heap_bytes())
-                .saturating_add(duotone.heap_bytes()),
+                .saturating_add(duotone.heap_bytes())
+                .saturating_add(blip_effects.heap_bytes()),
         }
     }
 }

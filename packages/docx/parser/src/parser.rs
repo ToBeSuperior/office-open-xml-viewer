@@ -1,6 +1,6 @@
 use ooxml_common::blip::{
-    blip_embed_rid, mime_from_ext, parse_blip_alpha, parse_blip_duotone, parse_blip_effects,
-    parse_src_rect, svg_blip_rid, BlipEffect, Duotone,
+    blip_embed_rid, mime_from_ext, parse_blip_duotone, parse_blip_effects, parse_src_rect,
+    svg_blip_rid, BlipEffect, Duotone,
 };
 use ooxml_common::depth::{parse_guarded, DepthGuard};
 use ooxml_common::drawing::{parse_xsd_bool, DrawingGroupSpec, DrawingGroupTransform, DrawingRect};
@@ -13940,8 +13940,10 @@ fn parse_shape_fill(
                     src_rect: parse_src_rect(child),
                     fill_rect,
                     tile,
-                    alpha: parse_blip_alpha(child),
+                    // alphaModFix lives in the ordered chain (baked once).
+                    alpha: None,
                     duotone: parse_blip_duotone_docx(child, theme),
+                    blip_effects: parse_blip_effects_docx(child, theme, media_map),
                 }));
             }
             "noFill" => return FillSpec::NoFill,
