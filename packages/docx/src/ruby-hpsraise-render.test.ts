@@ -109,6 +109,27 @@ async function bodyRubyBaselineDistance(hpsRaisePt?: number, scale = 2): Promise
   return base!.y - ruby!.y;
 }
 
+describe('ruby line ascent (WORD_RUBY_LINE_ASCENT, #1885)', () => {
+  // Windows Word 16.0: the guide's em box stands hpsRaise above the base
+  // baseline; the line ascent is the larger of the base ascent and the guide
+  // top, over the base descent. The stub face has a 0.8/0.2 em box.
+  it.each([
+    { raise: 9, ascent: 9 + 8 },
+    { raise: 2, ascent: 12 * 0.8 + 0.4 },
+    { raise: 0, ascent: 12 * 0.8 },
+  ])('hpsRaise $raise pt with an 8pt guide over 12pt base text', ({ raise, ascent }) => {
+    const model = documentWithRuby(raise);
+    const { canvas } = makeRecordingCanvas();
+    const layout = layoutDocument(model, createLayoutServices(model, { measureContext: canvas.getContext('2d') }));
+    const retained = layout.pages[0].layers.body[0];
+    if (retained.kind !== 'paragraph') throw new Error('expected ruby test paragraph');
+    const line = retained.lines[0];
+    const expectedAscent = Math.max(12 * 0.8, ascent);
+    expect(line.advancePt).toBeCloseTo(expectedAscent + 12 * 0.2, 6);
+    expect(line.baselinePt - line.bounds.yPt).toBeCloseTo(expectedAscent, 6);
+  });
+});
+
 describe('§17.3.3.12 w:hpsRaise ruby geometry', () => {
   it('keeps the non-ruby grid cell count when the annotation fits below the design minimum', () => {
     const advances = [false, true].map((hasRuby) => {

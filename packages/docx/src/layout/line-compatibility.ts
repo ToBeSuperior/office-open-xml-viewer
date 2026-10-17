@@ -73,6 +73,15 @@ export const LIBRARY_SYNTHESIZED_FACE_LINE_GEOMETRY = defineCompatibilityRule({
   description: 'Library evidence boundary (user decision 2026-10-18, issue #1848): the reference catalog holds some installed faces only at weight 400 (MS Mincho, for example), so a bold or italic run of such a family resolves to a native route without a catalog tuple. Catalog absence does not show that the host synthesizes the tuple: a genuine styled face may exist with different vertical tables, and Canvas cannot expose OS/2 usWin, which the Far-East 1.3 x usWin line needs. Instead the span is proved to paint a loaded face. Each installed Office face loaded through an exact local() name sits under a private family holding only that FontFace, so by CSS Fonts Level 4 section 5.2 font matching any weight/style request to that family selects it and the browser synthesizes the missing bold/oblique from it. Fixed probe glyphs of the span\'s script class (国あ for East Asian text, Hxg otherwise; 64px) are rasterized once per route and tuple through the native route and through that private family on this realm\'s Canvas. Pixel-identical non-empty rasters prove the native route paints the same synthesized face, so the catalog geometry of the CSS-matched loaded tuple applies, including its Far-East projection. Any raster or advance difference (a genuine styled face, another file, glyphs from a fallback face) is no proof and the span keeps its own Canvas box, as before. Main thread and worker each rasterize with their own Canvas and FontFaceSet over the same host fonts. Residual risk: a genuine styled face whose glyphs are pixel-identical to the synthesized regular face but whose vertical tables differ.',
 });
 
+export const WORD_RUBY_LINE_ASCENT = defineCompatibilityRule({
+  id: 'word-ruby-line-ascent',
+  evidence: {
+    kind: 'regression-test',
+    reference: 'packages/docx/src/ruby-hpsraise-render.test.ts#hpsRaise $raise pt with an 8pt guide over 12pt base text',
+  },
+  description: 'Windows Word 16.0 build 16.0.20430 #1885 controls: Latin (Arial 10pt), MS Mincho 10.5pt and ruby-only lines with MS Mincho guides at hps 6/10/14/20 (3-10pt), hpsRaise 0/10/18/20/24/28/30/38 and base 10/20pt, under single, auto 1.5, exact 18 and atLeast 18 spacing. ECMA-376 section 17.3.3.12 defines hpsRaise as the distance between base and guide text; Word places the guide baseline hpsRaise above the base baseline and the line ascent is max(base ascent, hpsRaise + guide size), over the base line descent (an MS Mincho base keeps its Far-East 1.3 em box sides). Automatic multiples pin the baseline to the top like text lines, exact 18pt lines keep four fifths, and atLeast lines keep the line descent above the bottom. Every measured line matches within 0.3pt. Yu Mincho controls agree where the host has the face; a missing face uses its painting fallback (LIBRARY_ABSENT_FACE_FALLBACK_LINE_BOX). Ruby without hpsRaise is unmeasured and keeps the retained ink-derived additive reserve.',
+});
+
 export const WORD_KERN_THRESHOLD_AUTHORITY = defineCompatibilityRule({
   id: 'word-kern-threshold-authority',
   evidence: {

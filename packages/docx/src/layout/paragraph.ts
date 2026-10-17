@@ -1659,8 +1659,13 @@ function plannedBaselinePt(
   const visibleAscentPt = raw.visibleAscent ?? raw.ascent;
   const visibleDescentPt = raw.visibleDescent ?? raw.descent;
   const visibleNaturalPt = visibleAscentPt + visibleDescentPt;
+  // Windows Word 16.0 #1885 controls: ruby lines under automatic multiples
+  // keep the same top-pinned baseline as text lines (the guide's top is part
+  // of the line's natural box, WORD_RUBY_LINE_ASCENT).
+  // Lines without ruby in a ruby paragraph (its uniform reserve) are
+  // unmeasured and stay centred.
   const autoMultiple = context.lineSpacing?.rule === 'auto'
-    && !context.hasRuby
+    && (!context.hasRuby || raw.hasRuby === true)
     && !context.lineGrid.active;
   const compressedAuto = autoMultiple && (context.lineSpacing?.value ?? 1) < 1;
   const centerBoxPt = autoMultiple && !compressedAuto
@@ -2546,9 +2551,28 @@ function planMeasuredLines(
           paragraphMarkShapeInput,
           markerAscentPt === undefined ? undefined : Math.max(markerAscentPt, raw.ascent) + raw.descent)
       : null;
+    // Windows Word 16.0 #1885 controls (exact 18pt; Latin and MS Mincho base
+    // text; 3-10pt guides raised 0-19pt): a ruby line keeps the four-fifths
+    // exact partition of WORD_SPECIFIED_TEXT_LINE_BOX, within its 12-30pt
+    // evidence interval; the guide may overhang the line top.
+    const exactRubyLine = !specified && raw.hasRuby === true
+      && context.lineSpacing?.rule === 'exact' && context.lineSpacing.value >= 12
+      && context.lineSpacing.value <= 30
+      && (compatibilityMode === 14 || compatibilityMode === 15)
+      && !context.lineGrid.active && raw.topY === undefined;
+    // Under atLeast the added leading falls before the line, which keeps its
+    // own descent above the bottom (atLeast 18pt, the same controls).
+    const atLeastRubyLine = !specified && raw.hasRuby === true
+      && context.lineSpacing?.rule === 'atLeast'
+      && (compatibilityMode === 14 || compatibilityMode === 15)
+      && !context.lineGrid.active && raw.topY === undefined;
     const baselinePt = specified
       ? measuredLine.topYPt + specified.baselineOffsetPt
-      : plannedBaselinePt(measuredLine, context);
+      : exactRubyLine
+        ? measuredLine.topYPt + context.lineSpacing!.value * 4 / 5
+        : atLeastRubyLine
+          ? measuredLine.topYPt + measuredLine.advancePt - (raw.visibleDescent ?? raw.descent)
+          : plannedBaselinePt(measuredLine, context);
     let lineStartOffset = Number.POSITIVE_INFINITY;
     let lineEndOffset = sourceOffset;
     const segments: MeasuredLinePlanSegment[] = [];

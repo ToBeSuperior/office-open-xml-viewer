@@ -12,6 +12,7 @@ import {
   wordSnapToCharsEastAsianCellCount,
   wordIdeographicSpaceLineEndAllowanceCount,
   wordJustifiedInterwordCompressionFactor,
+  WORD_RUBY_LINE_ASCENT,
 } from '../layout/line-compatibility.js';
 import {
   type LayoutImageSeg,
@@ -1579,9 +1580,10 @@ export function performTextSegmentBox(
   // height; native reference sides are policy geometry only. Ruby and an
   // authored baseline position compose additional boxes outside either
   // simple OpenType projection, so retain measured sides for those inputs.
+  // A ruby base keeps its own design sides: the guide only raises the ascent
+  // (WORD_RUBY_LINE_ASCENT below).
   const designOwnsSides =
     (s.resolvedResourceVerticalMetric || s.referenceFontVerticalMetric) &&
-    !s.ruby &&
     (s.position ?? 0) === 0 &&
     s.resolvedDesignAscentRatio != null &&
     s.resolvedDesignDescentRatio != null;
@@ -1593,7 +1595,7 @@ export function performTextSegmentBox(
     else if (positionPx < 0) descent -= positionPx;
   }
   if (s.ruby && (!s.textBoxLineFloor || s.textBoxVertical)) {
-    ascent += rubyAscentReservePx(
+    const reserve = rubyAscentReservePx(
       s.ruby.fontSizePt,
       s.ruby.hpsRaisePt,
       scale,
@@ -1601,6 +1603,14 @@ export function performTextSegmentBox(
       ctx,
       fontFamilyClasses,
     );
+    void WORD_RUBY_LINE_ASCENT;
+    // WORD_RUBY_LINE_ASCENT: with an authored hpsRaise the guide's em box
+    // stands that far above the base baseline, and the line's ascent is the
+    // larger of the base ascent and the guide's top. Without hpsRaise the
+    // retained ink-derived reserve keeps its established additive form.
+    ascent = s.ruby.hpsRaisePt != null
+      ? Math.max(ascent, reserve + s.ruby.fontSizePt * scale)
+      : ascent + reserve;
   }
   return { width, height: s.fontSize, ascent, descent };
 }
