@@ -3,7 +3,9 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const distDir = resolve(process.argv[2] ?? 'dist');
-const implementationMarker = 'packages/core/src/chart/three-d-renderer.ts';
+// Prefix of three-d-renderer.ts and its split three-d-renderer-*.ts modules
+// (#1857): none of them may reach a main entry.
+const implementationMarker = 'packages/core/src/chart/three-d-renderer';
 
 async function dependencyClosure(entry) {
   const pending = [join(distDir, entry)];
