@@ -81,7 +81,9 @@ function exactPaths(...paths) {
 /**
  * Exact allowances for legitimate tokens. Each entry names its rule, the
  * files it covers and the only token spellings it admits there; any other
- * match of the same rule on that line is still reported.
+ * match of the same rule on that line is still reported. Citation allowances
+ * are `commentOnly`: they admit the token only inside a comment, so the same
+ * spelling as a wire value or a runtime comparison is still reported.
  */
 export const ALLOWED_TOKENS = [
   // Core's CFB container sniffer rejects a raw .doc/.xls/.ppt with the typed
@@ -91,6 +93,7 @@ export const ALLOWED_TOKENS = [
     rule: 'legacy-binary-spec',
     path: exactPaths('packages/core/src/errors/cfb-sniff.ts'),
     token: /^(?:MS-DOC|MS-XLS|MS-PPT|BIFF)$/,
+    commentOnly: true,
   },
   {
     rule: 'legacy-binary-structure',
@@ -107,31 +110,67 @@ export const ALLOWED_TOKENS = [
   },
   // XLSX may cite the Excel binary specifications as Excel-behaviour
   // evidence for SpreadsheetML semantics.
-  { rule: 'legacy-binary-spec', path: /^packages\/xlsx\//, token: /^MS-XLSB?$/ },
+  { rule: 'legacy-binary-spec', path: /^packages\/xlsx\//, token: /^MS-XLSB?$/, commentOnly: true },
   // Word-behaviour evidence for WordprocessingML rules: Word's own line
   // spacing representation (LSPD) and its page-size limit.
   {
     rule: 'legacy-binary-spec',
     path: exactPaths(
-      'packages/docx/src/layout/line-compatibility.ts',
       'packages/docx/src/layout/table-acquisition.ts',
       'packages/docx/src/line-box-height.test.ts',
     ),
     token: /^MS-DOC$/,
+    commentOnly: true,
+  },
+  // The same LSPD evidence as a compatibility-rule reference string.
+  {
+    rule: 'legacy-binary-spec',
+    path: exactPaths('packages/docx/src/layout/line-compatibility.ts'),
+    token: /^MS-DOC$/,
+    commentOnly: true,
+    evidenceLine: /^\s*reference: '\[MS-DOC\] §[\d.]+',$/,
   },
   {
     rule: 'legacy-binary-structure',
     path: exactPaths('packages/docx/src/layout/table-acquisition.ts'),
     token: /^sprmS[XY]aPage$/,
+    commentOnly: true,
   },
 ];
 
+/**
+ * Column where a comment begins on this line, or Infinity. A line that
+ * continues a block or doc comment (`*`, `/*`, `//`, `///`) is comment from
+ * its first column; otherwise a `//` outside a string literal starts one.
+ */
+export function commentStart(line) {
+  const trimmed = line.trimStart();
+  if (/^(?:\/\/|\/\*|\*)/.test(trimmed)) return line.length - trimmed.length;
+  let quote = null;
+  for (let i = 0; i < line.length - 1; i++) {
+    const char = line[i];
+    if (quote) {
+      if (char === '\\') i++;
+      else if (char === quote) quote = null;
+    } else if (char === '"' || char === "'" || char === '`') {
+      quote = char;
+    } else if (char === '/' && line[i + 1] === '/') {
+      return i;
+    } else if (char === '/' && line[i + 1] === '*') {
+      return i;
+    }
+  }
+  return Infinity;
+}
+
 function lineViolations(path, line) {
   const rules = [];
+  const comment = commentStart(line);
   for (const rule of RULES) {
     const global = new RegExp(rule.pattern.source, `${rule.pattern.flags.replace('g', '')}g`);
     const unexplained = [...line.matchAll(global)].some((match) => !ALLOWED_TOKENS.some((allowance) =>
-      allowance.rule === rule.id && allowance.path.test(path) && allowance.token.test(match[0])));
+      allowance.rule === rule.id && allowance.path.test(path) && allowance.token.test(match[0])
+      && (!allowance.commentOnly || match.index >= comment || allowance.evidenceLine?.test(line) === true)));
     if (unexplained) rules.push(rule.id);
   }
   return rules;

@@ -119,6 +119,21 @@ test('a manifest Cargo cannot read fails closed', () => {
   assert.match(text, /^cargo metadata failed/);
 });
 
+test('citation allowances admit the token only inside comments', () => {
+  const at = (path, text) => findViolations([{ path, text }]).map((v) => v.rule);
+  const policy = 'packages/xlsx/src/internal/source-policy.ts';
+  assert.deepEqual(at(policy, '// Excel stores this per [MS-XLS] 2.4.1.'), []);
+  assert.deepEqual(at(policy, '/**\n * the [MS-XLSB] record keeps the same field.\n */'), []);
+  assert.deepEqual(at(policy, "export interface SourceFacts { sourceFormat?: 'MS-XLS'; }"), ['legacy-binary-spec']);
+  assert.deepEqual(at(policy, "export const binary = (f: string) => f === 'MS-XLS'; // [MS-XLS]"), ['legacy-binary-spec']);
+  const table = 'packages/docx/src/layout/table-acquisition.ts';
+  assert.deepEqual(at(table, '/**\n * (MS-DOC 2.6.4 sprmSXaPage / sprmSYaPage)\n */'), []);
+  assert.deepEqual(at(table, "const limit = source === 'MS-DOC' ? sprmSXaPage : 0;"), ['legacy-binary-spec', 'legacy-binary-structure']);
+  const rules = 'packages/docx/src/layout/line-compatibility.ts';
+  assert.deepEqual(at(rules, "const rule = {\n  reference: '[MS-DOC] §2.9.146',\n};"), []);
+  assert.deepEqual(at(rules, "const binary = format === 'MS-DOC';"), ['legacy-binary-spec']);
+});
+
 test('allows the pre-existing generic CFB rejection and unrelated "legacy" wording', () => {
   assert.deepEqual(rules("throw new OoxmlError('legacy-binary-format', 'a legacy binary .doc file');"), []);
   assert.deepEqual(rules('// legacy VML shapes and the legacy chart family fallback'), []);
