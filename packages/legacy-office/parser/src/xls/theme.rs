@@ -335,6 +335,11 @@ fn preflight(bytes: &[u8]) -> Result<usize, String> {
                 && u16_at(bytes, i + 20).is_ok_and(|n| i + 22 + usize::from(n) == bytes.len())
         })
         .ok_or_else(|| unsupported("missing BIFF theme ZIP directory"))?;
+    // A later EOCD signature (inside this comment) could steer the reader's
+    // backward search to an unvalidated decoy directory.
+    if bytes[end + 4..].windows(4).any(|sig| sig == b"PK\x05\x06") {
+        return Err(unsupported("ambiguous BIFF theme ZIP directory"));
+    }
     let count = usize::from(u16_at(bytes, end + 10)?);
     if count > MAX_ENTRIES {
         return Err(crate::rejection::resource(

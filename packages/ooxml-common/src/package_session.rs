@@ -14,7 +14,7 @@ use crc32fast::Hasher;
 use flate2::read::DeflateDecoder;
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
-use std::io::{Cursor, Read};
+use std::io::Read;
 use std::rc::Rc;
 use zip::CompressionMethod;
 
@@ -334,7 +334,7 @@ impl PackageSession {
             max_archive_entries,
         );
         let _scope = governor.scope("open");
-        let mut archive = bounded_zip::open_validated_cursor(Cursor::new(source.as_slice()))?;
+        let mut archive = bounded_zip::open_validated_slice(source.as_slice())?;
 
         let mut entries = Vec::with_capacity(archive.len());
         let mut by_name = HashMap::with_capacity(archive.len());
@@ -1395,7 +1395,7 @@ impl Drop for PackageEntryStream {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
+    use std::io::{Cursor, Write};
     use zip::write::SimpleFileOptions;
 
     fn package(entries: &[(&str, &[u8], CompressionMethod)]) -> Vec<u8> {

@@ -42,6 +42,11 @@ fn policy(blob: &[u8], work_budget: &mut usize) -> Result<Policy, String> {
             .then_some(at)
         })
         .ok_or_else(unreadable)?;
+    // The ZIP reader searches backwards for the last EOCD signature; one in
+    // this record's comment could steer it to an unvalidated decoy directory.
+    if blob[eocd + 4..].windows(4).any(|sig| sig == b"PK\x05\x06") {
+        return Err(unreadable());
+    }
     let mut count = u16_at(eocd + 8).ok_or_else(unreadable)? as u64;
     let mut directory_end = eocd;
     let mut relative_offset = u32_at(eocd + 16).ok_or_else(unreadable)? as u64;
@@ -261,6 +266,20 @@ mod tests {
         let error = super::open(&twice, &mut 1_000)
             .err()
             .expect("duplicate field rejected");
+        assert!(error.starts_with("UNSUPPORTED:"), "{error}");
+    }
+
+    #[test]
+    fn eocd_signature_in_the_comment_is_rejected() {
+        use std::io::Write;
+        let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        writer
+            .start_file("a.xml", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        writer.write_all(b"a").unwrap();
+        writer.set_comment("decoy PK\u{5}\u{6} record").unwrap();
+        let zip = writer.finish().unwrap().into_inner();
+        let error = super::open(&zip, &mut 1_000).err().expect("decoy rejected");
         assert!(error.starts_with("UNSUPPORTED:"), "{error}");
     }
 }

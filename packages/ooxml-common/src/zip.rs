@@ -56,6 +56,10 @@ struct ArchivePreflight {
     entry_count: u64,
     entries: Vec<PreflightEntryIdentity>,
     archive_base: u64,
+    /// Two-byte rewrites applied only to the copy handed to the ZIP reader:
+    /// NTFS extra-field ids (central and local) and EOCD signatures inside
+    /// the validated record's comment. See [`reader_bytes`].
+    reader_patches: Vec<(usize, u16)>,
 }
 
 #[derive(Debug)]
@@ -789,6 +793,7 @@ fn inspect_central_directory(
     // folding, and (RFC 3986 §6.2.2) a percent-encoded unreserved character
     // equals the character. Keys follow `rels::part_name_equivalence_key`.
     let mut folded_names = HashMap::<String, NameRange>::with_capacity(capacity);
+    let mut ntfs_extra_ids = Vec::new();
     walk_central_directory(data, directory, |entry| {
         let range = entry.name;
         let name = &data[range.start..range.start + range.len];
@@ -818,6 +823,19 @@ fn inspect_central_directory(
         }
         let validated =
             validate_local_entry(data, directory, entry).ok_or(CandidateError::Malformed)?;
+        collect_ntfs_extra_ids(
+            &data[entry.extra.start..entry.extra.start + entry.extra.len],
+            entry.extra.start,
+            &mut ntfs_extra_ids,
+        );
+        let local = validated.local_header_start as usize;
+        let local_extra_start = local + 30 + validated.name.len;
+        let local_extra_len = le_u16(data, local + 28).ok_or(CandidateError::Malformed)? as usize;
+        collect_ntfs_extra_ids(
+            &data[local_extra_start..local_extra_start + local_extra_len],
+            local_extra_start,
+            &mut ntfs_extra_ids,
+        );
         entries.push(PreflightEntryIdentity {
             name: data[validated.name.start..validated.name.start + validated.name.len].into(),
             central_header_start: validated.central_header_start,
@@ -859,7 +877,52 @@ fn inspect_central_directory(
         entry_count: directory.entry_count,
         entries,
         archive_base: directory.archive_base,
+        reader_patches: ntfs_extra_ids
+            .into_iter()
+            .map(|at| (at, OPAQUE_EXTRA_FIELD_ID))
+            .collect(),
     })
+}
+
+/// NTFS extra field id (APPNOTE 4.5.5).
+const NTFS_EXTRA_FIELD_ID: u16 = 0x000a;
+/// An extra-field id the ZIP reader does not interpret (see [`ArchivePreflight`]).
+const OPAQUE_EXTRA_FIELD_ID: u16 = 0x7a7a;
+
+/// Record the header-id offset of every NTFS extra field in `extra`
+/// (starting at `base` in the package). OPC never uses this metadata. The
+/// ZIP reader parses it and rejects any NTFS field that is not exactly one
+/// 32-byte timestamp attribute, although APPNOTE 4.5.5 allows a sequence of
+/// attributes; the reader therefore sees these ids as opaque instead.
+fn collect_ntfs_extra_ids(extra: &[u8], base: usize, out: &mut Vec<usize>) {
+    let mut cursor = 0;
+    while let (Some(id), Some(len)) = (le_u16(extra, cursor), le_u16(extra, cursor + 2)) {
+        if id == NTFS_EXTRA_FIELD_ID {
+            out.push(base + cursor);
+        }
+        cursor += 4 + len as usize;
+    }
+}
+
+/// The bytes handed to the ZIP reader: `data` itself, or a copy with the
+/// preflight's reader patches applied. NTFS extra-field ids become an id the
+/// reader ignores, and an EOCD signature inside the validated record's
+/// comment is masked so the reader's backward search cannot pick a decoy
+/// directory. Lengths, offsets and payloads are unchanged, and the archive
+/// comment is never read, so every validated identity and result holds.
+fn reader_bytes<'a>(data: &'a [u8], preflight: &ArchivePreflight) -> std::borrow::Cow<'a, [u8]> {
+    if preflight.reader_patches.is_empty() {
+        return std::borrow::Cow::Borrowed(data);
+    }
+    let mut copy = data.to_vec();
+    neutralize_ntfs_extra_ids(&mut copy, preflight);
+    std::borrow::Cow::Owned(copy)
+}
+
+fn neutralize_ntfs_extra_ids(data: &mut [u8], preflight: &ArchivePreflight) {
+    for &(at, value) in &preflight.reader_patches {
+        data[at..at + 2].copy_from_slice(&value.to_le_bytes());
+    }
 }
 
 /// Validate the legal EOCD tail and walk its central directory before
@@ -893,12 +956,26 @@ fn inspect_archive(data: &[u8]) -> Result<Option<ArchivePreflight>, String> {
             continue;
         }
         if let Some(preflight) = inspect_eocd_candidate(data, eocd)? {
-            if resolved.replace(preflight).is_some() {
+            if resolved.replace((eocd, preflight)).is_some() {
                 return Err("ambiguous ZIP end-of-central-directory records".to_string());
             }
         }
     }
-    Ok(resolved)
+    let Some((eocd, mut preflight)) = resolved else {
+        return Ok(None);
+    };
+    // The ZIP reader searches backwards for the last EOCD signature and may
+    // index any directory it describes. Mask every signature inside the
+    // validated record's comment in the reader's copy.
+    let comment_start = eocd + 22;
+    preflight.reader_patches.extend(
+        data[comment_start..]
+            .windows(4)
+            .enumerate()
+            .filter(|(_, bytes)| *bytes == EOCD_SIGNATURE.to_le_bytes())
+            .map(|(offset, _)| (comment_start + offset + 2, 0)),
+    );
+    Ok(Some(preflight))
 }
 
 /// Enforce the OPC package-wide part identity constraint before consumers can
@@ -920,12 +997,20 @@ fn validate_archive_item_names<R: std::io::Read + std::io::Seek>(
 /// preflight, then revalidate the complete consumer index before returning it.
 ///
 /// This is the single construction path for both legacy owned archives and
-/// package sessions. It deliberately returns raw container errors; format
+/// package sessions (`open_validated_slice` / `open_validated_zip`). It deliberately returns raw container errors; format
 /// facades own their historical user-visible error context.
-pub(crate) fn open_validated_cursor<T: AsRef<[u8]>>(
+pub(crate) fn open_validated_slice(
+    data: &[u8],
+) -> Result<zip::ZipArchive<std::io::Cursor<std::borrow::Cow<'_, [u8]>>>, String> {
+    let preflight = preflight_archive_limits(data)?;
+    let bytes = reader_bytes(data, &preflight);
+    open_preflighted(preflight, std::io::Cursor::new(bytes))
+}
+
+fn open_preflighted<T: AsRef<[u8]>>(
+    preflight: ArchivePreflight,
     cursor: std::io::Cursor<T>,
 ) -> Result<zip::ZipArchive<std::io::Cursor<T>>, String> {
-    let preflight = preflight_archive_limits(cursor.get_ref().as_ref())?;
     let mut archive = zip::ZipArchive::with_config(preflight.read_config(), cursor)
         .map_err(|error| error.to_string())?;
     preflight.validate_archive_item_names(&mut archive)?;
@@ -937,7 +1022,10 @@ pub(crate) fn open_validated_cursor<T: AsRef<[u8]>>(
 pub fn open_validated_zip(
     data: Vec<u8>,
 ) -> Result<zip::ZipArchive<std::io::Cursor<Vec<u8>>>, String> {
-    open_validated_cursor(std::io::Cursor::new(data))
+    let mut data = data;
+    let preflight = preflight_archive_limits(&data)?;
+    neutralize_ntfs_extra_ids(&mut data, &preflight);
+    open_preflighted(preflight, std::io::Cursor::new(data))
 }
 
 /// Preserve the machine-readable resource envelope while adding the historical
@@ -1114,7 +1202,7 @@ pub fn extract_zip_entry(
         max_archive_entry_bytes,
         max_total_inflated_bytes,
     );
-    let mut archive = open_validated_cursor(std::io::Cursor::new(data)).map_err(|error| {
+    let mut archive = open_validated_slice(data).map_err(|error| {
         if error.starts_with("OOXML_RESOURCE_LIMIT:") {
             error
         } else {
@@ -1568,6 +1656,70 @@ mod tests {
         assert_eq!(violation["metric"], "actual-inflated-bytes");
         assert_eq!(violation["limit"], 4);
         assert_eq!(violation["observed"], 5);
+    }
+
+    #[test]
+    fn eocd_signature_in_the_archive_comment_cannot_select_a_decoy_directory() {
+        // The comment holds a decoy EOCD describing one directory entry at
+        // offset 0 (a local header), which the reader alone would try first.
+        let mut bytes = zip_bytes(false);
+        let eocd = last_signature(&bytes, EOCD_SIGNATURE);
+        let mut decoy = EOCD_SIGNATURE.to_le_bytes().to_vec();
+        decoy.extend_from_slice(&[0, 0, 0, 0, 1, 0, 1, 0]);
+        decoy.extend_from_slice(&46u32.to_le_bytes());
+        decoy.extend_from_slice(&0u32.to_le_bytes());
+        decoy.extend_from_slice(&0u16.to_le_bytes());
+        bytes[eocd + 20..eocd + 22].copy_from_slice(&(decoy.len() as u16).to_le_bytes());
+        bytes.extend_from_slice(&decoy);
+        let mut archive = open_validated_zip(bytes.clone()).expect("validated directory");
+        assert_eq!(archive.len(), 2);
+        assert_eq!(read_zip_bytes(&mut archive, "word/b.xml").unwrap(), b"b");
+        let borrowed = open_validated_slice(&bytes).expect("validated directory");
+        assert_eq!(borrowed.len(), 2);
+    }
+
+    #[test]
+    fn extended_ntfs_extra_fields_stay_opaque_metadata() {
+        // APPNOTE 4.5.5: reserved u32, then attribute records. One timestamp
+        // record plus a further (unknown) attribute is valid NTFS metadata
+        // that OPC ignores; the package must open and read unchanged.
+        let mut ntfs = 0x000au16.to_le_bytes().to_vec();
+        let mut body = vec![0u8; 4];
+        body.extend_from_slice(&1u16.to_le_bytes());
+        body.extend_from_slice(&24u16.to_le_bytes());
+        body.extend_from_slice(&[0u8; 24]);
+        body.extend_from_slice(&2u16.to_le_bytes());
+        body.extend_from_slice(&0u16.to_le_bytes());
+        ntfs.extend_from_slice(&(body.len() as u16).to_le_bytes());
+        ntfs.extend_from_slice(&body);
+        let bytes = with_central_extra(&zip_bytes(false), &ntfs);
+        assert!(zip::ZipArchive::new(Cursor::new(bytes.as_slice())).is_err());
+        let mut archive = open_validated_zip(bytes.clone()).expect("opaque NTFS metadata");
+        assert_eq!(read_zip_bytes(&mut archive, "word/a.xml").unwrap(), b"a");
+        let mut borrowed = open_validated_slice(&bytes).expect("borrowed open");
+        assert_eq!(read_zip_bytes(&mut borrowed, "word/a.xml").unwrap(), b"a");
+    }
+
+    /// Splice `extra` into the first central-directory entry.
+    fn with_central_extra(zip: &[u8], extra: &[u8]) -> Vec<u8> {
+        let central = last_signature(zip, CENTRAL_DIRECTORY_HEADER_SIGNATURE);
+        let central = zip[..=central]
+            .windows(4)
+            .position(|w| w == CENTRAL_DIRECTORY_HEADER_SIGNATURE.to_le_bytes())
+            .unwrap();
+        let eocd = last_signature(zip, EOCD_SIGNATURE);
+        let name_len = le_u16(zip, central + 28).unwrap() as usize;
+        let extra_len = le_u16(zip, central + 30).unwrap() as usize;
+        let at = central + 46 + name_len + extra_len;
+        let mut out = zip[..at].to_vec();
+        out.extend_from_slice(extra);
+        out.extend_from_slice(&zip[at..]);
+        out[central + 30..central + 32]
+            .copy_from_slice(&((extra_len + extra.len()) as u16).to_le_bytes());
+        let eocd = eocd + extra.len();
+        let size = le_u32(&out, eocd + 12).unwrap() + extra.len() as u32;
+        out[eocd + 12..eocd + 16].copy_from_slice(&size.to_le_bytes());
+        out
     }
 
     #[test]
