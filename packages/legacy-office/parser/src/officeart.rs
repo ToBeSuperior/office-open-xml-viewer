@@ -4,6 +4,7 @@ use std::ops::Range;
 pub(crate) mod geometry;
 #[cfg(any(feature = "direct-doc", feature = "direct-ppt"))]
 pub(crate) mod gradient;
+mod inflate;
 mod metafile;
 pub(crate) mod paint;
 pub(crate) mod preset;

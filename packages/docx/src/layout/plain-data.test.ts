@@ -156,6 +156,30 @@ describe('plain layout data snapshots', () => {
       .toThrow(/structured-clone-safe plain data/i);
   });
 
+  it('freezes and checks a numeric-looking non-index array property', () => {
+    const list = Object.assign([1], { '-1': { value: 1 } });
+    deepFreezePlainData(list);
+    expect(Object.isFrozen(list['-1'])).toBe(true);
+
+    const invalid = Object.assign([1], { '-1': { value: Number.NaN } });
+    expect(() => deepFreezePlainData(invalid)).toThrow(/finite/);
+  });
+
+  it('shares block layouts copied by an earlier snapshot', () => {
+    // A table cell holds a sealed paragraph layout; the first snapshot copies
+    // it (sealing alone is not verification), later snapshots share the copy.
+    const paragraph = deepFreezePlainData({ kind: 'paragraph', lines: [{ xPt: 1 }] });
+    const input = snapshotPlainData({ cells: [{ blocks: [{ layout: paragraph }] }] }, 'layout payload');
+    const copied = input.cells[0]!.blocks[0]!.layout;
+    expect(copied).not.toBe(paragraph);
+
+    const result = snapshotPlainData({ rows: [{ blocks: [{ layout: copied, offsetPt: 2 }] }] }, 'layout payload');
+    expect(result.rows[0]!.blocks[0]!.layout).toBe(copied);
+    expect(structuredClone(result)).toEqual({
+      rows: [{ blocks: [{ layout: { kind: 'paragraph', lines: [{ xPt: 1 }] }, offsetPt: 2 }] }],
+    });
+  });
+
   it('treats sealed builder-owned data as already processed', () => {
     const child = { value: 1 };
     const sealed = sealPlainData({ first: child, second: child }, 'layout payload');

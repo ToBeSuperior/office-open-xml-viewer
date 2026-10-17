@@ -139,7 +139,17 @@ it.each(['doc', 'ppt'] as const)('rejects malformed WMF data before EOF through 
   await expect(family === 'doc' ? docPictures(doc(bytes)) : pptPictures(ppt(bytes, false, 'wmf'))).rejects.toMatchObject({ code: 'unsupported-content', details: { format: family, reason: 'source-subset' } });
 });
 
-it.each(['doc', 'ppt'] as const)('rejects an EMF expansion-size bomb through %s', async family => {
+// The cap is charged by produced bytes: a declaration alone never admits or
+// rejects a picture. A tiny stream declaring 0xffffffff bytes is a structural
+// size mismatch, while a stream that actually inflates past the 32 MiB policy
+// is a resource limit.
+it.each(['doc', 'ppt'] as const)('rejects a tiny EMF stream declaring an oversized expansion through %s as a size mismatch', async family => {
   const bytes = blip('emf', emf, true, false, 0xffffffff);
+  await expect(family === 'doc' ? docPictures(doc(bytes)) : pptPictures(ppt(bytes, true, 'emf'))).rejects.toMatchObject({ code: 'unsupported-content', details: { format: family, reason: 'source-subset' } });
+});
+
+it.each(['doc', 'ppt'] as const)('rejects an EMF stream whose actual inflation exceeds the cap through %s', async family => {
+  const inflated = new Uint8Array(32 * 1024 * 1024 + 1);
+  const bytes = blip('emf', inflated, true, false);
   await expect(family === 'doc' ? docPictures(doc(bytes)) : pptPictures(ppt(bytes, true, 'emf'))).rejects.toMatchObject({ message: 'LEGACY_RESOURCE_LIMIT:OfficeArt metafile byte budget exceeded' });
 });
