@@ -316,6 +316,8 @@ export {
 export {
   chartImageFillKey,
   chartImageFillPixelTransform,
+  chartImageFillHostKey,
+  type ChartImageFillHost,
   chartImageFillUsageSize,
   collectChartImageFillUsages,
   collectChartImageFillUsagesForCharts,
@@ -437,6 +439,7 @@ export {
   type BlipPixelEffects,
 } from './image/blip-effects';
 export type { BlendMode } from './image/blip-fill';
+export { imageEffectError } from './image/image-effect-error';
 export {
   getCachedDuotoneBitmapByPath,
   duotoneCacheKey,

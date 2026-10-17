@@ -543,8 +543,14 @@ function evaluateBlipPixels(buf: EffectBuffer, value: BlipPixelEffects, runtime:
       }
       case 'fill':
         currentContext.charge(fillWork(effect.fill, buf, value, runtime));
-        buf = { ...effectFillPixels(effect.fill, buf, value.emuPerPixelX ?? 9525,
-          value.emuPerPixelY ?? 9525, runtime, value.hostRotation), frame: buf.frame }; d = buf.data; break;
+      {
+        // Native ImageData exposes data/width/height as prototype accessors,
+        // so an object spread would drop them; copy the fields explicitly.
+        const filled = effectFillPixels(effect.fill, buf, value.emuPerPixelX ?? 9525,
+          value.emuPerPixelY ?? 9525, runtime, value.hostRotation);
+        buf = { data: filled.data, width: filled.width, height: filled.height, frame: buf.frame };
+        d = buf.data; break;
+      }
       case 'glow': case 'relativeOffset': case 'softEdge': case 'presetShadow': break; // expanded above
 
       case 'alphaMod': {

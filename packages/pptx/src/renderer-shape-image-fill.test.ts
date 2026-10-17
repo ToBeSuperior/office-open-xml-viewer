@@ -208,6 +208,26 @@ describe('PPTX ordinary-shape image fills', () => {
     expect(textRuns.mock.calls.map(([run]) => run.text).join('')).toBe('Picture fill text');
   });
 
+  it('rejects a tiled effect fill whose source inspection fails natively instead of omitting it', async () => {
+    mocks.decode.mockClear();
+    const { canvas } = recordingCanvas();
+    const effected = {
+      ...shape('ppt/media/effected-tile.png'),
+      fill: {
+        fillType: 'image', imagePath: 'ppt/media/effected-tile.png', mimeType: 'image/png', dpi: 96,
+        tile: { algn: 'tl', tx: 0, ty: 0, sx: 1, sy: 1, flip: 'none' },
+        blipEffects: [{ type: 'grayscale' }],
+      },
+    };
+    await expect(renderSlide(canvas, {
+      index: 0, slideNumber: 1, background: null, elements: [effected],
+    } as unknown as Slide, 9_144_000, 6_858_000, {
+      width: 960, dpr: 1,
+      fetchImage: vi.fn(async () => { throw new TypeError('native read failed'); }),
+    })).rejects.toMatchObject({ code: 'unsupported-image-effect' });
+    expect(mocks.decode).not.toHaveBeenCalled();
+  });
+
   it.each([false, true])('keeps a shared tile native-sized regardless of consumer order (%s)', async (reversed) => {
     class TileCanvas {
       getContext() { return recordingCanvas().ctx; }

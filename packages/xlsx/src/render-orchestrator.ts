@@ -17,6 +17,7 @@ import {
   sourceRasterTargetSize,
   isOoxmlDecodedImageLimitError,
   OoxmlResourceLimitError,
+  OoxmlError,
   isTiffDecodeError,
   isOptionalImageCodecUnavailableError,
   EMU_PER_PT,
@@ -748,7 +749,10 @@ export async function prefetchImages(
           return;
         }
         // Lazy extraction has the same terminal policy as image decode budgets.
-        if (error instanceof OoxmlResourceLimitError || isOoxmlDecodedImageLimitError(error)) throw error;
+        // An authored CT_Blip chain that cannot be evaluated is a typed,
+        // terminal diagnostic too: never a silently missing picture.
+        if (error instanceof OoxmlResourceLimitError || isOoxmlDecodedImageLimitError(error)
+          || (error instanceof OoxmlError && error.code === 'unsupported-image-effect')) throw error;
         // Transient failure: DELETE any prior lookup entry rather than leaving
         // it. A prior entry is re-resolved precisely because its shared-cache
         // backing may be gone (LRU-evicted and GPU-closed); when the re-resolve

@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest';
-import { chartImageFillPixelTransform, paintChartImageFill, withChartImageLookup } from './image-fill.js';
+import { chartImageFillHostKey, chartImageFillKey, chartImageFillPixelTransform, paintChartImageFill, withChartImageLookup } from './image-fill.js';
 import { setImageEffectFrame } from '../image/image-effect-frame.js';
 import { OoxmlDecodedImageLimitError } from '../image/pixel-budget.js';
 import { EMU_PER_PT, PT_TO_PX } from '../units.js';
@@ -99,7 +99,14 @@ it('tiles a chart fill by the authored frame of an effect-grown source', () => {
 it('evaluates a chart fill chain on the source grid at the fill DPI', () => {
   const effects = [{ type: 'blur' as const, radius: 9525, grow: false }];
   expect(chartImageFillPixelTransform({ fillType: 'image', imagePath: 'a.png', mimeType: 'image/png',
-    dpi: 192, blipEffects: effects })).toEqual({ effects, duotone: null, emuPerPixelX: 4762.5, emuPerPixelY: 4762.5 });
+    dpi: 192, blipEffects: effects }, { rotation: 30, flipH: true })).toEqual({ effects, duotone: null,
+    emuPerPixelX: 4762.5, emuPerPixelY: 4762.5, hostRotation: 30, hostFlipH: true, hostFlipV: false });
+  // Sampling DPI and host orientation are part of the decoded identity.
+  const fill = { fillType: 'image' as const, imagePath: 'a.png', mimeType: 'image/png', blipEffects: effects };
+  expect(chartImageFillKey({ ...fill, dpi: 96 })).not.toBe(chartImageFillKey({ ...fill, dpi: 192 }));
+  expect(chartImageFillHostKey(fill, { rotation: 0 })).not.toBe(chartImageFillHostKey(fill, { rotation: 90 }));
+  expect(chartImageFillHostKey({ ...fill, rotWithShape: false }, { rotation: 90 }))
+    .toBe(chartImageFillHostKey({ ...fill, rotWithShape: false }, { rotation: 0 }));
   const duotone = { clr1: '000000', clr2: 'FFFFFF' };
   expect(chartImageFillPixelTransform({ fillType: 'image', imagePath: 'a.png', mimeType: 'image/png', duotone }))
     .toBe(duotone);

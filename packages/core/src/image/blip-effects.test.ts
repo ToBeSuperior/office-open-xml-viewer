@@ -869,3 +869,21 @@ it('restores the original frame before subsequent affine sampling', () => {
   ] });
   expect(actual).toEqual(expected);
 });
+
+it('keeps prototype-backed native ImageData from a recursive fill effect', () => {
+  // Native ImageData exposes data/width/height as prototype accessors.
+  class NativeImageData {
+    readonly #data = new Uint8ClampedArray([9, 8, 7, 255]);
+    get data() { return this.#data; }
+    get width() { return 1; }
+    get height() { return 1; }
+  }
+  const fill = { fillType: 'image' as const, imagePath: 'fill.png', mimeType: 'image/png', stretch: true };
+  const ctx = { save() {}, restore() {}, beginPath() {}, rect() {}, clip() {}, drawImage() {},
+    translate() {}, rotate() {}, scale() {}, setTransform() {}, getImageData: () => new NativeImageData() };
+  const runtime = { images: new Map([[fill, { width: 1, height: 1 } as CanvasImageSource]]),
+    offscreenFactory: (() => ({ width: 1, height: 1, getContext: () => ctx })) as unknown as OffscreenFactory };
+  const buf = buffer([1, 2, 3, 255]);
+  const result = applyBlipPixelEffects(buf, { effects: [{ type: 'fill', fill }] }, runtime);
+  expect([...result.data]).toEqual([9, 8, 7, 255]);
+});

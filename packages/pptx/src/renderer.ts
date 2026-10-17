@@ -108,8 +108,10 @@ import {
   decodeSvgBlobOnMainThread,
   getCachedBitmapByPath,
   getCachedDuotoneBitmapByPath,
+  imageEffectError,
   chartImageFillKey,
   chartImageFillPixelTransform,
+  chartImageFillHostKey,
   chartImageFillUsageSize,
   collectChartImageFillUsages,
   collectChartImageFillUsagesForCharts,
@@ -359,6 +361,19 @@ type PlannedRasterOptions = {
 /** Authored effect diagnostics are terminal even at image decode/fallback
  * boundaries. Containing them as a missing image would silently accept only
  * part of a CT_Blip chain. Resource and codec failures keep their own policy. */
+/** A fill that carries a CT_Blip chain is strict across its whole
+ * preparation: a native failure before the shared effect loader (for example
+ * tile-source inspection) is normalized to the same typed effect diagnostic
+ * instead of being contained as a missing fill. */
+function strictEffectPreparation<T>(
+  blip: { readonly blipEffects?: readonly unknown[] | null },
+  pending: Promise<T>,
+): Promise<T> {
+  return blip.blipEffects?.length
+    ? pending.catch((error: unknown) => { throw imageEffectError(error); })
+    : pending;
+}
+
 function isUnsupportedBlipEffectError(error: unknown): boolean {
   return error instanceof OoxmlError && error.code === 'unsupported-image-effect';
 }
@@ -2298,7 +2313,7 @@ async function prepareBackground(
         ? plannedRasterOptions(imagePlan, imagePlanKey(fill.imagePath, pixelTransform(fill)))
         : undefined;
       sourceInspection = fill.tile
-        ? await inspectCachedRasterSource(fill.imagePath, fill.mimeType, fetchImage)
+        ? await strictEffectPreparation(fill, inspectCachedRasterSource(fill.imagePath, fill.mimeType, fetchImage))
         : undefined;
       bitmap = await getCachedDuotoneBitmapByPath(
         fill.imagePath,
@@ -8660,7 +8675,9 @@ async function renderSlideLeased(
       maxRetainedPixels?: number;
       preserveNaturalSize: boolean;
       hasSourceCrop: boolean;
+      host?: { rotation: number; flipH?: boolean; flipV?: boolean };
     }>();
+    const admittedChartFills = new Set<string>();
     for (const usage of collectChartImageFillUsagesForCharts(
       chartDescriptors.map(({ element }) => element.chart),
       (usage, chartIndex) => chartImageFillUsageSize(
@@ -8668,22 +8685,23 @@ async function renderSlideLeased(
         chartDescriptors[chartIndex]!.frame,
       ) != null,
     )) {
-      const { fill } = usage;
-      const key = chartImageFillKey(fill);
-      if (!chartFillMap.has(key)) chartFillMap.set(key, {
-        fill,
-        widthPt: 0,
-        heightPt: 0,
-        preserveNaturalSize: usage.preserveNaturalSize,
-        hasSourceCrop: usage.hasSourceCrop,
-      });
+      admittedChartFills.add(chartImageFillKey(usage.fill));
     }
-    for (const { usages } of chartDescriptors) {
+    for (const { element, usages } of chartDescriptors) {
+      // A chart frame's rotation/flips host page-fixed effects of its fills.
+      const host = { rotation: element.rotation, flipH: element.flipH, flipV: element.flipV };
       for (const { usage, size } of usages) {
         const { fill } = usage;
-        const key = chartImageFillKey(fill);
-        const prior = chartFillMap.get(key);
-        if (!prior) continue;
+        if (!admittedChartFills.has(chartImageFillKey(fill))) continue;
+        const key = chartImageFillHostKey(fill, host);
+        const prior = chartFillMap.get(key) ?? {
+          fill,
+          widthPt: 0,
+          heightPt: 0,
+          preserveNaturalSize: usage.preserveNaturalSize,
+          hasSourceCrop: usage.hasSourceCrop,
+          ...(fill.blipEffects?.length ? { host } : {}),
+        };
         // ECMA-376 §20.1.8.58: tile geometry is based on the source's natural
         // pixel dimensions and authored DPI. A display-sized decode would alter
         // the tile size/alignment/repetition count. Because one decoded source
@@ -8781,7 +8799,7 @@ async function renderSlideLeased(
       const chartPromises: Promise<unknown>[] = [...chartFillMap].map(async ([key, entry]) => {
         const {
           fill, widthPt, heightPt, targetWidthPx, targetHeightPx,
-          maxRetainedPixels, hasSourceCrop,
+          maxRetainedPixels, hasSourceCrop, host,
         } = entry;
         const target = targetWidthPx && targetHeightPx
           ? {
@@ -8800,7 +8818,7 @@ async function renderSlideLeased(
                 workerDecoder: svgDecoder,
               })
             : getCachedDuotoneBitmapByPath(
-                fill.imagePath, fill.mimeType, chartImageFillPixelTransform(fill) ?? undefined, fetchImage,
+                fill.imagePath, fill.mimeType, chartImageFillPixelTransform(fill, host) ?? undefined, fetchImage,
                 {
                   // An ordered chain samples the source grid at the fill DPI
                   // (see chartImageFillPixelTransform), not a usage frame.
@@ -8860,7 +8878,7 @@ async function renderSlideLeased(
         const target = vector ? rawTarget : planned;
         try {
           const intrinsicSize = preserveNaturalSize
-            ? (await inspectCachedRasterSource(fill.imagePath, fill.mimeType, fetchImage))
+            ? (await strictEffectPreparation(fill, inspectCachedRasterSource(fill.imagePath, fill.mimeType, fetchImage)))
                 .dimensions ?? undefined
             : undefined;
           // A pixel transform (ordered chain or lone duotone) on an SVG-only
@@ -9003,7 +9021,7 @@ async function renderSlideLeased(
           opts.threeD,
           opts.regionMap,
           fill => chartMarkerImages.get(
-            chartImageFillKey(fill),
+            chartImageFillHostKey(fill, { rotation: el.rotation, flipH: el.flipH, flipV: el.flipV }),
           ),
           opts.chartEx,
         );

@@ -167,6 +167,11 @@ describe.skipIf(!skia)('xlsx blip duotone + alphaModFix (issue #880)', () => {
   // Parsed XLSX pictures carry the shared ordered CT_Blip chain (§20.1.8.13):
   // alphaModFix modulates alpha before a later alpha-sensitive clrChange, and
   // each duotone applies its own palette in order.
+  it('rejects an unevaluable chain with a typed error instead of dropping the picture', async () => {
+    await expect(render('raw', [{ type: 'unsupported', effect: 'blipEffectFromTheFuture' }]))
+      .rejects.toMatchObject({ code: 'unsupported-image-effect' });
+  });
+
   it('applies ordered alpha and independent duotone palettes through the orchestrator', async () => {
     const box = [155, 140, 195, 180] as const;
     const ordered = await render('raw', [

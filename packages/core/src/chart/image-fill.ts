@@ -95,10 +95,24 @@ export function chartImageFillKey(fill: ImageFill): string {
     fill.svgImagePath ?? null,
     fill.duotone?.clr1 ?? null,
     fill.duotone?.clr2 ?? null,
-    // The ordered CT_Blip chain is part of the decoded identity (structural,
-    // so no delimiter can alias two recipes).
-    fill.blipEffects?.length ? fill.blipEffects : null,
+    // The ordered CT_Blip chain and its source sampling (fill DPI, see
+    // chartImageFillPixelTransform) are part of the decoded identity
+    // (structural, so no delimiter can alias two recipes).
+    fill.blipEffects?.length ? [fill.blipEffects, chartImageFillEffectDpi(fill)] : null,
   ]);
+}
+
+function chartImageFillEffectDpi(fill: ImageFill): number {
+  return fill.dpi != null && fill.dpi > 0 ? fill.dpi : 96;
+}
+
+/** Orientation of the frame hosting a chart (e.g. a rotated/flipped PPTX
+ * graphic frame), against which page-fixed CT_Blip effects such as a
+ * `rotWithShape="0"` shadow are evaluated (§20.1.8.45/.49). */
+export interface ChartImageFillHost {
+  readonly rotation?: number;
+  readonly flipH?: boolean;
+  readonly flipV?: boolean;
 }
 
 /** Decode-time pixel transform of a chart picture fill: its ordered CT_Blip
@@ -107,14 +121,30 @@ export function chartImageFillKey(fill: ImageFill): string {
  * fill has no single authored frame. Its effects are therefore evaluated on
  * the source's own grid at the fill's DPI (blipFill@dpi, else 96 DPI), the
  * same physical sampling §20.1.8.58 uses for a tile and that core uses for a
- * nested tiled fill. That makes the result independent of usage size, so the
- * shared {@link chartImageFillKey} is a complete identity. Chart elements are
- * not rotated, so the host orientation is the identity. Hosts decode such a
- * fill at its native size (no display target). */
-export function chartImageFillPixelTransform(fill: ImageFill): Duotone | BlipPixelEffects | null {
+ * nested tiled fill. That makes the result independent of usage size; the
+ * DPI is part of {@link chartImageFillKey}, and the host orientation is part
+ * of {@link chartImageFillHostKey}. Hosts decode such a fill at its native
+ * size (no display target). */
+export function chartImageFillPixelTransform(
+  fill: ImageFill,
+  host?: ChartImageFillHost,
+): Duotone | BlipPixelEffects | null {
   if (!fill.blipEffects?.length) return fill.duotone ?? null;
-  const emuPerPixel = 914400 / (fill.dpi != null && fill.dpi > 0 ? fill.dpi : 96);
-  return { effects: fill.blipEffects, duotone: fill.duotone ?? null, emuPerPixelX: emuPerPixel, emuPerPixelY: emuPerPixel };
+  const emuPerPixel = 914400 / chartImageFillEffectDpi(fill);
+  return {
+    effects: fill.blipEffects, duotone: fill.duotone ?? null, emuPerPixelX: emuPerPixel, emuPerPixelY: emuPerPixel,
+    hostRotation: fill.rotWithShape === false ? 0 : host?.rotation ?? 0,
+    hostFlipH: host?.flipH ?? false, hostFlipV: host?.flipV ?? false,
+  };
+}
+
+/** Decoded identity of a chart fill as painted inside a host frame. Plain and
+ * duotone fills are orientation-independent and keep {@link chartImageFillKey};
+ * an effect chain adds the effective host orientation as a tuple. */
+export function chartImageFillHostKey(fill: ImageFill, host?: ChartImageFillHost): string {
+  if (!fill.blipEffects?.length) return chartImageFillKey(fill);
+  return JSON.stringify([chartImageFillKey(fill),
+    fill.rotWithShape === false ? 0 : host?.rotation ?? 0, host?.flipH ?? false, host?.flipV ?? false]);
 }
 
 let activeLookup: ChartImageLookup | undefined;
