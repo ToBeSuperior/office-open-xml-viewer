@@ -107,11 +107,14 @@ function translateOccurrenceGeometry<T extends ParagraphLayout | TableLayout>(
       return prior.value;
     }
     const translatedBase = translateCompleteParagraphLayout(paragraph, delta);
-    const translated = Object.freeze({
+    // Left mutable: the projection snapshot freezes every node it allocated
+    // and skips only frozen aliases of the retained root, so a shallowly
+    // frozen new node here would leave its translated children unfrozen.
+    const translated: ParagraphLayout = {
       ...translatedBase,
       ...(paragraph.sectionFlowOwnership === undefined
         ? {} : { sectionFlowOwnership: paragraph.sectionFlowOwnership }),
-    });
+    };
     paragraphMemo.set(paragraph, { key, value: translated });
     return translated;
   };
