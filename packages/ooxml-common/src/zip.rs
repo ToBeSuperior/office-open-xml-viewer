@@ -56,10 +56,11 @@ struct ArchivePreflight {
     entry_count: u64,
     entries: Vec<PreflightEntryIdentity>,
     archive_base: u64,
-    /// Two-byte rewrites applied only to the copy handed to the ZIP reader:
-    /// NTFS extra-field ids (central and local) and EOCD signatures inside
-    /// the validated record's comment. See [`reader_bytes`].
-    reader_patches: Vec<(usize, u16)>,
+    /// The validated central directory through the EOCD fixed fields: the
+    /// only bytes the ZIP reader sees while indexing (see [`PackageReader`]).
+    index_range: std::ops::Range<usize>,
+    /// Two-byte rewrites seen only while indexing, sorted by offset.
+    index_patches: Vec<(usize, u16)>,
 }
 
 #[derive(Debug)]
@@ -828,14 +829,6 @@ fn inspect_central_directory(
             entry.extra.start,
             &mut ntfs_extra_ids,
         );
-        let local = validated.local_header_start as usize;
-        let local_extra_start = local + 30 + validated.name.len;
-        let local_extra_len = le_u16(data, local + 28).ok_or(CandidateError::Malformed)? as usize;
-        collect_ntfs_extra_ids(
-            &data[local_extra_start..local_extra_start + local_extra_len],
-            local_extra_start,
-            &mut ntfs_extra_ids,
-        );
         entries.push(PreflightEntryIdentity {
             name: data[validated.name.start..validated.name.start + validated.name.len].into(),
             central_header_start: validated.central_header_start,
@@ -877,11 +870,30 @@ fn inspect_central_directory(
         entry_count: directory.entry_count,
         entries,
         archive_base: directory.archive_base,
-        reader_patches: ntfs_extra_ids
+        index_range: directory.start..directory.start,
+        index_patches: ntfs_extra_ids
             .into_iter()
             .map(|at| (at, OPAQUE_EXTRA_FIELD_ID))
             .collect(),
     })
+}
+
+/// Absolute offsets of the validated ZIP64 locator and EOCD record, if any.
+fn zip64_footer_positions(data: &[u8], eocd: usize, archive_base: u64) -> Vec<usize> {
+    let Some(locator) = eocd.checked_sub(20) else {
+        return Vec::new();
+    };
+    if le_u32(data, locator) != Some(ZIP64_LOCATOR_SIGNATURE) {
+        return Vec::new();
+    }
+    let mut positions = vec![locator];
+    if let Some(record) = le_u64(data, locator + 8)
+        .and_then(|relative| relative.checked_add(archive_base))
+        .and_then(|absolute| usize::try_from(absolute).ok())
+    {
+        positions.push(record);
+    }
+    positions
 }
 
 /// NTFS extra field id (APPNOTE 4.5.5).
@@ -904,24 +916,62 @@ fn collect_ntfs_extra_ids(extra: &[u8], base: usize, out: &mut Vec<usize>) {
     }
 }
 
-/// The bytes handed to the ZIP reader: `data` itself, or a copy with the
-/// preflight's reader patches applied. NTFS extra-field ids become an id the
-/// reader ignores, and an EOCD signature inside the validated record's
-/// comment is masked so the reader's backward search cannot pick a decoy
-/// directory. Lengths, offsets and payloads are unchanged, and the archive
-/// comment is never read, so every validated identity and result holds.
-fn reader_bytes<'a>(data: &'a [u8], preflight: &ArchivePreflight) -> std::borrow::Cow<'a, [u8]> {
-    if preflight.reader_patches.is_empty() {
-        return std::borrow::Cow::Borrowed(data);
-    }
-    let mut copy = data.to_vec();
-    neutralize_ntfs_extra_ids(&mut copy, preflight);
-    std::borrow::Cow::Owned(copy)
+/// The reader handed to the ZIP crate. While it builds its index (the only
+/// time it reads footers and the central directory), just `index_range` (the
+/// validated directory, any ZIP64 footer records and the EOCD fixed fields)
+/// is visible: every other byte, payloads and the archive comment included,
+/// reads as zero and `index_patches` apply. The crate therefore sees exactly
+/// one footer and directory, so it cannot retry an unvalidated EOCD, and NTFS
+/// metadata it would reject stays opaque. Afterwards every read passes
+/// through to the real bytes unchanged; lengths and offsets never differ.
+#[derive(Debug)]
+pub struct PackageReader<T> {
+    cursor: std::io::Cursor<T>,
+    index_range: std::ops::Range<usize>,
+    index_patches: Vec<(usize, u16)>,
+    /// Shared with the opener, which clears it once the index is built.
+    indexing: std::rc::Rc<std::cell::Cell<bool>>,
 }
 
-fn neutralize_ntfs_extra_ids(data: &mut [u8], preflight: &ArchivePreflight) {
-    for &(at, value) in &preflight.reader_patches {
-        data[at..at + 2].copy_from_slice(&value.to_le_bytes());
+impl<T: AsRef<[u8]>> std::io::Read for PackageReader<T> {
+    fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
+        if !self.indexing.get() {
+            return std::io::Read::read(&mut self.cursor, output);
+        }
+        let data = self.cursor.get_ref().as_ref();
+        let start = usize::try_from(self.cursor.position())
+            .unwrap_or(usize::MAX)
+            .min(data.len());
+        let count = output.len().min(data.len() - start);
+        let end = start + count;
+        output[..count].fill(0);
+        let visible_start = start.max(self.index_range.start);
+        let visible_end = end.min(self.index_range.end);
+        if visible_start < visible_end {
+            output[visible_start - start..visible_end - start]
+                .copy_from_slice(&data[visible_start..visible_end]);
+        }
+        let first = self
+            .index_patches
+            .partition_point(|(at, _)| at + 2 <= start);
+        for &(at, value) in &self.index_patches[first..] {
+            if at >= end {
+                break;
+            }
+            for (offset, byte) in value.to_le_bytes().into_iter().enumerate() {
+                if (start..end).contains(&(at + offset)) {
+                    output[at + offset - start] = byte;
+                }
+            }
+        }
+        self.cursor.set_position(end as u64);
+        Ok(count)
+    }
+}
+
+impl<T: AsRef<[u8]>> std::io::Seek for PackageReader<T> {
+    fn seek(&mut self, position: std::io::SeekFrom) -> std::io::Result<u64> {
+        std::io::Seek::seek(&mut self.cursor, position)
     }
 }
 
@@ -964,17 +1014,30 @@ fn inspect_archive(data: &[u8]) -> Result<Option<ArchivePreflight>, String> {
     let Some((eocd, mut preflight)) = resolved else {
         return Ok(None);
     };
-    // The ZIP reader searches backwards for the last EOCD signature and may
-    // index any directory it describes. Mask every signature inside the
-    // validated record's comment in the reader's copy.
-    let comment_start = eocd + 22;
-    preflight.reader_patches.extend(
-        data[comment_start..]
-            .windows(4)
-            .enumerate()
-            .filter(|(_, bytes)| *bytes == EOCD_SIGNATURE.to_le_bytes())
-            .map(|(offset, _)| (comment_start + offset + 2, 0)),
-    );
+    // While indexing, expose the validated directory through the EOCD fixed
+    // fields, and mask every other footer signature inside that range (it can
+    // only sit in names, extra data or comments of directory records), so the
+    // reader's backward footer search finds exactly the validated records. A
+    // mask in an identity-bearing field fails the index re-check.
+    let index_start = preflight.index_range.start;
+    let footer_records = zip64_footer_positions(data, eocd, preflight.archive_base);
+    let signatures = [
+        EOCD_SIGNATURE,
+        ZIP64_EOCD_SIGNATURE,
+        ZIP64_LOCATOR_SIGNATURE,
+    ]
+    .map(u32::to_le_bytes);
+    let mut masks: Vec<(usize, u16)> = data[index_start..eocd]
+        .windows(4)
+        .enumerate()
+        .filter(|(_, bytes)| signatures.iter().any(|signature| signature == *bytes))
+        .map(|(offset, _)| index_start + offset)
+        .filter(|at| !footer_records.contains(at))
+        .map(|at| (at + 2, 0))
+        .collect();
+    preflight.index_patches.append(&mut masks);
+    preflight.index_patches.sort_unstable();
+    preflight.index_range = index_start..eocd + 22;
     Ok(Some(preflight))
 }
 
@@ -1001,18 +1064,27 @@ fn validate_archive_item_names<R: std::io::Read + std::io::Seek>(
 /// facades own their historical user-visible error context.
 pub(crate) fn open_validated_slice(
     data: &[u8],
-) -> Result<zip::ZipArchive<std::io::Cursor<std::borrow::Cow<'_, [u8]>>>, String> {
+) -> Result<zip::ZipArchive<PackageReader<&[u8]>>, String> {
     let preflight = preflight_archive_limits(data)?;
-    let bytes = reader_bytes(data, &preflight);
-    open_preflighted(preflight, std::io::Cursor::new(bytes))
+    open_preflighted(preflight, data)
 }
 
 fn open_preflighted<T: AsRef<[u8]>>(
     preflight: ArchivePreflight,
-    cursor: std::io::Cursor<T>,
-) -> Result<zip::ZipArchive<std::io::Cursor<T>>, String> {
-    let mut archive = zip::ZipArchive::with_config(preflight.read_config(), cursor)
+    data: T,
+) -> Result<zip::ZipArchive<PackageReader<T>>, String> {
+    let indexing = std::rc::Rc::new(std::cell::Cell::new(true));
+    let reader = PackageReader {
+        cursor: std::io::Cursor::new(data),
+        index_range: preflight.index_range.clone(),
+        index_patches: preflight.index_patches.clone(),
+        indexing: std::rc::Rc::clone(&indexing),
+    };
+    let mut archive = zip::ZipArchive::with_config(preflight.read_config(), reader)
         .map_err(|error| error.to_string())?;
+    // The index is built; every later read (local headers, payloads) sees
+    // the real bytes.
+    indexing.set(false);
     preflight.validate_archive_item_names(&mut archive)?;
     validate_archive_limits(&mut archive)?;
     Ok(archive)
@@ -1021,11 +1093,9 @@ fn open_preflighted<T: AsRef<[u8]>>(
 /// Open an owned ZIP through the shared validated construction path.
 pub fn open_validated_zip(
     data: Vec<u8>,
-) -> Result<zip::ZipArchive<std::io::Cursor<Vec<u8>>>, String> {
-    let mut data = data;
+) -> Result<zip::ZipArchive<PackageReader<Vec<u8>>>, String> {
     let preflight = preflight_archive_limits(&data)?;
-    neutralize_ntfs_extra_ids(&mut data, &preflight);
-    open_preflighted(preflight, std::io::Cursor::new(data))
+    open_preflighted(preflight, data)
 }
 
 /// Preserve the machine-readable resource envelope while adding the historical
@@ -1679,6 +1749,91 @@ mod tests {
     }
 
     #[test]
+    fn index_view_exposes_only_the_validated_directory_until_indexing_ends() {
+        // A stored entry whose payload holds footer signatures, plus a stray
+        // EOCD signature inside a directory record's file comment.
+        let mut bytes = Vec::new();
+        {
+            let mut writer = zip::ZipWriter::new(Cursor::new(&mut bytes));
+            let stored = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
+            writer.start_file("word/a.xml", stored).unwrap();
+            writer
+                .write_all(b"PK\x05\x06 PK\x06\x06 PK\x06\x07")
+                .unwrap();
+            writer.finish().unwrap();
+        }
+        let preflight = preflight_archive_limits(&bytes).unwrap();
+        let payload = bytes.windows(4).position(|w| w == b"PK\x05\x06").unwrap();
+        let indexing = std::rc::Rc::new(std::cell::Cell::new(true));
+        let mut reader = PackageReader {
+            cursor: Cursor::new(bytes.as_slice()),
+            index_range: preflight.index_range.clone(),
+            index_patches: preflight.index_patches.clone(),
+            indexing: std::rc::Rc::clone(&indexing),
+        };
+        let mut seen = Vec::new();
+        reader.read_to_end(&mut seen).unwrap();
+        assert_eq!(seen.len(), bytes.len());
+        assert!(seen[..preflight.index_range.start]
+            .iter()
+            .all(|byte| *byte == 0));
+        assert_eq!(
+            seen.windows(4)
+                .filter(|w| *w == EOCD_SIGNATURE.to_le_bytes())
+                .count(),
+            1,
+            "only the validated EOCD is visible while indexing"
+        );
+        assert_eq!(&seen[payload..payload + 4], &[0, 0, 0, 0]);
+
+        indexing.set(false);
+        std::io::Seek::seek(&mut reader, std::io::SeekFrom::Start(0)).unwrap();
+        let mut real = Vec::new();
+        reader.read_to_end(&mut real).unwrap();
+        assert_eq!(real, bytes, "after indexing every read is byte-exact");
+
+        let mut archive = open_validated_zip(bytes).unwrap();
+        assert_eq!(
+            read_zip_bytes(&mut archive, "word/a.xml").unwrap(),
+            b"PK\x05\x06 PK\x06\x06 PK\x06\x07"
+        );
+    }
+
+    #[test]
+    fn a_directory_the_reader_rejects_is_not_retried_against_payload_footers() {
+        // A zero-length Extended Timestamp passes preflight but the reader
+        // rejects the directory. The stored payload holds a complete inner
+        // archive, whose footer the reader would otherwise try next.
+        let mut inner = Vec::new();
+        {
+            let mut writer = zip::ZipWriter::new(Cursor::new(&mut inner));
+            writer
+                .start_file("x.xml", zip::write::SimpleFileOptions::default())
+                .unwrap();
+            writer.write_all(b"x").unwrap();
+            writer.finish().unwrap();
+        }
+        let mut outer = Vec::new();
+        {
+            let mut writer = zip::ZipWriter::new(Cursor::new(&mut outer));
+            let stored = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
+            writer.start_file("word/a.xml", stored).unwrap();
+            writer.write_all(&inner).unwrap();
+            writer.finish().unwrap();
+        }
+        let timestamp = [0x55, 0x54, 0, 0];
+        let bytes = with_central_extra(&outer, &timestamp);
+        assert!(preflight_archive_limits(&bytes).is_ok());
+        let error = open_validated_zip(bytes).unwrap_err();
+        assert!(
+            !error.contains("does not match the validated central directory"),
+            "no decoy directory may be indexed: {error}"
+        );
+    }
+
+    #[test]
     fn extended_ntfs_extra_fields_stay_opaque_metadata() {
         // APPNOTE 4.5.5: reserved u32, then attribute records. One timestamp
         // record plus a further (unknown) attribute is valid NTFS metadata
@@ -1702,12 +1857,8 @@ mod tests {
 
     /// Splice `extra` into the first central-directory entry.
     fn with_central_extra(zip: &[u8], extra: &[u8]) -> Vec<u8> {
-        let central = last_signature(zip, CENTRAL_DIRECTORY_HEADER_SIGNATURE);
-        let central = zip[..=central]
-            .windows(4)
-            .position(|w| w == CENTRAL_DIRECTORY_HEADER_SIGNATURE.to_le_bytes())
-            .unwrap();
         let eocd = last_signature(zip, EOCD_SIGNATURE);
+        let central = le_u32(zip, eocd + 16).unwrap() as usize;
         let name_len = le_u16(zip, central + 28).unwrap() as usize;
         let extra_len = le_u16(zip, central + 30).unwrap() as usize;
         let at = central + 46 + name_len + extra_len;
