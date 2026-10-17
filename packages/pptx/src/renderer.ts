@@ -109,6 +109,7 @@ import {
   getCachedBitmapByPath,
   getCachedDuotoneBitmapByPath,
   chartImageFillKey,
+  chartImageFillPixelTransform,
   chartImageFillUsageSize,
   collectChartImageFillUsages,
   collectChartImageFillUsagesForCharts,
@@ -8790,19 +8791,25 @@ async function renderSlideLeased(
             }
           : undefined;
         try {
-          const decodeFallback = () => fill.mimeType === 'image/svg+xml'
-            ? pixelTransform(fill) ? Promise.resolve(null) : getCachedSvgImageByPath(fill.imagePath, fetchImage, {
+          // An SVG-only fill with a pixel transform is rasterized by the host
+          // SVG decoder before the shared effect chain, like pictures and shape
+          // fills; it is never omitted.
+          const decodeFallback = () => fill.mimeType === 'image/svg+xml' && !pixelTransform(fill)
+            ? getCachedSvgImageByPath(fill.imagePath, fetchImage, {
                 ...(target ?? {}),
                 workerDecoder: svgDecoder,
               })
             : getCachedDuotoneBitmapByPath(
-                fill.imagePath, fill.mimeType, pixelTransform(fill), fetchImage,
+                fill.imagePath, fill.mimeType, chartImageFillPixelTransform(fill) ?? undefined, fetchImage,
                 {
-                  widthPt,
-                  heightPt,
+                  // An ordered chain samples the source grid at the fill DPI
+                  // (see chartImageFillPixelTransform), not a usage frame.
+                  widthPt: fill.blipEffects?.length ? 0 : widthPt,
+                  heightPt: fill.blipEffects?.length ? 0 : heightPt,
                   ...(target ?? {}),
                   failClosedOnDuotoneFailure: true,
                   tiff: opts.tiff,
+                  svgDecoder,
                 },
               );
           let bitmap: CanvasImageSource | null;
@@ -8856,12 +8863,12 @@ async function renderSlideLeased(
             ? (await inspectCachedRasterSource(fill.imagePath, fill.mimeType, fetchImage))
                 .dimensions ?? undefined
             : undefined;
-          const fallback = () => fill.mimeType === 'image/svg+xml' && !fill.blipEffects?.length
-            ? pixelTransform(fill, host)
-              ? Promise.resolve(null)
-              : getCachedSvgImageByPath(fill.imagePath, fetchImage, {
-                  ...(target ?? {}), workerDecoder: svgDecoder,
-                })
+          // A pixel transform (ordered chain or lone duotone) on an SVG-only
+          // fill rasterizes through the host decoder first; never omitted.
+          const fallback = () => fill.mimeType === 'image/svg+xml' && !pixelTransform(fill, host)
+            ? getCachedSvgImageByPath(fill.imagePath, fetchImage, {
+                ...(target ?? {}), workerDecoder: svgDecoder,
+              })
             : getCachedDuotoneBitmapByPath(
                 fill.imagePath, fill.mimeType, pixelTransform(fill, host), fetchImage,
                 {

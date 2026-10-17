@@ -410,11 +410,14 @@ describe('getCachedDuotoneBitmapByPath with CT_Blip effects', () => {
       fetchImage, { offscreenFactory: factory },
     );
     try {
-      // Both tuples previously produced l0.2.1, despite different clamped pixel results.
-      const first = await get(0.2, 1);
-      const second = await get(0, 2.1);
+      // Concatenated decimal keys could alias distinct tuples; the structural
+      // key keeps every in-range ST_FixedPercentage pair distinct, so each
+      // recipe runs once and never reuses another recipe's pixels.
+      const first = await get(0.1, 0.25);
+      const second = await get(0.01, 0.25);
       expect(first).not.toBe(second);
-      expect(written).toEqual([255, 0]);
+      expect(written).toHaveLength(2);
+      expect(written[0]).not.toBe(written[1]);
     } finally {
       dropDuotoneBitmapCache(fetchImage);
       dropBitmapCacheByPath(fetchImage);
@@ -620,8 +623,9 @@ it('keeps numeric effect parameters distinct in cache keys', () => {
   const key = (bright: number, contrast: number) => blipPixelEffectsKey({
     effects: [{ type: 'luminance', bright, contrast }],
   });
-  expect(key(1, 23)).not.toBe(key(12, 3));
-  expect(key(1.2, 3)).not.toBe(key(1, 2.3));
+  expect(key(0.1, 0.23)).not.toBe(key(0.12, 0.3));
+  expect(key(0.12, 0.3)).not.toBe(key(0.1, 0.23));
+  expect(key(-0.5, 0.25)).not.toBe(key(-0.52, 0.5));
 });
 
 it('charges the reviewer’s two tiled overlays before any painting, including recursive masks', () => {

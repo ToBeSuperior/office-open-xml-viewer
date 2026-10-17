@@ -4,6 +4,9 @@ import type {
   ChartDataPointOverride, ChartExElementStyle, ChartModel, ChartSeries, ChartStockBarPaint,
 } from '../types/chart.js';
 import { drawImageCropped, imageNaturalSize, srcRectHasVisibleArea } from '../image/crop.js';
+import { imageEffectFrame } from '../image/image-effect-frame.js';
+import type { BlipPixelEffects } from '../image/blip-effects.js';
+import type { Duotone } from '../image/duotone.js';
 import { fillCanProduceVisiblePixels } from '../shape/paint.js';
 import { EMU_PER_PT, PT_TO_PX } from '../units.js';
 import { boxWhiskerDotCandidateCount, computeBoxWhiskerStats } from './box-whisker.js';
@@ -96,6 +99,22 @@ export function chartImageFillKey(fill: ImageFill): string {
     // so no delimiter can alias two recipes).
     fill.blipEffects?.length ? fill.blipEffects : null,
   ]);
+}
+
+/** Decode-time pixel transform of a chart picture fill: its ordered CT_Blip
+ * chain, or a lone duotone. Library policy: one fill recipe paints every
+ * marker, bar, wall and floor that references it, at many sizes, so a chart
+ * fill has no single authored frame. Its effects are therefore evaluated on
+ * the source's own grid at the fill's DPI (blipFill@dpi, else 96 DPI), the
+ * same physical sampling §20.1.8.58 uses for a tile and that core uses for a
+ * nested tiled fill. That makes the result independent of usage size, so the
+ * shared {@link chartImageFillKey} is a complete identity. Chart elements are
+ * not rotated, so the host orientation is the identity. Hosts decode such a
+ * fill at its native size (no display target). */
+export function chartImageFillPixelTransform(fill: ImageFill): Duotone | BlipPixelEffects | null {
+  if (!fill.blipEffects?.length) return fill.duotone ?? null;
+  const emuPerPixel = 914400 / (fill.dpi != null && fill.dpi > 0 ? fill.dpi : 96);
+  return { effects: fill.blipEffects, duotone: fill.duotone ?? null, emuPerPixelX: emuPerPixel, emuPerPixelY: emuPerPixel };
 }
 
 let activeLookup: ChartImageLookup | undefined;
@@ -225,7 +244,11 @@ export function chartImageTileMetrics(
   // not expose, so that case also remains fail-closed.
   const authored = chartImageTileStaticMetrics(fill);
   if (!authored) return null;
-  const natural = imageNaturalSize(image);
+  // §20.1.8.58 repeats the authored picture frame. A spatial CT_Blip effect
+  // (blur grow, glow, shadow) enlarges the decoded grid around that frame;
+  // the outset overlaps neighbouring tiles but never changes the period.
+  const effectFrame = imageEffectFrame(image);
+  const natural = effectFrame ? { w: effectFrame.width, h: effectFrame.height } : imageNaturalSize(image);
   if (!(Number.isFinite(natural.w) && natural.w > 0)
     || !(Number.isFinite(natural.h) && natural.h > 0)) rejectChartImageGeometry();
   const cssPixelsPerImagePixel = 96 / authored.dpi * (ptToPx / PT_TO_PX);

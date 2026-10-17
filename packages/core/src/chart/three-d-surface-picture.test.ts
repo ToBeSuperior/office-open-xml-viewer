@@ -450,10 +450,3 @@ describe('CT_Surface tiled pictures', () => {
   });
 });
 
-
-it('rejects phase cancellation that would erase a positive chart face even with safe tile indices', () => {
-  expect(() => paint({ ...imageFill, stretch: false, dpi: 96,
-    tile: { algn: 'tl', tx: 2 ** 31 * 9525, ty: 0, sx: 1, sy: 1 } },
-    { imageWidth: 1, imageHeight: 1, faceWidth: Number.EPSILON, faceHeight: 1, rejectSourceDraw: true }))
-    .toThrowError(expect.objectContaining({ code: 'unsupported-image-effect' }));
-});

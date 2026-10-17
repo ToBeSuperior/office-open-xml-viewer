@@ -315,6 +315,7 @@ export {
 } from './image/raster-blob-inspection';
 export {
   chartImageFillKey,
+  chartImageFillPixelTransform,
   chartImageFillUsageSize,
   collectChartImageFillUsages,
   collectChartImageFillUsagesForCharts,

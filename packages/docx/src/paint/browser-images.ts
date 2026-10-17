@@ -26,6 +26,7 @@ import {
   resolvedCachedBitmapVariantKey,
   sourceRasterTargetSize,
   chartImageFillKey,
+  chartImageFillPixelTransform,
   chartImageFillUsageSize,
   collectChartImageFillUsages,
   isOptionalImageCodecUnavailableError,
@@ -66,7 +67,12 @@ interface ImageDecodeRequest {
   duotone?: Duotone;
   vmlStrokePattern?: Duotone;
   blipEffects?: readonly BlipEffect[];
-  orientation?: { readonly hostRotation?: number; readonly hostFlipH?: boolean; readonly hostFlipV?: boolean };
+  /** Host orientation and, for chart fills, fixed physical sampling that the
+   * shared CT_Blip interpreter evaluates the chain against. */
+  orientation?: {
+    readonly hostRotation?: number; readonly hostFlipH?: boolean; readonly hostFlipV?: boolean;
+    readonly emuPerPixelX?: number; readonly emuPerPixelY?: number;
+  };
   widthPt: number;
   heightPt: number;
   hasCrop: boolean;
@@ -313,7 +319,9 @@ function imageDecodeRequests(
       ...(image.colorReplaceFrom === undefined ? {} : { colorReplaceFrom: image.colorReplaceFrom }),
       ...(image.duotone === undefined ? {} : { duotone: image.duotone as Duotone }),
       ...(image.blipEffects?.length ? { blipEffects: image.blipEffects,
-        orientation: { hostRotation: image.rotation, hostFlipH: image.flipH, hostFlipV: image.flipV } } : {}),
+        orientation: image.effectHost
+          ? { hostRotation: image.effectHost.rotation, hostFlipH: image.effectHost.flipH, hostFlipV: image.effectHost.flipV }
+          : { hostRotation: image.rotation, hostFlipH: image.flipH, hostFlipV: image.flipV } } : {}),
       ...(image.vmlStrokePattern === undefined ? {} : { vmlStrokePattern: image.vmlStrokePattern as Duotone }),
       widthPt: raster.widthPt,
       heightPt: raster.heightPt,
@@ -391,12 +399,19 @@ function imageDecodeRequests(
           mimeType: fill.mimeType,
           ...(fill.svgImagePath === undefined ? {} : { svgImagePath: fill.svgImagePath }),
           ...(fill.duotone === undefined ? {} : { duotone: fill.duotone }),
-          ...(fill.blipEffects?.length ? { blipEffects: fill.blipEffects } : {}),
-          widthPt: raster.widthPt,
-          heightPt: raster.heightPt,
+          // An ordered chain samples the source grid at the fill DPI (see core
+          // chartImageFillPixelTransform), independent of any usage frame.
+          ...(fill.blipEffects?.length ? {
+            blipEffects: fill.blipEffects,
+            orientation: (transform => transform && 'effects' in transform
+              ? { emuPerPixelX: transform.emuPerPixelX, emuPerPixelY: transform.emuPerPixelY }
+              : {})(chartImageFillPixelTransform(fill)),
+          } : {}),
+          widthPt: fill.blipEffects?.length ? 0 : raster.widthPt,
+          heightPt: fill.blipEffects?.length ? 0 : raster.heightPt,
           hasCrop: fill.srcRect != null,
           chartPictureFill: true,
-          ...(!usage.preserveNaturalSize && size.targetWidthPx && size.targetHeightPx
+          ...(!usage.preserveNaturalSize && !fill.blipEffects?.length && size.targetWidthPx && size.targetHeightPx
             ? { targetWidthPx: size.targetWidthPx, targetHeightPx: size.targetHeightPx }
             : {}),
         };

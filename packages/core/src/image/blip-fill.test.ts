@@ -68,3 +68,19 @@ it('tiles a grown source by its authored frame and budgets all overlapping outse
   expect(work).toBe(43); // 25 draws + 16 bounded overdraw samples + rasterization/readback
   expect(p.ctx.translate.mock.calls[2][0] - p.ctx.translate.mock.calls[1][0]).toBe(2);
 });
+
+it('repeats the srcRect window, not the whole source, as the tile period (Annex L.4.8.4.3)', () => {
+  const source = { width: 4, height: 4 } as CanvasImageSource;
+  const fill = { ...image({}), srcRect: { l: 0.25, t: 0.25, r: 0.25, b: 0.25 } } as BlipEffectFill;
+  const p = paint(fill, source);
+  p.run();
+  // 4 px at 72 dpi cropped to its central half: a 2 pt period.
+  expect(p.ctx.translate.mock.calls[2][0] - p.ctx.translate.mock.calls[1][0]).toBe(2);
+});
+
+it('tiles nothing for a crop with no positive extent', () => {
+  const fill = { ...image({}), srcRect: { l: 0.6, t: 0, r: 0.6, b: 0 } } as BlipEffectFill;
+  const p = paint(fill, { width: 4, height: 4 } as CanvasImageSource);
+  p.run();
+  expect(p.ctx.drawImage).not.toHaveBeenCalled();
+});

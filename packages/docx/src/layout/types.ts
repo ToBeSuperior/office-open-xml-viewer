@@ -528,6 +528,11 @@ export type ImagePaintResourceDescriptor = Readonly<{
   vmlStrokePattern?: DeepReadonly<Duotone>;
   vmlFill?: DeepReadonly<Extract<import('../types.js').ShapeFill, { fillType: 'image' }>['vml']>;
   blipEffects?: DeepReadonly<import('@silurus/ooxml-core').BlipEffect[]>;
+  /** Host shape orientation for CT_Blip effects on a shape blip fill
+   * (§20.1.8.45/.49 rotWithShape): the fill paints inside the rotated shape,
+   * so the image itself carries no rotation but its page-fixed effects must
+   * still be evaluated against the host's rotation and flips. */
+  effectHost?: Readonly<{ rotation?: number; flipH?: boolean; flipV?: boolean }>;
 }>;
 
 export type ChartPaintResourceDescriptor = Readonly<{

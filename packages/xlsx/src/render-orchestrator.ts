@@ -33,6 +33,7 @@ import {
   type SvgBlobDecoder,
   type ImageResourceOptions,
   chartImageFillKey,
+  chartImageFillPixelTransform,
   chartImageFillUsageSize,
   collectChartImageFillUsages,
   collectChartImageFillUsagesForCharts,
@@ -643,14 +644,16 @@ export async function prefetchImages(
       imagePath: fill.imagePath,
       mimeType: fill.mimeType,
       svgImagePath: fill.svgImagePath,
-      widthPt,
-      heightPt,
+      // An ordered chain samples the source grid at the fill DPI (core
+      // chartImageFillPixelTransform), so it is decoded at native size.
+      widthPt: fill.blipEffects?.length ? 0 : widthPt,
+      heightPt: fill.blipEffects?.length ? 0 : heightPt,
       // A zero-inset sentinel forces the raster SVG twin without applying crop
       // twice: widthPt/heightPt already contain the post-crop metafile maxima.
       srcRect: hasSourceCrop ? { l: 0, t: 0, r: 0, b: 0 } : null,
-      duotone: imagePixelTransform(fill),
+      duotone: chartImageFillPixelTransform(fill),
       failClosedOnDuotoneFailure: true,
-      ...(targetWidthPx && targetHeightPx
+      ...(targetWidthPx && targetHeightPx && !fill.blipEffects?.length
         ? { targetWidthPx, targetHeightPx }
         : {}),
     });

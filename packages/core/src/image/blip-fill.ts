@@ -57,17 +57,26 @@ function effectTilePlan(fill: Extract<BlipEffectFill, { fillType: 'image' }>, im
   // top-left, unscaled grid. The source's nominal 96 dpi is the existing
   // decoder policy when embedded DPI is unavailable.
   const frame = imageEffectFrame(image) ?? { x: 0, y: 0, width: natural.w, height: natural.h };
-  // §20.1.8.58 repeats the authored image frame. Spatial-effect coverage
-  // does not change that period (the shared crop painter owns its outset).
-  const tw = frame.width * 72 / (fill.dpi || 96) * (tile.sx ?? 1);
-  const th = frame.height * 72 / (fill.dpi || 96) * (tile.sy ?? 1);
+  // §20.1.8.58 repeats the authored image frame, windowed by srcRect
+  // (§20.1.8.55; Annex L.4.8.4.3: the source rectangle is the content that
+  // tiling duplicates), so the period is the cropped extent. Spatial-effect
+  // coverage does not change that period (the crop painter owns its outset).
+  const crop = fill.srcRect;
+  const cropW = 1 - (crop?.l ?? 0) - (crop?.r ?? 0), cropH = 1 - (crop?.t ?? 0) - (crop?.b ?? 0);
+  finiteGeometry(cropW, cropH);
+  // A crop with no positive extent selects no content: nothing is tiled.
+  if (!(cropW > 0 && cropH > 0)) return null;
+  const periodW = frame.width * cropW, periodH = frame.height * cropH;
+  const tw = periodW * 72 / (fill.dpi || 96) * (tile.sx ?? 1);
+  const th = periodH * 72 / (fill.dpi || 96) * (tile.sy ?? 1);
   finiteGeometry(tw, th);
   if (!(tw > 0 && th > 0)) rejectFillGeometry();
   // An off-frame tile can still paint into the fill through its effect
   // outset. Reflected tiles swap the two edges, so bound both with the larger
-  // support. These exact support bounds also govern preflight draw work.
-  const padX = Math.ceil(Math.max(0, frame.x, natural.w - frame.x - frame.width) / frame.width);
-  const padY = Math.ceil(Math.max(0, frame.y, natural.h - frame.y - frame.height) / frame.height);
+  // support, measured in tile periods. These exact support bounds also govern
+  // preflight draw work.
+  const padX = Math.ceil(Math.max(0, frame.x, natural.w - frame.x - frame.width) / periodW);
+  const padY = Math.ceil(Math.max(0, frame.y, natural.h - frame.y - frame.height) / periodH);
   const cols = Math.ceil(w / tw) + 2 + 2 * padX, rows = Math.ceil(h / th) + 2 + 2 * padY;
   const work = cols * rows;
   if (!Number.isSafeInteger(work) || work > MAX_IMAGE_EFFECT_PIXEL_WORK) {
@@ -95,7 +104,7 @@ function effectTilePlan(fill: Extract<BlipEffectFill, { fillType: 'image' }>, im
   // Each output pixel can be covered by this many neighboring tile images.
   // Include one boundary tile per axis for pixel footprints/antialiasing;
   // counting draw calls alone undercharges grown sources with heavy overdraw.
-  const overlap = (Math.ceil(natural.w / frame.width) + 1) * (Math.ceil(natural.h / frame.height) + 1);
+  const overlap = (Math.ceil(natural.w / periodW) + 1) * (Math.ceil(natural.h / periodH) + 1);
   return { cols, rows, work, overlap, x0, y0, px, py, tw, th };
 }
 
@@ -113,7 +122,7 @@ export function effectFillWork(fill: BlipEffectFill, input: Omit<EffectBuffer, '
     if (!image) throw new OoxmlError('unsupported-image-effect', 'Image fill source unavailable for work planning');
     const f = input.frame ?? { x: 0, y: 0, width: input.width, height: input.height };
     const plan = effectTilePlan(fill, image, f.width / (12700 / emuX), f.height / (12700 / emuY));
-    work += plan.work + pixels * plan.overlap;
+    if (plan) work += plan.work + pixels * plan.overlap;
   }
   return work;
 }
@@ -161,7 +170,8 @@ export function effectFillPixels(
       if (fill.alpha != null) ctx.globalAlpha *= fill.alpha;
       if (fill.tile) {
         const tile = fill.tile;
-        const { cols, rows, x0, y0, px, py, tw, th } = effectTilePlan(fill, image, w, h);
+        const plan = effectTilePlan(fill, image, w, h);
+        const { cols, rows, x0, y0, px, py, tw, th } = plan ?? { cols: 0, rows: 0, x0: 0, y0: 0, px: 0, py: 0, tw: 0, th: 0 };
         for (let row = 0; row < rows; row++) for (let col = 0; col < cols; col++) {
           const flipX = (tile.flip === 'x' || tile.flip === 'xy') && Math.abs((x0 % 2 + col) % 2) === 1;
           const flipY = (tile.flip === 'y' || tile.flip === 'xy') && Math.abs((y0 % 2 + row) % 2) === 1;

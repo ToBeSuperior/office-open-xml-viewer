@@ -406,8 +406,12 @@ describe('PPTX chart picture-marker preload', () => {
     await renderSlide(canvas(), slide, 9_144_000, 6_858_000, {
       width: 960, dpr: 1, fetchImage,
     });
+    // An SVG-only fill with a pixel transform is rasterized through the
+    // shared effect decoder (host SVG bridge), never omitted.
     expect(coreMocks.decodeSvg).not.toHaveBeenCalled();
-    expect(coreMocks.decode).not.toHaveBeenCalled();
-    expect(coreMocks.resolved()).toBeNull();
+    expect(coreMocks.decode).toHaveBeenCalledTimes(1);
+    expect(coreMocks.decode.mock.calls[0]?.slice(0, 3)).toEqual([
+      'ppt/media/chart-marker.svg', 'image/svg+xml', { clr1: '000000', clr2: 'FFFFFF' },
+    ]);
   });
 });

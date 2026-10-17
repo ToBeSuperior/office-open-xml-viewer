@@ -127,8 +127,8 @@ describe('docx lazy image bytes', () => {
       intrinsicSize: { widthPt: 1, heightPt: 1 },
     }], [{ resourceKind: 'image', resourceKey: 'corrected', widthPt: 1, heightPt: 1 }],
     fetchImage, undefined, 1, svgDecoder);
-    expect(decoded.get(imageKey(source.partPath, undefined, undefined, undefined, effects)))
-      .toMatchObject({ width: 1, height: 1 });
+    // Effected images are keyed per occurrence (physical frame), by resource.
+    expect(decoded.get('corrected')).toMatchObject({ width: 1, height: 1 });
     expect(pixels).toEqual([230, 230, 230, 255]);
     expect(svgDecoder).toHaveBeenCalledTimes(1);
     expect(fetchImage).toHaveBeenCalledWith(source.svgImagePath ?? source.partPath, 'image/svg+xml');

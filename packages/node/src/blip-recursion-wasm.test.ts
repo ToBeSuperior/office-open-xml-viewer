@@ -23,7 +23,6 @@ function deck(effects: string, inherited: boolean) {
 
 it.each([
   ['inherited picture fill cycle', '<a:fillOverlay blend="over"><a:grpFill/></a:fillOverlay>', true, 'unsupported-image-effect'],
-  ['malformed Unicode color', '<a:clrRepl><a:srgbClr val="A😀B"/></a:clrRepl>', false, 'unsupported-image-effect'],
   ['deep inline alphaMod', '<a:alphaMod><a:cont>'.repeat(40) + '<a:grayscl/>' + '</a:cont></a:alphaMod>'.repeat(40), false, 'ooxml-decoded-image-limit'],
 ] as const)('real WASM safely transports %s as a typed failure', async (_name, effects, inherited, code) => {
   const model = await materializePptxPresentation(deck(effects, inherited));
@@ -35,4 +34,13 @@ it.each([
   catch (error) { failure = error; }
   expect(failure).toMatchObject({ code });
   expect(deserializeWorkerError(serializeWorkerError(failure))).toMatchObject({ code });
+});
+
+it('real WASM reads a malformed Unicode color without panicking (channel 0 policy)', async () => {
+  const model = await materializePptxPresentation(deck('<a:clrRepl><a:srgbClr val="A😀B"/></a:clrRepl>', false));
+  const picture = model.slides[0].elements.find(e => e.type === 'picture');
+  if (picture?.type !== 'picture') throw new Error('missing picture');
+  const [effect] = picture.blipEffects ?? [];
+  expect(effect?.type).toBe('colorReplace');
+  expect(effect?.type === 'colorReplace' && /^[0-9A-F]{6}$/.test(effect.color)).toBe(true);
 });
