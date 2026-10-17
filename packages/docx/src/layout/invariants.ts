@@ -32,6 +32,7 @@ import type {
 import { unionLayoutRects } from './rect-union.js';
 import { noteOwnedBlocks } from './reserved-note-separators.js';
 
+import { isDeepFrozenPlainDataRoot } from './plain-data.js';
 import { documentLayoutValidationEnabled } from './validation-policy.js';
 // Pagination's generator yields page counts for public progress telemetry.
 // Final validation/freezing also needs suspension points, but commits no new
@@ -1161,8 +1162,16 @@ function deepFreeze<T>(value: T, seen: WeakSet<object>): DeepReadonly<T> {
     return value as DeepReadonly<T>;
   }
   if (seen.has(value)) return value as DeepReadonly<T>;
+  // A plain-data root sealed by its own complete freeze walk is already deeply
+  // frozen, and that walk rejected non-finite numbers in its whole graph.
+  if (isDeepFrozenPlainDataRoot(value)) return value as DeepReadonly<T>;
   seen.add(value);
-  for (const child of Object.values(value as Record<string, unknown>)) deepFreeze(child, seen);
+  // Own enumerable string keys, as Object.values, without its array per node.
+  for (const key in value) {
+    if (Object.prototype.hasOwnProperty.call(value, key)) {
+      deepFreeze((value as Record<string, unknown>)[key], seen);
+    }
+  }
   return Object.freeze(value) as DeepReadonly<T>;
 }
 
