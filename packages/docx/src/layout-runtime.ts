@@ -1,9 +1,10 @@
-import { classifyCjkFont, type CjkLang, type OfficeFontFallbackRoute } from '@silurus/ooxml-core';
+import { classifyCjkFont, type CjkLang, type NativeRouteLineRequest, type OfficeFontFallbackRoute } from '@silurus/ooxml-core';
 import { activeFontSet, isHTMLCanvas, withVertFeatureCanvasScope } from '@silurus/ooxml-core';
 import type { DocxDocumentModel } from './types.js';
 import type { LoadedEmbeddedFontRoute } from './embedded-fonts.js';
 import type { ResolvedFontMetric } from './layout/text.js';
 import { snapshotFontMetrics } from './layout/text.js';
+import type { NativeRouteLineMetric } from './layout/font-service.js';
 import type { MathLayoutResource } from './layout/resources.js';
 import type { BodyLayoutKernel } from './layout/body-layout-kernel.js';
 import type { LayoutServices } from './layout/types.js';
@@ -14,7 +15,12 @@ import type {
 import {
   createProductionBodyLayoutRuntime,
 } from './layout/production-body-layout.js';
-import { createProductionLayoutServices } from './layout/production-services.js';
+import { createProductionLayoutServices, createProductionTextLayoutService } from './layout/production-services.js';
+import {
+  admitDocxNativeRouteLines,
+  docxNativeRouteRequests,
+  measureDocxNativeRouteLines,
+} from './native-route-line-metrics.js';
 import {
   isLayoutSourceStore,
   type LayoutSourceStore,
@@ -44,6 +50,49 @@ function createConcreteBodyLayoutKernel(
   ).kernel;
 }
 
+function layoutCjkFallback(source: LayoutSourceStore, requested: CjkLang | undefined): CjkLang | undefined {
+  return source.fonts.scriptCjkLanguage
+    ?? classifyCjkFont(source.fonts.majorFamily) ?? classifyCjkFont(source.fonts.minorFamily) ?? requested;
+}
+
+/** Native route family lists that {@link createLayoutServices} with the same
+ * options can request (native-route-line-metrics.ts). Resolves through the
+ * production text service built from the same inventory, so the set is the
+ * resolver's own, not a reconstruction of it. */
+export function nativeRouteLineRequests(
+  input: DocxDocumentModel | LayoutSourceStore,
+  model: DocxDocumentModel,
+  options: Omit<NonNullable<Parameters<typeof createLayoutServices>[1]>, 'nativeRouteMetrics'> = {},
+): NativeRouteLineRequest[] {
+  const source = isLayoutSourceStore(input) ? input : layoutSourceStore(input);
+  const localMetrics = snapshotFontMetrics(options.localMetrics);
+  const canvasElement = options.measureContext?.canvas;
+  const text = createProductionTextLayoutService(source, {
+    ...options,
+    cjkFallback: layoutCjkFallback(source, options.cjkFallback),
+    localMetrics,
+    fontMetrics: snapshotFontMetrics({ ...localMetrics, ...options.fontMetrics }),
+    measureContext: null,
+    fontSet: (isHTMLCanvas(canvasElement) ? canvasElement.ownerDocument?.fonts : undefined)
+      ?? activeFontSet(),
+  });
+  return docxNativeRouteRequests(model, text);
+}
+
+/** Main-thread preparation: enumerate, measure and admit in this realm. The
+ * returned sentinel faces belong in the document's release list; they judge
+ * glyph ownership while this realm lays out. */
+export async function prepareMainThreadNativeRouteMetrics(
+  input: LayoutSourceStore,
+  model: DocxDocumentModel,
+  options: Omit<NonNullable<Parameters<typeof createLayoutServices>[1]>, 'nativeRouteMetrics'> = {},
+): Promise<{ nativeRouteMetrics?: Record<string, NativeRouteLineMetric>; faces: FontFace[] }> {
+  const measured = await measureDocxNativeRouteLines(nativeRouteLineRequests(input, model, options), true);
+  return measured.faces.length > 0
+    ? { nativeRouteMetrics: admitDocxNativeRouteLines(measured.lines, activeFontSet()), faces: measured.faces }
+    : { faces: [] };
+}
+
 export function createLayoutServices(
   input: DocxDocumentModel | LayoutSourceStore,
   options: {
@@ -60,6 +109,8 @@ export function createLayoutServices(
     readonly installedSubstituteFamilies?: readonly string[];
     readonly installedFamilies?: readonly string[];
     readonly allowFootnoteContinuation?: boolean;
+    /** Admitted native route lines (native-route-line-metrics.ts). */
+    readonly nativeRouteMetrics?: Readonly<Record<string, NativeRouteLineMetric>>;
   } = {},
 ): LayoutServices {
   const source = isLayoutSourceStore(input) ? input : layoutSourceStore(input);
@@ -149,8 +200,7 @@ export function createLayoutServices(
     ...localMetrics,
     ...options.fontMetrics,
   });
-  const cjkFallback = source.fonts.scriptCjkLanguage
-    ?? classifyCjkFont(source.fonts.majorFamily) ?? classifyCjkFont(source.fonts.minorFamily) ?? options.cjkFallback;
+  const cjkFallback = layoutCjkFallback(source, options.cjkFallback);
   const services = createProductionLayoutServices(source, {
     ...options,
     cjkFallback,

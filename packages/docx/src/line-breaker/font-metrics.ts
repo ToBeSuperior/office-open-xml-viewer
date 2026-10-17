@@ -170,6 +170,14 @@ export function selectResourceMetric(
   probeText: string,
   paintsGlyphs = true,
 ): ResolvedFontMetric | undefined {
+  if (selected.source === 'native') {
+    // The measured line describes the route's first available face, not the
+    // absent authored one; it lends geometry only to clusters that face draws
+    // (or, for a paragraph mark that draws nothing, to the face it selects).
+    const metric = selected.routeLineMetric;
+    return metric && metricCoversText(metric, probeText, selected.route, paintsGlyphs)
+      ? metric : undefined;
+  }
   if (selected.source !== 'embedded' && selected.source !== 'local'
     && selected.source !== 'substitute') return undefined;
   const candidates = index.get(resolutionMetricKey(selected)) ?? [];
@@ -225,7 +233,9 @@ export function mayUseAuthoredReferenceVerticalMetric(
   // Layout follows the face that actually paints on the host. A native CSS
   // family list whose authored face is not installed paints with a browser
   // fallback, so the authored face's catalog line box would size lines for
-  // glyphs drawn by a different face; that span keeps its own Canvas box.
+  // glyphs drawn by a different face; that span keeps its own Canvas box, or
+  // the painting face's measured normal line (FontResolution.routeLineMetric,
+  // admitted by selectResourceMetric for the clusters that face draws).
   // See LIBRARY_ABSENT_FACE_FALLBACK_LINE_BOX (layout/line-compatibility.ts).
   // A loaded local() tuple uses the catalog only when neither parsed nor
   // prepared host measurements supply the required geometry. A registered

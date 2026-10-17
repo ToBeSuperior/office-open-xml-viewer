@@ -106,6 +106,7 @@ export type WireRenderPageOptions = Omit<RenderPageOptions, 'onTextRun'>;
 export type RenderWorkerRequest =
   | { type: 'init'; wasmUrl: string }
   | { type: 'hostFontLinesMeasured'; forId: number; measurements: import('./host-font-line-metrics.js').HostFontLineMeasurement[] }
+  | { type: 'nativeRouteLinesMeasured'; forId: number; lines: (import('@silurus/ooxml-core').NativeRouteNormalLine | null)[] }
   // `currentDateMs` / `showTrackedChanges` select the layout VARIANT the worker
   // paginates and reports metadata for. They are acquisition inputs, not paint
   // flags: hiding deletions changes line breaking, and DATE/TIME field text
@@ -163,6 +164,7 @@ export type RenderWorkerWireRequest =
 
 export type RenderWorkerResponse =
   | { type: 'measureHostFontLines'; forId: number; routes: import('@silurus/ooxml-core').OfficeFontFallbackRoute[] }
+  | { type: 'measureNativeRouteLines'; forId: number; requests: import('@silurus/ooxml-core').NativeRouteLineRequest[] }
   | Exclude<WorkerResponse, { type: 'documentSessionOpened' }>
   | PullSessionResponse<ArrayBuffer, number>
   | {

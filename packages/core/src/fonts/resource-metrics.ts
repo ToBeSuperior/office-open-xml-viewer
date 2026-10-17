@@ -31,6 +31,10 @@ export interface ResolvedFontMetric {
   requiresGlyphCoverage?: boolean;
   /** Exact-source size-adjust:0% registration retained beside the paint face. */
   glyphCoverageProbeFamily?: string;
+  /** Native route metric: the route's family list up to its first available
+   * family, whose measured normal line this is. Ownership of a cluster is
+   * judged with the route sentinels (native-route-line-metrics.ts). */
+  nativeRoutePrimaryFamilyList?: string;
   /** Unicode scalar ranges mapped by this exact resource's supported cmap.
    * Resource metrics are applied only when every scalar in a shaped span is
    * covered, so a subset font cannot lend its geometry to fallback glyphs. */

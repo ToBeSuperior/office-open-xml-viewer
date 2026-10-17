@@ -5,6 +5,7 @@ import type { ResolvedFontMetric } from './resource-metrics.js';
 import { quoteCssFontFamily } from '../internal/css-font-family.js';
 import { getGraphemeSegmenter } from '../text/sea-break.js';
 import type { CanvasFontBoxProbeContext } from './canvas-font-box.js';
+import { nativeRouteClusterOwned, nativeRouteOwnershipFonts, nativeRouteSentinelsWork } from './native-route-line-metrics.js';
 
 export interface LocalFontNormalLine {
   readonly ascentRatio: number;
@@ -179,7 +180,8 @@ function newCoverageContext(): CanvasFontBoxProbeContext | null {
 
 let coverageContext: CanvasFontBoxProbeContext | null | undefined;
 interface CoverageRoute {
-  readonly font: string;
+  /** Native judgement of one cluster; undefined when the realm cannot judge. */
+  readonly measure: (cluster: string) => boolean | undefined;
   /** Text results (bounded) and the per-cluster answers they are built from. */
   readonly results: Map<string, boolean>;
   readonly clusters: Map<string, boolean>;
@@ -203,27 +205,46 @@ const coverageResults = new WeakMap<ResolvedFontMetric, WeakMap<CanvasFontRoute,
 /** Ask the same native shaper that paints the registered local source. No
  * per-span DOM reads or font loads; bounded weak caches die with the metric.
  * Any fallback ink/advance revokes the primary resource's vertical projection,
- * allowing the existing per-segment Canvas measurement to size that span. */
+ * allowing the existing per-segment Canvas measurement to size that span.
+ *
+ * A native route metric (`nativeRoutePrimaryFamilyList`) describes the route's
+ * first available face instead of a registered source; its clusters are judged
+ * with the route sentinels (native-route-line-metrics.ts). */
 export function localFontMetricCoversText(
   metric: ResolvedFontMetric, text: string, route: CanvasFontRoute | undefined,
 ): boolean {
   const family = metric.glyphCoverageProbeFamily;
-  if (!family || !text) return !metric.requiresGlyphCoverage || text.length === 0;
+  const nativeList = metric.nativeRoutePrimaryFamilyList;
+  if ((!family && !nativeList) || !text) return !metric.requiresGlyphCoverage || text.length === 0;
   if (!route) return false;
   let byRoute = coverageResults.get(metric);
   if (!byRoute) { byRoute = new WeakMap(); coverageResults.set(metric, byRoute); }
   let prepared = byRoute.get(route);
   if (!prepared) {
-    const primary = quoteCssFontFamily(metric.family);
-    if (route.familyList !== primary && !route.familyList.startsWith(`${primary},`)) return false;
-    // Preserve the complete paint cascade. A caller-owned tail face may cover
-    // glyphs that generic/system fallback cannot, including private-use scalars.
-    const familyList = quoteCssFontFamily(family) + route.familyList.slice(primary.length);
-    prepared = {
-      font: `${metric.style ?? 'normal'} ${metric.weight ?? 400} 100px ${familyList}`,
-      results: new Map(),
-      clusters: new Map(),
-    };
+    if (nativeList) {
+      // The metric belongs to exactly this route: its list must begin with the
+      // measured prefix, and this realm's sentinels must work.
+      if ((route.familyList !== nativeList && !route.familyList.startsWith(`${nativeList},`))
+        || !nativeRouteSentinelsWork()) return false;
+      const fonts = nativeRouteOwnershipFonts(nativeList, metric.weight ?? 400, metric.style ?? 'normal');
+      prepared = {
+        measure: (cluster) => nativeRouteClusterOwned(fonts, cluster),
+        results: new Map(),
+        clusters: new Map(),
+      };
+    } else {
+      const primary = quoteCssFontFamily(metric.family);
+      if (route.familyList !== primary && !route.familyList.startsWith(`${primary},`)) return false;
+      // Preserve the complete paint cascade. A caller-owned tail face may cover
+      // glyphs that generic/system fallback cannot, including private-use scalars.
+      const familyList = quoteCssFontFamily(family!) + route.familyList.slice(primary.length);
+      const font = `${metric.style ?? 'normal'} ${metric.weight ?? 400} 100px ${familyList}`;
+      prepared = {
+        measure: (cluster) => measureCoverage(font, cluster),
+        results: new Map(),
+        clusters: new Map(),
+      };
+    }
     byRoute.set(route, prepared);
   }
   const cache = prepared.results;
@@ -238,7 +259,7 @@ export function localFontMetricCoversText(
   for (const cluster of clustersOf(text)) {
     let owned = prepared.clusters.get(cluster);
     if (owned === undefined) {
-      const measured = measureCoverage(prepared.font, cluster);
+      const measured = prepared.measure(cluster);
       if (measured === undefined) return false;
       owned = measured;
       rememberCluster(prepared, cluster, owned);

@@ -44,7 +44,7 @@ import { ProgressiveLayoutLifecycle } from '@silurus/ooxml-core/internal/progres
 import { ProgressiveLayoutObserverNotifier } from '@silurus/ooxml-core/internal/progressive-layout-observers';
 import type { DocxDocumentModel, RenderPageOptions, WorkerRequest, WorkerResponse, DocComment, DocNote, DocRevision } from '../types';
 import { renderLayoutSourceToCanvas, documentHasMath, prepareMathRuns, type DocxTextRunInfo } from '../renderer';
-import { createLayoutServices } from '../layout-runtime.js';
+import { createLayoutServices, prepareMainThreadNativeRouteMetrics } from '../layout-runtime.js';
 import { buildBookmarkPageMap } from '../bookmark-nav';
 import { DOCX_GOOGLE_FONTS, docxGoogleFontPlan, docxOfficeFontFallbackRequests } from '../google-fonts';
 import { loadEmbeddedFonts } from '../embedded-fonts';
@@ -352,7 +352,7 @@ export async function loadDocxModelSource(
       if (doc._mode === 'main' && doc._document && doc._source) {
         const layoutDocument = doc;
         const runtime = documentLayoutRuntimeOf(doc);
-        runtime.services = createLayoutServices(doc._source, {
+        const serviceOptions = {
           allowFootnoteContinuation: doc._allowFootnoteContinuation,
           fontMetrics: embeddedMetrics,
           useGoogleFonts: !!opts.useGoogleFonts,
@@ -364,6 +364,16 @@ export async function loadDocxModelSource(
           installedFamilies: 'installed' in officeFonts ? officeFonts.installed : undefined,
           mathResources: preparedMath?.records,
           mathDrawables: preparedMath?.drawables,
+        };
+        // Absent authored faces: see native-route-line-metrics.ts.
+        const nativeRoutes = await prepareMainThreadNativeRouteMetrics(
+          doc._source, doc._document, serviceOptions,
+        );
+        doc._officeFontFaces = [...doc._officeFontFaces, ...nativeRoutes.faces];
+        checkAbort();
+        runtime.services = createLayoutServices(doc._source, {
+          ...serviceOptions,
+          nativeRouteMetrics: nativeRoutes.nativeRouteMetrics,
         });
         const services = runtime.services;
         const retained = retainRenderWorkerDocumentLayout(

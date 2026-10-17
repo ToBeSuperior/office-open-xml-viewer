@@ -70,6 +70,7 @@ vi.mock('./google-fonts.js', async (load) => ({
 vi.mock('./layout-runtime.js', async (load) => ({
   ...await load<typeof import('./layout-runtime.js')>(),
   createLayoutServices: () => ({}),
+  nativeRouteLineRequests: () => [],
 }));
 vi.mock('./render-worker-layout.js', () => ({
   retainRenderWorkerDocumentLayout: () => ({

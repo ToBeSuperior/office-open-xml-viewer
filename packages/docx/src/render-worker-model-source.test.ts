@@ -52,7 +52,7 @@ vi.mock('./renderer.js', () => ({ prepareMathRuns: vi.fn(), renderLayoutSourceTo
 vi.mock('./vertical-render-capability.js', () => ({
   documentRequiresDomVerticalGlyphLayout: workerMocks.verticalFallback,
 }));
-vi.mock('./layout-runtime.js', () => ({ createLayoutServices: () => ({}) }));
+vi.mock('./layout-runtime.js', () => ({ createLayoutServices: () => ({}), nativeRouteLineRequests: () => [] }));
 vi.mock('./render-worker-layout.js', () => ({
   retainRenderWorkerDocumentLayout: () => ({
     defaultCurrentDateMs: 0, layoutServices: {},

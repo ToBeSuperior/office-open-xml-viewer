@@ -1,5 +1,11 @@
 import { prepareDocxHostFontMetrics, type HostFontLineMeasurement } from './host-font-line-metrics.js';
-import { activeFontSet, loadOfficeFontFallbacks } from '@silurus/ooxml-core';
+import {
+  activeFontSet,
+  loadNativeRouteSentinels,
+  loadOfficeFontFallbacks,
+  type NativeRouteNormalLine,
+} from '@silurus/ooxml-core';
+import { admitDocxNativeRouteLines } from './native-route-line-metrics.js';
 import { normalizeDocxParserError } from './internal/parser-errors.js';
 import type { LayoutDiagnostic } from './layout/types.js';
 /**
@@ -40,7 +46,7 @@ import {
   type WorkerSvgDecodeResponse,
 } from '@silurus/ooxml-core/worker';
 import { prepareMathRuns, renderLayoutSourceToCanvas } from './renderer';
-import { createLayoutServices } from './layout-runtime.js';
+import { createLayoutServices, nativeRouteLineRequests } from './layout-runtime.js';
 import { DOCX_GOOGLE_FONTS, docxGoogleFontPlan, docxOfficeFontFallbackRequests } from './google-fonts';
 import { loadEmbeddedFonts } from './embedded-fonts';
 import type {
@@ -164,6 +170,7 @@ function getImage(path: string, mimeType: string): Promise<Blob> {
 }
 
 const hostFontMeasurements = new Map<number, (measurements: HostFontLineMeasurement[]) => void>();
+const nativeRouteMeasurements = new Map<number, (lines: (NativeRouteNormalLine | null)[]) => void>();
 
 self.onmessage = async (e: MessageEvent<RenderWorkerWireRequest | WorkerSvgDecodeResponse>) => {
   const req = e.data;
@@ -191,6 +198,11 @@ self.onmessage = async (e: MessageEvent<RenderWorkerWireRequest | WorkerSvgDecod
   if (req.type === 'hostFontLinesMeasured') {
     hostFontMeasurements.get(req.forId)?.(req.measurements);
     hostFontMeasurements.delete(req.forId);
+    return;
+  }
+  if (req.type === 'nativeRouteLinesMeasured') {
+    nativeRouteMeasurements.get(req.forId)?.(req.lines);
+    nativeRouteMeasurements.delete(req.forId);
     return;
   }
   if (req.type === 'init') {
@@ -357,7 +369,7 @@ self.onmessage = async (e: MessageEvent<RenderWorkerWireRequest | WorkerSvgDecod
           ? await prepareMathRuns(model, requestedRenderers.math)
           : undefined;
         if (requestedGeneration !== parseGeneration) throw new Error('render-worker parse was superseded');
-        const layoutServices = createLayoutServices(source, {
+        const serviceOptions = {
           allowFootnoteContinuation: req.allowFootnoteContinuation === true,
           fontMetrics: embeddedFonts.metrics,
           useGoogleFonts: !!req.useGoogleFonts,
@@ -369,7 +381,25 @@ self.onmessage = async (e: MessageEvent<RenderWorkerWireRequest | WorkerSvgDecod
           installedFamilies: officeFonts.installed,
           mathResources: preparedMath?.records,
           mathDrawables: preparedMath?.drawables,
-        });
+        };
+        // Absent authored faces (native-route-line-metrics.ts): this realm has
+        // no DOM, so the owning document measures the same enumerated routes;
+        // this realm loads its own sentinels to re-verify each measurement
+        // and to judge glyph ownership during layout.
+        const nativeRouteRequests = nativeRouteLineRequests(source, model, serviceOptions);
+        let nativeRouteMetrics: ReturnType<typeof admitDocxNativeRouteLines> | undefined;
+        const sentinels = nativeRouteRequests.length > 0
+          ? await loadNativeRouteSentinels(activeFontSet()) : null;
+        if (sentinels) {
+          officeFaces = [...officeFaces, ...sentinels];
+          const lines = await new Promise<(NativeRouteNormalLine | null)[]>(resolve => {
+            nativeRouteMeasurements.set(id, resolve);
+            post({ type: 'measureNativeRouteLines', forId: id, requests: nativeRouteRequests });
+          });
+          nativeRouteMetrics = admitDocxNativeRouteLines(lines, activeFontSet());
+        }
+        if (requestedGeneration !== parseGeneration) throw new Error('render-worker parse was superseded');
+        const layoutServices = createLayoutServices(source, { ...serviceOptions, nativeRouteMetrics });
         const requestedDoc = retainRenderWorkerDocumentLayout(
           source,
           layoutServices,
