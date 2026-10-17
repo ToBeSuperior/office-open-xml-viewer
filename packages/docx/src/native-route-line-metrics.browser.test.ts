@@ -169,7 +169,7 @@ describe.skipIf(!existsSync(chromium.executablePath()))('DOCX native route line 
           const [line] = oracle.measureNativeRouteNormalLines([{ familyList: list, weight: 400, style: 'normal' }],
             document, () => true);
           if (line?.primaryFamily !== 'Arial') return null;
-          const fonts = oracle.nativeRouteOwnershipFonts(line.primaryFamilyList, 400, 'normal');
+          const fonts = oracle.nativeRouteOwnershipFonts(line.primaryFamilyText, 400, 'normal');
           return Object.fromEntries(['A', 'e\u0301', ' ', '\u6f22', '\u2764\ufe0f', '1\ufe0f\u20e3', 'a\u1ab0', '\u{1f600}']
             .map(cluster => [cluster, oracle.nativeRouteClusterOwned(fonts, cluster)]));
         }, ABSENT);

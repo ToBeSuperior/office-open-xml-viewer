@@ -19,8 +19,8 @@ export interface NativeRouteNormalLine extends NativeRouteLineRequest {
   readonly primaryIndex: number;
   /** That family's name (unquoted). */
   readonly primaryFamily: string;
-  /** The family list up to and including the first available family. */
-  readonly primaryFamilyList: string;
+  /** That family as written in the list (CSS syntax). */
+  readonly primaryFamilyText: string;
   /** Probe em whose measurement scaled linearly. */
   readonly emPx: number;
   readonly ascentRatio: number;
@@ -55,10 +55,10 @@ export type NativeRoutePrimaryAdmission = (
 //   font box exactly when the family resolves to a face (the box is that
 //   face's); otherwise they report the two sentinel boxes. The first available
 //   family of a list is its first family whose boxes agree.
-// - Ownership: with the prefix ending at that family, a cluster is drawn by the
-//   prefix's faces in both `prefix, A` and `prefix, B`, or (partly) by a
-//   sentinel in each. Equal advance and ink extents therefore prove that no
-//   sentinel glyph, i.e. no face after the prefix, drew any part of it; any
+// - Ownership: the families before the first available one resolve to no
+//   face, so a cluster is drawn by that family in both `family, A` and
+//   `family, B`, or (partly) by a sentinel in each. Equal advance and ink extents therefore prove that no
+//   sentinel glyph, i.e. no face after that family, drew any part of it; any
 //   sentinel glyph changes the advance or the ink box. This holds only for a
 //   cluster the engine routes through the family list at all, which a
 //   sentinel-only control establishes first (nativeRouteClusterOwned).
@@ -306,25 +306,25 @@ function registeredFamilies(fontSet: FontFaceSet | null | undefined): Set<string
 
 /** Index of the first available family, judged by the Canvas font box (see
  * the sentinel notes above). The first available face of a list is that of
- * its first family that resolves to any face, so availability is judged per
- * family (`family, sentinel`) and memoized: routes share most of their
- * families, and each family costs one pair of probes per preparation. */
+ * its first family that resolves to any face. A system family resolves for
+ * every weight and style once it resolves at all (CSS Fonts 4 §5.2 matches
+ * the nearest face and synthesizes the rest), and registered faces are
+ * declined separately, so availability is judged once per family at the
+ * regular tuple and memoized: routes share most of their families. */
 function primaryIndex(
   context: CanvasFontBoxProbeContext,
   entries: readonly FamilyEntry[],
-  weight: number,
-  style: 'normal' | 'italic',
   memo: Map<string, boolean>,
 ): number | undefined {
   for (let index = 0; index < entries.length; index += 1) {
     const entry = entries[index]!;
     // A generic keyword always resolves; callers decline it unprobed.
     if (entry.generic) return index;
-    const key = `${style} ${weight} ${entry.text}`;
+    const key = entry.text;
     let available = memo.get(key);
     if (available === undefined) {
       const boxes = SENTINEL_FAMILIES.map((family) => {
-        context.font = `${style} ${weight} ${PROBE_EM}px ${entry.text}, ${quoteCssFontFamily(family)}`;
+        context.font = `${PROBE_EM}px ${entry.text}, ${quoteCssFontFamily(family)}`;
         const box = context.measureText('');
         return [box.fontBoundingBoxAscent, box.fontBoundingBoxDescent] as const;
       });
@@ -343,12 +343,10 @@ function primaryIndex(
 function identifiedPrimary(
   context: CanvasFontBoxProbeContext,
   entries: readonly FamilyEntry[],
-  weight: number,
-  style: 'normal' | 'italic',
   registered: ReadonlySet<string>,
   memo: Map<string, boolean>,
 ): number | undefined {
-  const index = primaryIndex(context, entries, weight, style, memo);
+  const index = primaryIndex(context, entries, memo);
   if (index === undefined || entries[index]!.generic) return undefined;
   for (let entry = 0; entry <= index; entry += 1) {
     if (registered.has(entries[entry]!.name.toLowerCase())) return undefined;
@@ -392,31 +390,43 @@ export function measureNativeRouteNormalLines(
   if (!context || !view || !sentinelsWork(context)) return results;
   const registered = registeredFamilies(owner.fonts);
   const memo = new Map<string, boolean>();
+  // CSS Inline 3 sizes a `line-height: normal` line box from its first
+  // available font, which Canvas also reports as the font box, so a route's
+  // normal line is that of its first available family. Families before it
+  // resolve to no face. Measuring that family alone gives the same line,
+  // shares one strut among every route it paints, and resolves no absent
+  // family at the strut sizes.
   interface Pending {
-    readonly request: number;
-    readonly entries: FamilyEntry[];
-    readonly primary: number;
+    readonly requests: number[];
+    readonly primary: FamilyEntry;
+    readonly weight: number;
+    readonly style: 'normal' | 'italic';
     em: number;
   }
-  let pending: Pending[] = [];
+  const byFace = new Map<string, Pending>();
+  const primaries = new Map<number, number>();
   requests.forEach((request, index) => {
     const entries = parseFamilyList(request.familyList);
     if (!entries) return;
-    const primary = identifiedPrimary(context, entries, request.weight, request.style, registered, memo);
+    const primary = identifiedPrimary(context, entries, registered, memo);
     if (primary === undefined) return;
     if (!admitted(entries[primary]!.name, request.weight, request.style)) return;
-    pending.push({ request: index, entries, primary, em: STRUT_EM });
+    primaries.set(index, primary);
+    const key = JSON.stringify([entries[primary]!.text, request.weight, request.style]);
+    const face = byFace.get(key);
+    if (face) face.requests.push(index);
+    else byFace.set(key, { requests: [index], primary: entries[primary]!, weight: request.weight, style: request.style, em: STRUT_EM });
   });
+  let pending = [...byFace.values()];
   for (let attempt = 0; attempt < LINEAR_PROBE_ATTEMPTS && pending.length > 0; attempt += 1) {
     const host = owner.createElement('div');
     host.style.cssText = 'all:initial;position:fixed;visibility:hidden;contain:strict;';
     if (typeof host.attachShadow !== 'function') return results;
     const root = host.attachShadow({ mode: 'closed' });
     const struts = pending.map((item) => [item.em, item.em / 2].map((em) => {
-      const request = requests[item.request]!;
       const strut = owner.createElement('span');
-      strut.style.cssText = `all:initial;display:block;white-space:pre;font:${request.style} ${request.weight} ${em}px ${request.familyList};line-height:normal;`;
-      strut.textContent = '​';
+      strut.style.cssText = `all:initial;display:block;white-space:pre;font:${item.style} ${item.weight} ${em}px ${item.primary.text};line-height:normal;`;
+      strut.textContent = '\u200b';
       root.append(strut);
       return strut;
     }));
@@ -424,12 +434,11 @@ export function measureNativeRouteNormalLines(
     owner.body.append(host);
     try {
       pending.forEach((item, index) => {
-        const request = requests[item.request]!;
         const boxes = struts[index]!.map((strut, half): NormalBox | null => {
           const computed = parseFamilyList(view.getComputedStyle(strut).fontFamily);
-          if (!computed || !sameFamilyList(computed, item.entries)) return null;
+          if (!computed || !sameFamilyList(computed, [item.primary])) return null;
           const em = half ? item.em / 2 : item.em;
-          context.font = `${request.style} ${request.weight} ${em}px ${request.familyList}`;
+          context.font = `${item.style} ${item.weight} ${em}px ${item.primary.text}`;
           const box = context.measureText('');
           const height = strut.offsetHeight;
           return Number.isFinite(height) && height > 0
@@ -446,18 +455,21 @@ export function measureNativeRouteNormalLines(
           next.push(item);
           return;
         }
-        results[item.request] = Object.freeze({
-          familyList: request.familyList,
-          weight: request.weight,
-          style: request.style,
-          primaryIndex: item.primary,
-          primaryFamily: item.entries[item.primary]!.name,
-          primaryFamilyList: item.entries.slice(0, item.primary + 1).map((entry) => entry.text).join(', '),
-          emPx: item.em,
-          ascentRatio: full.ascent / item.em,
-          descentRatio: full.descent / item.em,
-          lineGapRatio: (full.height - full.ascent - full.descent) / item.em,
-        });
+        for (const requestIndex of item.requests) {
+          const request = requests[requestIndex]!;
+          results[requestIndex] = Object.freeze({
+            familyList: request.familyList,
+            weight: request.weight,
+            style: request.style,
+            primaryIndex: primaries.get(requestIndex)!,
+            primaryFamily: item.primary.name,
+            primaryFamilyText: item.primary.text,
+            emPx: item.em,
+            ascentRatio: full.ascent / item.em,
+            descentRatio: full.descent / item.em,
+            lineGapRatio: (full.height - full.ascent - full.descent) / item.em,
+          });
+        }
       });
     } catch {
       // An unavailable measurement declines the remaining routes.
@@ -486,10 +498,11 @@ export function verifyNativeRouteNormalLines(
   return lines.map((line) => {
     const entries = parseFamilyList(line.familyList);
     if (!entries || entries[line.primaryIndex]?.name !== line.primaryFamily) return false;
-    if (identifiedPrimary(context, entries, line.weight, line.style, registered, memo) !== line.primaryIndex) {
+    if (entries[line.primaryIndex]!.text !== line.primaryFamilyText
+      || identifiedPrimary(context, entries, registered, memo) !== line.primaryIndex) {
       return false;
     }
-    context.font = `${line.style} ${line.weight} ${line.emPx}px ${line.familyList}`;
+    context.font = `${line.style} ${line.weight} ${line.emPx}px ${line.primaryFamilyText}`;
     const box = context.measureText('');
     return Math.abs(box.fontBoundingBoxAscent - line.ascentRatio * line.emPx) < 1e-3
       && Math.abs(box.fontBoundingBoxDescent - line.descentRatio * line.emPx) < 1e-3;
@@ -498,14 +511,15 @@ export function verifyNativeRouteNormalLines(
 
 // ── Ownership ───────────────────────────────────────────────────────────────
 
-/** The two font strings whose geometry is compared for one route: the route
- * truncated after its first available family, then one sentinel. */
+/** The two font strings whose geometry is compared for one route: its first
+ * available family, then one sentinel. The families before it resolve to no
+ * face and draw nothing, so leaving them out changes no cluster's face. */
 export function nativeRouteOwnershipFonts(
-  primaryFamilyList: string, weight: number, style: 'normal' | 'italic',
+  primaryFamilyText: string, weight: number, style: 'normal' | 'italic',
 ): readonly [string, string] {
   return [
-    `${style} ${weight} ${PROBE_EM}px ${primaryFamilyList}, ${quoteCssFontFamily(SENTINEL_FAMILIES[0])}`,
-    `${style} ${weight} ${PROBE_EM}px ${primaryFamilyList}, ${quoteCssFontFamily(SENTINEL_FAMILIES[1])}`,
+    `${style} ${weight} ${PROBE_EM}px ${primaryFamilyText}, ${quoteCssFontFamily(SENTINEL_FAMILIES[0])}`,
+    `${style} ${weight} ${PROBE_EM}px ${primaryFamilyText}, ${quoteCssFontFamily(SENTINEL_FAMILIES[1])}`,
   ];
 }
 

@@ -140,7 +140,7 @@ export function admitDocxNativeRouteLines(
       // Admission above requires a catalogued non-Far-East class.
       farEastCodePage: false,
       requiresGlyphCoverage: true,
-      nativeRoutePrimaryFamilyList: line.primaryFamilyList,
+      nativeRoutePrimaryFamily: line.primaryFamilyText,
       lineHeightRatio: ascent + descent,
       designAscentRatio: ascent,
       designDescentRatio: descent,

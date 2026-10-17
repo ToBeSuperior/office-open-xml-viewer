@@ -50,7 +50,7 @@ export interface FontResolution {
  * resolution stays structured-clone/deep-readonly plain data. */
 export type NativeRouteLineMetric = Readonly<Pick<ResolvedFontMetric,
   'family' | 'requestedFamily' | 'weight' | 'style' | 'farEastCodePage' | 'requiresGlyphCoverage'
-  | 'nativeRoutePrimaryFamilyList' | 'lineHeightRatio' | 'designAscentRatio' | 'designDescentRatio'
+  | 'nativeRoutePrimaryFamily' | 'lineHeightRatio' | 'designAscentRatio' | 'designDescentRatio'
   | 'lineGapRatio'>>;
 
 export interface FontResolver {

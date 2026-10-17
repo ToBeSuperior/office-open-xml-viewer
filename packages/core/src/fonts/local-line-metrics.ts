@@ -207,14 +207,14 @@ const coverageResults = new WeakMap<ResolvedFontMetric, WeakMap<CanvasFontRoute,
  * Any fallback ink/advance revokes the primary resource's vertical projection,
  * allowing the existing per-segment Canvas measurement to size that span.
  *
- * A native route metric (`nativeRoutePrimaryFamilyList`) describes the route's
+ * A native route metric (`nativeRoutePrimaryFamily`) describes the route's
  * first available face instead of a registered source; its clusters are judged
  * with the route sentinels (native-route-line-metrics.ts). */
 export function localFontMetricCoversText(
   metric: ResolvedFontMetric, text: string, route: CanvasFontRoute | undefined,
 ): boolean {
   const family = metric.glyphCoverageProbeFamily;
-  const nativeList = metric.nativeRoutePrimaryFamilyList;
+  const nativeList = metric.nativeRoutePrimaryFamily;
   if ((!family && !nativeList) || !text) return !metric.requiresGlyphCoverage || text.length === 0;
   if (!route) return false;
   let byRoute = coverageResults.get(metric);
@@ -222,10 +222,9 @@ export function localFontMetricCoversText(
   let prepared = byRoute.get(route);
   if (!prepared) {
     if (nativeList) {
-      // The metric belongs to exactly this route: its list must begin with the
-      // measured prefix, and this realm's sentinels must work.
-      if ((route.familyList !== nativeList && !route.familyList.startsWith(`${nativeList},`))
-        || !nativeRouteSentinelsWork()) return false;
+      // The metric is attached to exactly this route (by its family list and
+      // tuple); this realm's sentinels must work.
+      if (!nativeRouteSentinelsWork()) return false;
       const fonts = nativeRouteOwnershipFonts(nativeList, metric.weight ?? 400, metric.style ?? 'normal');
       prepared = {
         measure: (cluster) => nativeRouteClusterOwned(fonts, cluster),
