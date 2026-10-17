@@ -459,6 +459,14 @@ mod tests {
 fn stray() {
     // \`${first}\`
 }
+
+/// Helper for \`${first}\` fixtures.
+#[cfg(any(test))]
+fn helper() {}
+
+/// Documents \`${first}\` above a test-only module.
+#[cfg(all(test, feature = "x"))]
+mod more_tests {}
 `;
   const rustPath = 'packages/docx/parser/src/chart_compatibility.rs';
   write(root, rustPath, testOnly);

@@ -521,17 +521,41 @@ function rustItemEnd(text, start) {
   return text.length;
 }
 
-// Rust tests are not production citations: drop every `#[cfg(test)]` item
-// (test modules, helpers, impls) and every `#[test]` function.
+// Rust tests are not production citations: drop every test-only item (test
+// modules, helpers, impls) and every `#[test]` function, together with the doc
+// comments, comments and attributes attached above it. A `cfg` predicate that
+// mentions `test` outside `not(test)` counts as test-only; this errs toward
+// stripping, which can only make the citation gate stricter.
+const RUST_TEST_ATTRIBUTE = /#\[\s*(?:test|cfg\s*\((?:[^()]|\([^()]*\))*\))\s*\]/g;
+
+function isTestOnlyAttribute(attribute) {
+  if (/^#\[\s*test\s*\]$/.test(attribute)) return true;
+  const predicate = attribute.replace(/not\s*\(\s*test\s*\)/g, '');
+  return /\btest\b/.test(predicate.replace(/^#\[\s*cfg/, ''));
+}
+
+// Start of the comment and attribute lines directly attached above `index`.
+function attachedItemStart(text, index) {
+  let start = text.lastIndexOf('\n', index - 1) + 1;
+  while (start > 0) {
+    const previousStart = text.lastIndexOf('\n', start - 2) + 1;
+    const line = text.slice(previousStart, start - 1).trim();
+    if (!(line.startsWith('//') || (line.startsWith('#[') && line.endsWith(']')))) break;
+    start = previousStart;
+  }
+  return Math.max(start, 0);
+}
+
 function withoutRustTestItems(text) {
-  const attribute = /#\[\s*(?:cfg\s*\(\s*test\s*\)|test)\s*\]/g;
   let result = '';
   let cursor = 0;
-  for (let match = attribute.exec(text); match; match = attribute.exec(text)) {
+  RUST_TEST_ATTRIBUTE.lastIndex = 0;
+  for (let match = RUST_TEST_ATTRIBUTE.exec(text); match; match = RUST_TEST_ATTRIBUTE.exec(text)) {
+    if (match.index < cursor || !isTestOnlyAttribute(match[0])) continue;
     const end = rustItemEnd(text, match.index + match[0].length);
-    result += text.slice(cursor, match.index);
+    result += text.slice(cursor, Math.max(cursor, attachedItemStart(text, match.index)));
     cursor = end;
-    attribute.lastIndex = end;
+    RUST_TEST_ATTRIBUTE.lastIndex = end;
   }
   return result + text.slice(cursor);
 }
