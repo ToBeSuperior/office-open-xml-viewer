@@ -1466,9 +1466,8 @@ function emitResolvedTextSegment(
       allowsReferenceFontMetric(indexedFontMetrics(environment.layoutServices?.text.fontMetrics
         ?? environment.layoutServices?.text.localMetrics ?? {}), resolvedSpan?.font),
       environment.layoutServices ? { text: environment.layoutServices.text, probe: text } : undefined);
-  // The East Asian floor of a run painted in another slot is not proved by
-  // LIBRARY_SYNTHESIZED_FACE_LINE_GEOMETRY: Office keeps a bold Latin heading's
-  // line when its East Asian slot names a regular-only face.
+  // LIBRARY_SYNTHESIZED_FACE_LINE_GEOMETRY does not extend to the East Asian
+  // floor of a run painted in another slot (see that rule's scope).
   const { resourceMetric: resourceEaLineMetric, referenceMetric: referenceEaLineMetric,
     lineMetric: eaLineMetric } = selectedFontLineMetric(eaResolution, localEaFloor, naturalMetricAllowed,
       allowsReferenceFontMetric(indexedFontMetrics(environment.layoutServices?.text.fontMetrics
