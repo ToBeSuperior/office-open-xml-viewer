@@ -83,7 +83,11 @@ import {
   resolveNumberingMarkerGeometry,
   shapeNumberingMarkerText,
 } from './numbering-marker.js';
-import { deepFreezePlainData, deepFreezePlainDataWithFrozenAliases } from './plain-data.js';
+import {
+  deepFreezePlainData,
+  deepFreezePlainDataWithFrozenAliases,
+  isDeepFrozenPlainDataRoot,
+} from './plain-data.js';
 import { retainedBorderTreatment } from './border-treatment.js';
 import type { ParagraphBorderEdges } from './paragraph-border-adjacency.js';
 import {
@@ -1134,6 +1138,18 @@ export function planLine(input: PlanLineInput): LineLayout {
  * Retain disjoint allocations solely for horizontal shading; source ranges,
  * placements and vertical allocation belong to their common physical line.
  * The union visits each fragment/placement once, with no measurement. */
+/** Seal a fresh copy of retained lines. The copy's own new nodes are frozen;
+ * every frozen node it holds must be an alias into `sources`. When each source
+ * is a deeply frozen root (planLine seals every line it plans), those aliases
+ * are not walked again, and the sealed copy becomes a root that the paragraph
+ * freeze walk skips. Otherwise this is the ordinary deep freeze. */
+function sealLineCopy(copy: LineLayout, sources: readonly LineLayout[]): LineLayout {
+  const source = sources[0];
+  return source && sources.every((line) => isDeepFrozenPlainDataRoot(line))
+    ? deepFreezePlainDataWithFrozenAliases(copy, source) as LineLayout
+    : deepFreezePlainData(copy) as LineLayout;
+}
+
 function retainPhysicalLines(fragments: readonly LineLayout[], physicalIds: readonly number[]): LineLayout[] {
   const lines: LineLayout[] = [];
   for (let start = 0; start < fragments.length;) {
@@ -1144,7 +1160,7 @@ function retainPhysicalLines(fragments: readonly LineLayout[], physicalIds: read
     else {
       const group = fragments.slice(start, end);
       const { wrapBounds: _wrapBounds, ...physical } = first;
-      lines.push({
+      lines.push(sealLineCopy({
         ...physical,
         ...(first.gridAfterLeadingPt === undefined ? {} : {
           gridAfterLeadingPt: group.reduce((leading, fragment) =>
@@ -1155,7 +1171,7 @@ function retainPhysicalLines(fragments: readonly LineLayout[], physicalIds: read
         placements: group.flatMap(fragment => fragment.placements),
         wrapFragments: group.flatMap(fragment => fragment.wrapFragments
           ?? [fragment.wrapBounds ?? fragment.bounds]),
-      });
+      }, group));
     }
     start = end;
   }
@@ -1802,20 +1818,25 @@ function retainEffectiveTextBackground(
 ): readonly LineLayout[] {
   const paragraphBackground = retainedHexColor(paragraphShading);
   const containerBackground = retainedHexColor(containerShading);
-  return lines.map((line) => ({
-    ...line,
-    placements: line.placements.map((placement) => {
+  return lines.map((line) => {
+    let changed = false;
+    const placements = line.placements.map((placement) => {
       if (placement.kind !== 'text') return placement;
       const effectiveBackground = placement.background
         ?? paragraphBackground
         ?? containerBackground;
       if (!effectiveBackground || placement.color.kind === 'explicit') return placement;
+      changed = true;
       return {
         ...placement,
         color: { kind: 'auto', background: effectiveBackground },
       } satisfies TextPlacement;
-    }),
-  }));
+    });
+    // An unchanged line keeps its identity: planLine sealed it as a deeply
+    // frozen root, which the paragraph freeze walk skips. A copy would make
+    // that walk re-enter every placement of the line.
+    return changed ? sealLineCopy({ ...line, placements }, [line]) : line;
+  });
 }
 
 function visibleParagraphBorder(
@@ -2738,21 +2759,21 @@ function planMeasuredLines(
       raw.intendedSingle, raw.eastAsian, raw.gridCountSingle, undefined,
       raw.uniformPositionAuto, raw.inlinePictureTextSingle, raw.latinGridCountSingle,
     ) : measuredLine.advancePt;
-    const retained = context.lineGrid.active ? {
+    const retained = context.lineGrid.active ? sealLineCopy({
       ...planned,
       gridAfterLeadingPt: allowsGridLeadingOverhang ? Math.max(0, Math.min(
         (measuredLine.advancePt - ownHeightPt) / 2,
         measuredLine.topYPt + measuredLine.advancePt
           - baselinePt - (raw.visibleDescent ?? raw.descent),
       )) : 0,
-    } : planned;
+    }, [planned]) : planned;
     return raw.availWidth !== undefined && (raw.availWidth < availableWidthPt || (raw.xOffset ?? 0) !== 0)
-      ? { ...retained, wrapBounds: {
+      ? sealLineCopy({ ...retained, wrapBounds: {
           xPt: paragraphXPt + (raw.xOffset ?? 0) + (lineIndex === 0 ? Math.min(0, context.firstIndentPt) : 0),
           yPt: measuredLine.topYPt,
           widthPt: raw.availWidth - (lineIndex === 0 ? Math.min(0, context.firstIndentPt) : 0),
           heightPt: measuredLine.advancePt,
-        } }
+        } }, [retained])
       : retained;
   }), measured.lines.map((line, index) => line.layout.physicalLineIndex ?? index));
 }
