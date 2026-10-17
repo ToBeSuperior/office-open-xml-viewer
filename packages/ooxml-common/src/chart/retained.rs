@@ -156,55 +156,89 @@ impl_retained_foreign_struct!(crate::blip::Duotone, crate::blip::Duotone { clr1,
 
 // CT_Blip effect recipes are bounded by the parser's shared effect-step
 // ledger, so this structural recursion has a fixed depth.
+// CT_Blip effect recipes are bounded by the parser's shared effect-step
+// ledger, so this structural recursion has a fixed depth.
 impl RetainedBytes for crate::blip::BlipEffect {
     fn heap_bytes(&self) -> u64 {
         use crate::blip::BlipEffect;
         match self {
-            BlipEffect::Grayscale
-            | BlipEffect::BiLevel { .. }
-            | BlipEffect::Luminance { .. }
-            | BlipEffect::AlphaBiLevel { .. }
-            | BlipEffect::AlphaCeiling
-            | BlipEffect::AlphaFloor
-            | BlipEffect::Blur { .. }
-            | BlipEffect::Hsl { .. }
-            | BlipEffect::Tint { .. }
-            | BlipEffect::EffectCountLimit { .. }
-            | BlipEffect::AlphaOutset { .. }
-            | BlipEffect::SoftEdge { .. }
-            | BlipEffect::Transform { .. }
-            | BlipEffect::RelativeOffset { .. }
-            | BlipEffect::AlphaModFix { .. }
-            | BlipEffect::AlphaRepl { .. } => 0,
-            BlipEffect::ColorChange { from, to, .. } => {
-                from.heap_bytes().saturating_add(to.heap_bytes())
-            }
-            BlipEffect::Duotone { clr1, clr2 } => {
-                clr1.heap_bytes().saturating_add(clr2.heap_bytes())
-            }
-            BlipEffect::AlphaInv { color } => color.heap_bytes(),
-            BlipEffect::AlphaMod { container } | BlipEffect::Container { container } => {
-                container.heap_bytes()
-            }
-            BlipEffect::FillOverlay { fill, blend } => {
-                fill.heap_bytes().saturating_add(blend.heap_bytes())
-            }
-            BlipEffect::Reference { reference } => reference.heap_bytes(),
-            BlipEffect::Definitions { containers, work } => {
-                containers.heap_bytes().saturating_add(work.heap_bytes())
-            }
-            BlipEffect::Blend { container, blend } => {
-                container.heap_bytes().saturating_add(blend.heap_bytes())
-            }
-            BlipEffect::Fill { fill } => fill.heap_bytes(),
-            BlipEffect::Glow { glow } => glow.heap_bytes(),
-            BlipEffect::Shadow { shadow, inner } => {
-                shadow.heap_bytes().saturating_add(inner.heap_bytes())
-            }
-            BlipEffect::Reflection { reflection } => reflection.heap_bytes(),
-            BlipEffect::PresetShadow { shadows } => shadows.heap_bytes(),
-            BlipEffect::ColorReplace { color } => color.heap_bytes(),
-            BlipEffect::Unsupported { effect } => effect.heap_bytes(),
+            BlipEffect::Grayscale => 0,
+            BlipEffect::BiLevel { thresh } => 0u64.saturating_add(thresh.heap_bytes()),
+            BlipEffect::ColorChange {
+                from,
+                from_alpha,
+                to,
+                to_alpha,
+                use_alpha,
+            } => 0u64
+                .saturating_add(from.heap_bytes())
+                .saturating_add(from_alpha.heap_bytes())
+                .saturating_add(to.heap_bytes())
+                .saturating_add(to_alpha.heap_bytes())
+                .saturating_add(use_alpha.heap_bytes()),
+            BlipEffect::Luminance { bright, contrast } => 0u64
+                .saturating_add(bright.heap_bytes())
+                .saturating_add(contrast.heap_bytes()),
+            BlipEffect::Duotone { clr1, clr2 } => 0u64
+                .saturating_add(clr1.heap_bytes())
+                .saturating_add(clr2.heap_bytes()),
+            BlipEffect::AlphaBiLevel { thresh } => 0u64.saturating_add(thresh.heap_bytes()),
+            BlipEffect::AlphaCeiling => 0,
+            BlipEffect::AlphaFloor => 0,
+            BlipEffect::AlphaInv { color } => 0u64.saturating_add(color.heap_bytes()),
+            BlipEffect::AlphaMod { container } => 0u64.saturating_add(container.heap_bytes()),
+            BlipEffect::Blur { radius, grow } => 0u64
+                .saturating_add(radius.heap_bytes())
+                .saturating_add(grow.heap_bytes()),
+            BlipEffect::Hsl { hue, sat, lum } => 0u64
+                .saturating_add(hue.heap_bytes())
+                .saturating_add(sat.heap_bytes())
+                .saturating_add(lum.heap_bytes()),
+            BlipEffect::Tint { hue, amt } => 0u64
+                .saturating_add(hue.heap_bytes())
+                .saturating_add(amt.heap_bytes()),
+            BlipEffect::FillOverlay { fill, blend } => 0u64
+                .saturating_add(fill.heap_bytes())
+                .saturating_add(blend.heap_bytes()),
+            BlipEffect::Container { container } => 0u64.saturating_add(container.heap_bytes()),
+            BlipEffect::Reference { reference } => 0u64.saturating_add(reference.heap_bytes()),
+            BlipEffect::Definitions { containers, work } => 0u64
+                .saturating_add(containers.heap_bytes())
+                .saturating_add(work.heap_bytes()),
+            BlipEffect::EffectCountLimit { observed } => 0u64.saturating_add(observed.heap_bytes()),
+            BlipEffect::AlphaOutset { radius } => 0u64.saturating_add(radius.heap_bytes()),
+            BlipEffect::Blend { container, blend } => 0u64
+                .saturating_add(container.heap_bytes())
+                .saturating_add(blend.heap_bytes()),
+            BlipEffect::Fill { fill } => 0u64.saturating_add(fill.heap_bytes()),
+            BlipEffect::Glow { glow } => 0u64.saturating_add(glow.heap_bytes()),
+            BlipEffect::Shadow { shadow, inner } => 0u64
+                .saturating_add(shadow.heap_bytes())
+                .saturating_add(inner.heap_bytes()),
+            BlipEffect::SoftEdge { radius } => 0u64.saturating_add(radius.heap_bytes()),
+            BlipEffect::Reflection { reflection } => 0u64.saturating_add(reflection.heap_bytes()),
+            BlipEffect::Transform {
+                sx,
+                sy,
+                kx,
+                ky,
+                tx,
+                ty,
+            } => 0u64
+                .saturating_add(sx.heap_bytes())
+                .saturating_add(sy.heap_bytes())
+                .saturating_add(kx.heap_bytes())
+                .saturating_add(ky.heap_bytes())
+                .saturating_add(tx.heap_bytes())
+                .saturating_add(ty.heap_bytes()),
+            BlipEffect::RelativeOffset { tx, ty } => 0u64
+                .saturating_add(tx.heap_bytes())
+                .saturating_add(ty.heap_bytes()),
+            BlipEffect::PresetShadow { shadows } => 0u64.saturating_add(shadows.heap_bytes()),
+            BlipEffect::AlphaModFix { amt } => 0u64.saturating_add(amt.heap_bytes()),
+            BlipEffect::AlphaRepl { alpha } => 0u64.saturating_add(alpha.heap_bytes()),
+            BlipEffect::ColorReplace { color } => 0u64.saturating_add(color.heap_bytes()),
+            BlipEffect::Unsupported { effect } => 0u64.saturating_add(effect.heap_bytes()),
         }
     }
 }
