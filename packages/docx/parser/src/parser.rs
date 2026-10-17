@@ -1024,7 +1024,10 @@ fn load_document_parse_environment(zip: &mut Zip) -> DocumentParseEnvironment {
     let mut word_ilvl_error = parse_guarded(&styles_xml)
         .ok()
         .and_then(|document| validate_paragraph_ilvls(document.root_element()).err());
-    let mut style_map = StyleMap::parse(&styles_xml);
+    let mut style_map = StyleMap::parse_part(
+        &styles_xml,
+        styles_path.as_deref().unwrap_or("word/styles.xml"),
+    );
 
     let numbering_path = find_rel_part(&rels_xml, "numbering")
         .unwrap_or_else(|| Some("word/numbering.xml".to_string()));
@@ -7912,6 +7915,9 @@ fn parse_run_inner(
     // Merge run-level formatting. A field-bearing run resolves it once for
     // all of its visible segments.
     let (rpr_node, mut fmt) = match segment {
+        // A hidden run is skipped below before any copy is needed; check the
+        // shared formatting first so hidden segments cost nothing.
+        Some(segment) if segment.fmt.vanish.unwrap_or(false) => return,
         Some(segment) => (segment.rpr, segment.fmt.clone()),
         None => {
             let rpr_node = child_w(node, "rPr");

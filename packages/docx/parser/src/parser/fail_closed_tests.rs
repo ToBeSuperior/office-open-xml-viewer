@@ -356,3 +356,45 @@ fn style_depth_validation_stops_at_the_limit_despite_many_other_styles() {
     assert_hard_limit(&error, "style-inheritance", limit as u64);
     assert!(started.elapsed() < std::time::Duration::from_secs(20));
 }
+
+#[test]
+fn hidden_field_segments_share_one_formatting_copy_and_name_the_styles_part() {
+    // A hidden run with a large retained property and many visible segments.
+    let font = "F".repeat(1 << 20);
+    let sequence =
+        r#"<w:t>x</w:t><w:fldChar w:fldCharType="begin"/><w:fldChar w:fldCharType="end"/>"#;
+    let body = format!(
+        r#"<w:p><w:r><w:rPr><w:rFonts w:ascii="{font}"/><w:vanish/></w:rPr>{}</w:r></w:p>"#,
+        sequence.repeat(4_000)
+    );
+    let started = std::time::Instant::now();
+    parse_from_bytes(&package(&body, &[])).expect("hidden fields parse");
+    assert!(started.elapsed() < std::time::Duration::from_secs(20));
+
+    // The depth error names the relationship's styles part.
+    let limit = crate::styles::MAX_STYLE_INHERITANCE_DEPTH;
+    let mut styles = format!(r#"<w:styles xmlns:w="{W_NS}">"#);
+    for level in 0..=limit {
+        let based_on = if level == 0 {
+            String::new()
+        } else {
+            format!(r#"<w:basedOn w:val="S{}"/>"#, level - 1)
+        };
+        styles.push_str(&format!(
+            r#"<w:style w:type="paragraph" w:styleId="S{level}">{based_on}</w:style>"#
+        ));
+    }
+    styles.push_str("</w:styles>");
+    let rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="s" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles2.xml"/></Relationships>"#;
+    let bytes = package(
+        "<w:p/>",
+        &[
+            ("word/styles2.xml", &styles),
+            ("word/_rels/document.xml.rels", rels),
+        ],
+    );
+    let error = parse_from_bytes(&bytes).expect_err("over-long chain rejected");
+    let payload: serde_json::Value =
+        serde_json::from_str(error.strip_prefix("OOXML_RESOURCE_LIMIT:").expect(&error)).unwrap();
+    assert_eq!(payload["details"]["violation"]["part"], "word/styles2.xml");
+}

@@ -552,6 +552,12 @@ impl StyleMap {
     }
 
     pub fn parse(xml: &str) -> Self {
+        Self::parse_part(xml, "word/styles.xml")
+    }
+
+    /// [`StyleMap::parse`] for the styles part at `part` (the document
+    /// relationship target), which a resource-limit error names.
+    pub fn parse_part(xml: &str, part: &str) -> Self {
         let doc = match parse_guarded(xml) {
             Ok(d) => d,
             // Malformed optional styles may degrade. A depth crossing has
@@ -682,7 +688,7 @@ impl StyleMap {
             // unbounded cascade is never resolved.
             let _ = ooxml_common::resource::observe_hard_limit(
                 ooxml_common::resource::HardResourceLimitKind::DocxStyleInheritanceDepth,
-                Some("word/styles.xml"),
+                Some(part),
                 MAX_STYLE_INHERITANCE_DEPTH as u64,
                 depth as u64,
             );
