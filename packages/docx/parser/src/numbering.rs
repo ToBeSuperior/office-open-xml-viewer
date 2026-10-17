@@ -529,7 +529,8 @@ fn parse_level_def(
         indent_left_authored,
         indent_right,
         indent_first,
-        tab_stops: child_w(lvl_node, "pPr").and_then(|p| crate::styles::parse_para_fmt(p).tab_stops),
+        tab_stops: child_w(lvl_node, "pPr")
+            .and_then(|p| crate::styles::parse_para_fmt(p).tab_stops),
         indent_first_authored,
         tab,
         suff,
