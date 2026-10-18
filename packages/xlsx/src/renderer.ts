@@ -4211,7 +4211,7 @@ function renderAnchoredDrawings(
         startRow, startCol, scrollOffsetX, scrollOffsetY,
         scrollAreaX, scrollAreaY, scrollAreaW, scrollAreaH,
         loadedImages, rtl, canvasW,
-        [{ ...drawing.anchor, shapes: [drawing.shape] }], cjkFallback
+        [drawing.anchor], cjkFallback, drawing.shape,
       );
     } else {
       renderCharts(
@@ -4374,6 +4374,9 @@ function renderShapeGroups(
   canvasW: number,
   anchors: readonly ShapeAnchor[] = ws.shapeGroups ?? [],
   cjkFallback?: CjkLang,
+  // Paint only this leaf of the (single) anchor. The anchor itself must stay
+  // the worksheet's own object: retained initial sizes are keyed by identity.
+  onlyShape?: ShapeInfo,
 ): void {
   if (scrollAreaW <= 0 || scrollAreaH <= 0) return;
   if (anchors.length === 0) return;
@@ -4401,11 +4404,12 @@ function renderShapeGroups(
 
     // A picture leaf with a CT_Blip chain may paint an effect outset beyond
     // the group rectangle; such groups are not culled by that rectangle.
-    const effectLeaf = anchor.shapes.some(shape => shape.geom?.type === 'image' && blipEffectsMayExtendCoverage(shape.geom.blipEffects ?? []));
+    const shapes = onlyShape ? [onlyShape] : anchor.shapes;
+    const effectLeaf = shapes.some(shape => shape.geom?.type === 'image' && blipEffectsMayExtendCoverage(shape.geom.blipEffects ?? []));
     if (!effectLeaf && (canvasX + w < clipX || canvasX > clipX + scrollAreaW)) continue;
     if (!effectLeaf && (canvasY + h < scrollAreaY || canvasY > scrollAreaY + scrollAreaH)) continue;
 
-    for (const shape of anchor.shapes) {
+    for (const shape of shapes) {
       const sx = canvasX + shape.x * w;
       const sy = canvasY + shape.y * h;
       const sw = shape.w * w;
