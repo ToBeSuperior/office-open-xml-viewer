@@ -4028,7 +4028,7 @@ mod tests {
         }
 
         #[test]
-        fn a_footer_in_the_comment_cannot_bypass_the_index_reservation() {
+        fn a_footer_in_the_comment_is_never_seen_by_the_index() {
             let mut bytes = empty_package(2);
             let footer = bytes.len() - 22;
             bytes[footer + 20..footer + 22].copy_from_slice(&23u16.to_le_bytes());
@@ -4036,13 +4036,12 @@ mod tests {
             fake[..4].copy_from_slice(b"PK\x05\x06");
             fake[8..12].copy_from_slice(&[0xfe, 0xff, 0xfe, 0xff]);
             bytes.extend_from_slice(&fake);
-            // The dependency accepts trailing bytes after an EOCD comment and
-            // would try this later footer first. Only the reserved footer may
-            // reach its allocator, and ambiguous selection must fail closed.
-            error(
-                measure_inflation(&bytes, &mut usize::MAX.clone(), &mut 0),
-                "UNSUPPORTED:",
-            );
+            // The dependency would try this later footer first, but while it
+            // indexes, the comment reads as zero (shared IndexView): only the
+            // reserved footer reaches its allocator, and the inert comment
+            // bytes do not reject the package (OPC Annex B.2).
+            measure_inflation(&bytes, &mut usize::MAX.clone(), &mut 0)
+                .expect("only the reserved footer is indexed");
         }
 
         #[test]

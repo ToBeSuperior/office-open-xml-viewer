@@ -1,7 +1,6 @@
 //! Passive color projection of MS-XLS Theme (2.4.326).
 use super::{u16_at, u32_at, unsupported, Record};
 use std::collections::BTreeSet;
-use std::io::Cursor;
 mod xml;
 
 const A: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
@@ -120,7 +119,7 @@ impl Colors {
     }
 
     fn package(bytes: &[u8]) -> Result<Self, String> {
-        let entries = preflight(bytes)?;
+        let (entries, end) = preflight(bytes)?;
         // Share actual decoder-input work across the entire relationship chain.
         let mut work_budget = super::MAX_RECORDS;
         // Preflight proved the directory ends at its EOCD with no prefix, so
@@ -128,8 +127,15 @@ impl Colors {
         let config = zip::read::Config {
             archive_offset: zip::read::ArchiveOffset::Known(0),
         };
-        let mut archive = zip::ZipArchive::with_config(config, Cursor::new(bytes))
+        // Index through the validated footer and directory only (shared
+        // `IndexView` rules), then read entries from the real bytes.
+        let directory_start = u32_at(bytes, end + 16)? as usize;
+        let view =
+            ooxml_common::zip::IndexView::for_validated_directory(bytes, directory_start, end, &[]);
+        let (reader, indexing) = ooxml_common::zip::PackageReader::with_view(bytes, view);
+        let mut archive = zip::ZipArchive::with_config(config, reader)
             .map_err(|_| unsupported("invalid BIFF theme ZIP"))?;
+        indexing.set(false);
         let mut names = BTreeSet::new();
         let mut total = 0u64;
         // Preflight excludes ZIP64/split declarations and caps the entry
@@ -247,7 +253,7 @@ impl Colors {
 }
 
 fn part(
-    archive: &mut zip::ZipArchive<Cursor<&[u8]>>,
+    archive: &mut zip::ZipArchive<ooxml_common::zip::PackageReader<&[u8]>>,
     name: &str,
     work_budget: &mut usize,
 ) -> Result<Vec<u8>, String> {
@@ -317,7 +323,9 @@ fn normalize(source: &str, target: &str) -> Result<String, String> {
         .ok_or_else(|| unsupported("unsupported BIFF theme part URI"))
 }
 
-fn preflight(bytes: &[u8]) -> Result<usize, String> {
+/// Validate the embedded package's footer and directory; returns the entry
+/// count and the EOCD offset.
+fn preflight(bytes: &[u8]) -> Result<(usize, usize), String> {
     if bytes.len() > MAX_ZIP_BYTES {
         return Err(crate::rejection::resource(
             "BIFF theme ZIP byte budget exceeded",
@@ -335,11 +343,6 @@ fn preflight(bytes: &[u8]) -> Result<usize, String> {
                 && u16_at(bytes, i + 20).is_ok_and(|n| i + 22 + usize::from(n) == bytes.len())
         })
         .ok_or_else(|| unsupported("missing BIFF theme ZIP directory"))?;
-    // A later EOCD signature (inside this comment) could steer the reader's
-    // backward search to an unvalidated decoy directory.
-    if bytes[end + 4..].windows(4).any(|sig| sig == b"PK\x05\x06") {
-        return Err(unsupported("ambiguous BIFF theme ZIP directory"));
-    }
     let count = usize::from(u16_at(bytes, end + 10)?);
     if count > MAX_ENTRIES {
         return Err(crate::rejection::resource(
@@ -381,7 +384,7 @@ fn preflight(bytes: &[u8]) -> Result<usize, String> {
         }
         cursor = next;
     }
-    Ok(count)
+    Ok((count, end))
 }
 
 /// Test fixture: a deflated ZIP of the given parts, as Office stores a
@@ -389,7 +392,7 @@ fn preflight(bytes: &[u8]) -> Result<usize, String> {
 #[cfg(test)]
 pub(super) fn test_zip(parts: &[(&str, String)]) -> Vec<u8> {
     use std::io::Write;
-    let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
     let options = zip::write::SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated)
         .unix_permissions(0o644);
@@ -452,7 +455,7 @@ mod tests {
             .iter()
             .map(|(name, xml)| (name.as_str(), xml.clone()))
             .collect();
-        assert_eq!(preflight(&test_zip(&refs[..64])).unwrap(), 64);
+        assert_eq!(preflight(&test_zip(&refs[..64])).unwrap().0, 64);
         assert!(Colors::package(&test_zip(&refs))
             .err()
             .unwrap()

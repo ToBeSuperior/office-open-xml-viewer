@@ -56,11 +56,8 @@ struct ArchivePreflight {
     entry_count: u64,
     entries: Vec<PreflightEntryIdentity>,
     archive_base: u64,
-    /// The validated central directory through the EOCD fixed fields: the
-    /// only bytes the ZIP reader sees while indexing (see [`PackageReader`]).
-    index_range: std::ops::Range<usize>,
-    /// Two-byte rewrites seen only while indexing, sorted by offset.
-    index_patches: Vec<(usize, u16)>,
+    /// What the ZIP reader may see while it builds its index.
+    index_view: IndexView,
 }
 
 #[derive(Debug)]
@@ -794,7 +791,6 @@ fn inspect_central_directory(
     // folding, and (RFC 3986 §6.2.2) a percent-encoded unreserved character
     // equals the character. Keys follow `rels::part_name_equivalence_key`.
     let mut folded_names = HashMap::<String, NameRange>::with_capacity(capacity);
-    let mut ntfs_extra_ids = Vec::new();
     walk_central_directory(data, directory, |entry| {
         let range = entry.name;
         let name = &data[range.start..range.start + range.len];
@@ -824,11 +820,6 @@ fn inspect_central_directory(
         }
         let validated =
             validate_local_entry(data, directory, entry).ok_or(CandidateError::Malformed)?;
-        collect_ntfs_extra_ids(
-            &data[entry.extra.start..entry.extra.start + entry.extra.len],
-            entry.extra.start,
-            &mut ntfs_extra_ids,
-        );
         entries.push(PreflightEntryIdentity {
             name: data[validated.name.start..validated.name.start + validated.name.len].into(),
             central_header_start: validated.central_header_start,
@@ -870,11 +861,11 @@ fn inspect_central_directory(
         entry_count: directory.entry_count,
         entries,
         archive_base: directory.archive_base,
-        index_range: directory.start..directory.start,
-        index_patches: ntfs_extra_ids
-            .into_iter()
-            .map(|at| (at, OPAQUE_EXTRA_FIELD_ID))
-            .collect(),
+        index_view: IndexView {
+            range: directory.start..directory.start,
+            patches: Vec::new(),
+            footers: Vec::new(),
+        },
     })
 }
 
@@ -896,23 +887,111 @@ fn zip64_footer_positions(data: &[u8], eocd: usize, archive_base: u64) -> Vec<us
     positions
 }
 
-/// NTFS extra field id (APPNOTE 4.5.5).
-const NTFS_EXTRA_FIELD_ID: u16 = 0x000a;
-/// An extra-field id the ZIP reader does not interpret (see [`ArchivePreflight`]).
+/// ZIP64 extended information extra field id (APPNOTE 4.5.3).
+const ZIP64_EXTRA_FIELD_ID: u16 = 0x0001;
+/// An extra-field id the ZIP reader does not interpret.
 const OPAQUE_EXTRA_FIELD_ID: u16 = 0x7a7a;
 
-/// Record the header-id offset of every NTFS extra field in `extra`
-/// (starting at `base` in the package). OPC never uses this metadata. The
-/// ZIP reader parses it and rejects any NTFS field that is not exactly one
-/// 32-byte timestamp attribute, although APPNOTE 4.5.5 allows a sequence of
-/// attributes; the reader therefore sees these ids as opaque instead.
-fn collect_ntfs_extra_ids(extra: &[u8], base: usize, out: &mut Vec<usize>) {
-    let mut cursor = 0;
-    while let (Some(id), Some(len)) = (le_u16(extra, cursor), le_u16(extra, cursor + 2)) {
-        if id == NTFS_EXTRA_FIELD_ID {
-            out.push(base + cursor);
+/// What a ZIP reader may observe while it builds its index from a package
+/// whose footer and central directory a preflight has already validated.
+///
+/// - Only `range` (the central directory through the EOCD fixed fields) is
+///   visible; payloads and the archive comment read as zero, so inert bytes
+///   there can never be taken for a footer.
+/// - Every central extra field except ZIP64 (which carries the validated
+///   sizes and offsets) is opaque. OPC never uses that metadata, and the
+///   reader would otherwise reject some APPNOTE-valid encodings (an NTFS
+///   attribute sequence, an empty timestamp) and then retry other footers.
+/// - A fixed-size footer read (EOCD, ZIP64 locator or record) at any other
+///   position than the validated ones fails, so the reader can never index an
+///   unvalidated directory.
+#[derive(Debug, Clone)]
+pub struct IndexView {
+    range: std::ops::Range<usize>,
+    patches: Vec<(usize, u16)>,
+    footers: Vec<usize>,
+}
+
+impl IndexView {
+    /// Build the view for a validated `[directory_start, eocd)` central
+    /// directory region ending in the EOCD at `eocd`; `zip64_records` are the
+    /// validated ZIP64 locator/record offsets, if any.
+    pub fn for_validated_directory(
+        data: &[u8],
+        directory_start: usize,
+        eocd: usize,
+        zip64_records: &[usize],
+    ) -> Self {
+        let mut patches = Vec::new();
+        let mut cursor = directory_start;
+        while cursor + 46 <= eocd
+            && le_u32(data, cursor) == Some(CENTRAL_DIRECTORY_HEADER_SIGNATURE)
+        {
+            let (Some(name_len), Some(extra_len), Some(comment_len)) = (
+                le_u16(data, cursor + 28),
+                le_u16(data, cursor + 30),
+                le_u16(data, cursor + 32),
+            ) else {
+                break;
+            };
+            let extra_start = cursor + 46 + name_len as usize;
+            let extra_end = (extra_start + extra_len as usize).min(eocd);
+            let mut field = extra_start;
+            while field + 4 <= extra_end {
+                let id = le_u16(data, field).unwrap_or(0);
+                let len = le_u16(data, field + 2).unwrap_or(0) as usize;
+                if id != ZIP64_EXTRA_FIELD_ID {
+                    patches.push((field, OPAQUE_EXTRA_FIELD_ID));
+                }
+                field += 4 + len;
+            }
+            cursor = extra_start + extra_len as usize + comment_len as usize;
         }
-        cursor += 4 + len as usize;
+        let mut footers = zip64_records.to_vec();
+        footers.push(eocd);
+        Self {
+            range: directory_start..eocd + 22,
+            patches,
+            footers,
+        }
+    }
+
+    /// Fill `output` with the view of `data` starting at `start`.
+    pub fn read(&self, data: &[u8], start: usize, output: &mut [u8]) -> std::io::Result<usize> {
+        let start = start.min(data.len());
+        let count = output.len().min(data.len() - start);
+        let end = start + count;
+        let footer_block = match output.len() {
+            22 => Some(EOCD_SIGNATURE),
+            20 => Some(ZIP64_LOCATOR_SIGNATURE),
+            56 => Some(ZIP64_EOCD_SIGNATURE),
+            _ => None,
+        };
+        output[..count].fill(0);
+        let visible_start = start.max(self.range.start);
+        let visible_end = end.min(self.range.end);
+        if visible_start < visible_end {
+            output[visible_start - start..visible_end - start]
+                .copy_from_slice(&data[visible_start..visible_end]);
+        }
+        let first = self.patches.partition_point(|(at, _)| at + 2 <= start);
+        for &(at, value) in &self.patches[first..] {
+            if at >= end {
+                break;
+            }
+            for (offset, byte) in value.to_le_bytes().into_iter().enumerate() {
+                if (start..end).contains(&(at + offset)) {
+                    output[at + offset - start] = byte;
+                }
+            }
+        }
+        // Judge what the reader would see: hidden bytes are never footers.
+        if footer_block.is_some_and(|signature| le_u32(output, 0) == Some(signature))
+            && !self.footers.contains(&start)
+        {
+            return Err(std::io::Error::other("unvalidated ZIP footer record"));
+        }
+        Ok(count)
     }
 }
 
@@ -927,10 +1006,26 @@ fn collect_ntfs_extra_ids(extra: &[u8], base: usize, out: &mut Vec<usize>) {
 #[derive(Debug)]
 pub struct PackageReader<T> {
     cursor: std::io::Cursor<T>,
-    index_range: std::ops::Range<usize>,
-    index_patches: Vec<(usize, u16)>,
+    view: IndexView,
     /// Shared with the opener, which clears it once the index is built.
     indexing: std::rc::Rc<std::cell::Cell<bool>>,
+}
+
+impl<T: AsRef<[u8]>> PackageReader<T> {
+    /// A reader that shows `view` until the returned flag is cleared, then
+    /// the real bytes. For ZIP readers outside this module that validate an
+    /// embedded package with their own preflight.
+    pub fn with_view(data: T, view: IndexView) -> (Self, std::rc::Rc<std::cell::Cell<bool>>) {
+        let indexing = std::rc::Rc::new(std::cell::Cell::new(true));
+        (
+            Self {
+                cursor: std::io::Cursor::new(data),
+                view,
+                indexing: std::rc::Rc::clone(&indexing),
+            },
+            indexing,
+        )
+    }
 }
 
 impl<T: AsRef<[u8]>> std::io::Read for PackageReader<T> {
@@ -939,32 +1034,10 @@ impl<T: AsRef<[u8]>> std::io::Read for PackageReader<T> {
             return std::io::Read::read(&mut self.cursor, output);
         }
         let data = self.cursor.get_ref().as_ref();
-        let start = usize::try_from(self.cursor.position())
-            .unwrap_or(usize::MAX)
-            .min(data.len());
-        let count = output.len().min(data.len() - start);
-        let end = start + count;
-        output[..count].fill(0);
-        let visible_start = start.max(self.index_range.start);
-        let visible_end = end.min(self.index_range.end);
-        if visible_start < visible_end {
-            output[visible_start - start..visible_end - start]
-                .copy_from_slice(&data[visible_start..visible_end]);
-        }
-        let first = self
-            .index_patches
-            .partition_point(|(at, _)| at + 2 <= start);
-        for &(at, value) in &self.index_patches[first..] {
-            if at >= end {
-                break;
-            }
-            for (offset, byte) in value.to_le_bytes().into_iter().enumerate() {
-                if (start..end).contains(&(at + offset)) {
-                    output[at + offset - start] = byte;
-                }
-            }
-        }
-        self.cursor.set_position(end as u64);
+        let start = usize::try_from(self.cursor.position()).unwrap_or(usize::MAX);
+        let count = self.view.read(data, start, output)?;
+        self.cursor
+            .set_position((start.min(data.len()) + count) as u64);
         Ok(count)
     }
 }
@@ -1014,30 +1087,9 @@ fn inspect_archive(data: &[u8]) -> Result<Option<ArchivePreflight>, String> {
     let Some((eocd, mut preflight)) = resolved else {
         return Ok(None);
     };
-    // While indexing, expose the validated directory through the EOCD fixed
-    // fields, and mask every other footer signature inside that range (it can
-    // only sit in names, extra data or comments of directory records), so the
-    // reader's backward footer search finds exactly the validated records. A
-    // mask in an identity-bearing field fails the index re-check.
-    let index_start = preflight.index_range.start;
-    let footer_records = zip64_footer_positions(data, eocd, preflight.archive_base);
-    let signatures = [
-        EOCD_SIGNATURE,
-        ZIP64_EOCD_SIGNATURE,
-        ZIP64_LOCATOR_SIGNATURE,
-    ]
-    .map(u32::to_le_bytes);
-    let mut masks: Vec<(usize, u16)> = data[index_start..eocd]
-        .windows(4)
-        .enumerate()
-        .filter(|(_, bytes)| signatures.iter().any(|signature| signature == *bytes))
-        .map(|(offset, _)| index_start + offset)
-        .filter(|at| !footer_records.contains(at))
-        .map(|at| (at + 2, 0))
-        .collect();
-    preflight.index_patches.append(&mut masks);
-    preflight.index_patches.sort_unstable();
-    preflight.index_range = index_start..eocd + 22;
+    let footers = zip64_footer_positions(data, eocd, preflight.archive_base);
+    preflight.index_view =
+        IndexView::for_validated_directory(data, preflight.index_view.range.start, eocd, &footers);
     Ok(Some(preflight))
 }
 
@@ -1076,8 +1128,7 @@ fn open_preflighted<T: AsRef<[u8]>>(
     let indexing = std::rc::Rc::new(std::cell::Cell::new(true));
     let reader = PackageReader {
         cursor: std::io::Cursor::new(data),
-        index_range: preflight.index_range.clone(),
-        index_patches: preflight.index_patches.clone(),
+        view: preflight.index_view.clone(),
         indexing: std::rc::Rc::clone(&indexing),
     };
     let mut archive = zip::ZipArchive::with_config(preflight.read_config(), reader)
@@ -1768,14 +1819,13 @@ mod tests {
         let indexing = std::rc::Rc::new(std::cell::Cell::new(true));
         let mut reader = PackageReader {
             cursor: Cursor::new(bytes.as_slice()),
-            index_range: preflight.index_range.clone(),
-            index_patches: preflight.index_patches.clone(),
+            view: preflight.index_view.clone(),
             indexing: std::rc::Rc::clone(&indexing),
         };
         let mut seen = Vec::new();
         reader.read_to_end(&mut seen).unwrap();
         assert_eq!(seen.len(), bytes.len());
-        assert!(seen[..preflight.index_range.start]
+        assert!(seen[..preflight.index_view.range.start]
             .iter()
             .all(|byte| *byte == 0));
         assert_eq!(
@@ -1801,10 +1851,11 @@ mod tests {
     }
 
     #[test]
-    fn a_directory_the_reader_rejects_is_not_retried_against_payload_footers() {
-        // A zero-length Extended Timestamp passes preflight but the reader
-        // rejects the directory. The stored payload holds a complete inner
-        // archive, whose footer the reader would otherwise try next.
+    fn opaque_metadata_the_reader_would_reject_does_not_reach_payload_footers() {
+        // A zero-length Extended Timestamp passes preflight; the reader would
+        // reject it and then try the footer of the complete inner archive
+        // stored as a payload. It stays opaque, so the validated directory
+        // opens (as it did before the reader upgrade) and only it is indexed.
         let mut inner = Vec::new();
         {
             let mut writer = zip::ZipWriter::new(Cursor::new(&mut inner));
@@ -1826,11 +1877,28 @@ mod tests {
         let timestamp = [0x55, 0x54, 0, 0];
         let bytes = with_central_extra(&outer, &timestamp);
         assert!(preflight_archive_limits(&bytes).is_ok());
-        let error = open_validated_zip(bytes).unwrap_err();
-        assert!(
-            !error.contains("does not match the validated central directory"),
-            "no decoy directory may be indexed: {error}"
-        );
+        let mut archive = open_validated_zip(bytes).expect("opaque timestamp metadata");
+        assert_eq!(archive.len(), 1);
+        assert_eq!(read_zip_bytes(&mut archive, "word/a.xml").unwrap(), inner);
+    }
+
+    #[test]
+    fn signature_valued_metadata_fields_still_index() {
+        for signature in [
+            EOCD_SIGNATURE,
+            ZIP64_EOCD_SIGNATURE,
+            ZIP64_LOCATOR_SIGNATURE,
+        ] {
+            let mut bytes = zip_bytes(false);
+            // Forge the first entry's CRC (local and central) to a footer
+            // signature value; the index must still open unchanged.
+            bytes[14..18].copy_from_slice(&signature.to_le_bytes());
+            let eocd = last_signature(&bytes, EOCD_SIGNATURE);
+            let central = le_u32(&bytes, eocd + 16).unwrap() as usize;
+            bytes[central + 16..central + 20].copy_from_slice(&signature.to_le_bytes());
+            let archive = open_validated_zip(bytes).expect("signature-valued CRC indexes");
+            assert_eq!(archive.len(), 2);
+        }
     }
 
     #[test]

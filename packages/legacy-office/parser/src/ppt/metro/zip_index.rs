@@ -42,11 +42,6 @@ fn policy(blob: &[u8], work_budget: &mut usize) -> Result<Policy, String> {
             .then_some(at)
         })
         .ok_or_else(unreadable)?;
-    // The ZIP reader searches backwards for the last EOCD signature; one in
-    // this record's comment could steer it to an unvalidated decoy directory.
-    if blob[eocd + 4..].windows(4).any(|sig| sig == b"PK\x05\x06") {
-        return Err(unreadable());
-    }
     let mut count = u16_at(eocd + 8).ok_or_else(unreadable)? as u64;
     let mut directory_end = eocd;
     let mut relative_offset = u32_at(eocd + 16).ok_or_else(unreadable)? as u64;
@@ -165,16 +160,25 @@ fn policy(blob: &[u8], work_budget: &mut usize) -> Result<Policy, String> {
     let archive_offset = (start as u64)
         .checked_sub(relative_offset)
         .ok_or_else(unreadable)?;
+    let zip64_records: Vec<usize> = zip64_at
+        .into_iter()
+        .chain(eocd.checked_sub(20).filter(|_| zip64_at.is_some()))
+        .collect();
     Ok(Policy {
-        eocd,
-        zip64: zip64_at,
+        view: ooxml_common::zip::IndexView::for_validated_directory(
+            blob,
+            start,
+            eocd,
+            &zip64_records,
+        ),
         archive_offset,
     })
 }
 
 struct Policy {
-    eocd: usize,
-    zip64: Option<usize>,
+    /// The validated footer and directory, as the ZIP reader may see them
+    /// while indexing (shared `ooxml_common::zip::IndexView` rules).
+    view: ooxml_common::zip::IndexView,
     archive_offset: u64,
 }
 
@@ -190,22 +194,18 @@ pub(super) struct IndexReader<'a> {
 
 impl std::io::Read for IndexReader<'_> {
     fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
-        let at = self.cursor.position() as usize;
-        if self.state.get() != IndexState::Ready {
-            let signature = self.cursor.get_ref().get(at..at.saturating_add(4));
-            // zip 2.x reads these fixed APPNOTE blocks with read_exact before
-            // using their count/record-size fields. Do not reject incidental
-            // signature bytes in the finder's bulk scan (e.g. an SFX stub).
-            if (output.len() == 22 && signature == Some(b"PK\x05\x06") && at != self.policy.eocd)
-                || (output.len() == 56
-                    && signature == Some(b"PK\x06\x06")
-                    && Some(at) != self.policy.zip64)
-            {
-                self.state.set(IndexState::DifferentFooter);
-                return Err(std::io::Error::other("unvalidated ZIP footer"));
-            }
+        if self.state.get() == IndexState::Ready {
+            return std::io::Read::read(&mut self.cursor, output);
         }
-        std::io::Read::read(&mut self.cursor, output)
+        let at = self.cursor.position() as usize;
+        let count = self
+            .policy
+            .view
+            .read(self.cursor.get_ref(), at, output)
+            .inspect_err(|_| self.state.set(IndexState::DifferentFooter))?;
+        self.cursor
+            .set_position((at.min(self.cursor.get_ref().len()) + count) as u64);
+        Ok(count)
     }
 }
 
@@ -270,7 +270,7 @@ mod tests {
     }
 
     #[test]
-    fn eocd_signature_in_the_comment_is_rejected() {
+    fn eocd_signature_bytes_in_the_comment_are_inert() {
         use std::io::Write;
         let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
         writer
@@ -279,7 +279,7 @@ mod tests {
         writer.write_all(b"a").unwrap();
         writer.set_comment("decoy PK\u{5}\u{6} record").unwrap();
         let zip = writer.finish().unwrap().into_inner();
-        let error = super::open(&zip, &mut 1_000).err().expect("decoy rejected");
-        assert!(error.starts_with("UNSUPPORTED:"), "{error}");
+        // Inert comment bytes are not a footer (OPC Annex B.2 allows comments).
+        assert!(super::open(&zip, &mut 1_000).is_ok());
     }
 }
