@@ -34,7 +34,7 @@ import type {
   OwnerSegmentEntry,
 } from './body-layout-kernel.js';
 import { retainedTableRecord } from './acquisition-state.js';
-import { type RetainedTableAcquisition } from './table-acquisition.js';
+import { type RetainedTableAcquisition, shareRotatedCellReacquisition } from './table-acquisition.js';
 import { combineAdjacentTableLayoutInputs } from './adjacent-table-layout-input.js';
 import { layoutTable as layoutRetainedTableInput } from './table.js';
 import {
@@ -678,6 +678,7 @@ function combinedAdjacentGroupAcquisition(
       records.map((record) => record.input),
     ),
   );
+  shareRotatedCellReacquisition(records.map((record) => record.input), combinedInput);
   const combinedLayout = layoutRetainedTableInput(
     combinedInput, adjacentGroupPlacement(request), services,
   ).layout;
@@ -1223,6 +1224,7 @@ function ownerSegmentAcquisition(
   const cached = cache.get(key);
   if (cached) return cached;
   const input = ownerSegmentInput(retained.input, segment, leadingRows);
+  shareRotatedCellReacquisition(retained.input, input);
   const bounds = { xPt: 0, yPt: 0, widthPt, heightPt: 1 };
   const acquisition: RetainedTableAcquisition = Object.freeze({
     input,

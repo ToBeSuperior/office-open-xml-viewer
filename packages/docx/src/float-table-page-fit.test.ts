@@ -383,7 +383,7 @@ describe('canonical layout — floating-table page-fit / row-split (§17.4.57, W
   });
 
   it.each(['auto', 'atLeast'] as const)(
-    'reserves centered outer half-rules in %s floating-slice row tracks',
+    'reserves the full outer rules inside %s floating-slice row tracks',
     (rule) => {
       const source = borderedFloatTableRows(
         tblp({ vertAnchor: 'text', tblpY: 0 }),
@@ -398,9 +398,10 @@ describe('canonical layout — floating-table page-fit / row-split (§17.4.57, W
       expect(tableFormatInput(source).rows.map((format) => format.height?.rule ?? 'auto'))
         .toEqual([rule, rule, rule]);
 
-      // Word charges half of each winning collapsed boundary to a non-exact row
-      // track. A one-row page-local slice is therefore 20 + 2 + 2 = 24pt, so the
-      // 44pt band admits one row per slice.
+      // WORD_COLLAPSED_BORDER_ROW_TRACK_FOOTPRINT: a non-exact row adds its full
+      // top rule and the page-local last row the full bottom rule, both painted
+      // inside. A one-row slice is 20 + 4 + 4 = 28pt; the 44pt band admits one
+      // row per slice.
       const pages = layoutPages(body, section({ pageHeight: 84 }), makeCtx());
       const slices = pages
         .flatMap((page) => page.layers.body.filter(isFloatTable));
@@ -412,12 +413,12 @@ describe('canonical layout — floating-table page-fit / row-split (§17.4.57, W
         .toEqual([[0], [1], [2]]);
       expect(fragments.map((fragment) =>
         fragment.rows.map((rowLayout) => rowLayout.advancePt)))
-        .toEqual([[24], [24], [24]]);
-      expect(fragments.map((fragment) => fragment.advancePt)).toEqual([24, 24, 24]);
-      expect(fragments.map((fragment) => fragment.flowBounds.heightPt)).toEqual([24, 24, 24]);
+        .toEqual([[28], [28], [28]]);
+      expect(fragments.map((fragment) => fragment.advancePt)).toEqual([28, 28, 28]);
+      expect(fragments.map((fragment) => fragment.flowBounds.heightPt)).toEqual([28, 28, 28]);
       expect(fragments.map((fragment) => fragment.inkBounds.heightPt)).toEqual([28, 28, 28]);
       for (const fragment of fragments) {
-        expect(fragment.inkBounds.yPt).toBe(fragment.flowBounds.yPt - 2);
+        expect(fragment.inkBounds.yPt).toBe(fragment.flowBounds.yPt);
         expect(fragment.borders.filter((border) => border.edge === 'top')).toEqual([
           expect.objectContaining({ widthPt: 4 }),
         ]);
@@ -428,7 +429,7 @@ describe('canonical layout — floating-table page-fit / row-split (§17.4.57, W
     },
   );
 
-  it('paginates mixed exact/auto floating rows with non-exact outer half-rules', () => {
+  it('paginates mixed exact/auto floating rows with page-local outer rules', () => {
     const source = mixedBoundaryFloatTable(
       tblp({ vertAnchor: 'text', tblpY: 0 }),
     ) as unknown as DocTable;
@@ -440,20 +441,21 @@ describe('canonical layout — floating-table page-fit / row-split (§17.4.57, W
     expect(tableFormatInput(source).rows.map((format) => format.height?.rule ?? 'auto'))
       .toEqual(['auto', 'exact', 'auto', 'exact', 'auto']);
 
-    // The page-local top and bottom 12pt rules contribute 6pt half-rules to
-    // non-exact edge rows. Exact rows remain authored complete boxes.
-    const pages = layoutPages(body, section({ pageHeight: 72 }), makeCtx());
+    // The page-local 12pt top rule joins the first auto row; the bottom rule
+    // the page-local last row, which an exact row (holding its own top rule)
+    // adds alone. Rules lie inside the slice.
+    const pages = layoutPages(body, section({ pageHeight: 88 }), makeCtx());
     const slices = pages.flatMap((page) => page.layers.body.filter(isFloatTable));
     const fragments = slices.map(retainedFloatFragment);
     expect(fragments).toHaveLength(2);
     expect(fragments.map((fragment) => fragment.rows.map((rowLayout) => rowLayout.logicalRowIndex)))
       .toEqual([[0, 1, 2, 3], [4]]);
     expect(fragments.map((fragment) => fragment.rows.map((rowLayout) => rowLayout.advancePt)))
-      .toEqual([[16, 1, 10, 1], [22]]);
-    expect(fragments.map((fragment) => fragment.advancePt)).toEqual([28, 22]);
-    expect(fragments.map((fragment) => fragment.inkBounds.heightPt)).toEqual([40, 34]);
+      .toEqual([[22, 1, 10, 13], [34]]);
+    expect(fragments.map((fragment) => fragment.advancePt)).toEqual([46, 34]);
+    expect(fragments.map((fragment) => fragment.inkBounds.heightPt)).toEqual([46, 34]);
     for (const fragment of fragments) {
-      expect(fragment.inkBounds.yPt).toBe(fragment.flowBounds.yPt - 6);
+      expect(fragment.inkBounds.yPt).toBe(fragment.flowBounds.yPt);
       expect(fragment.borders.filter((border) => border.edge === 'top')).toEqual([
         expect.objectContaining({ widthPt: 12 }),
       ]);

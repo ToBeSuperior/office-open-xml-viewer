@@ -300,12 +300,12 @@ export const WORD_COLLAPSED_BORDER_ROW_TRACK_FOOTPRINT = defineCompatibilityRule
   id: 'word-collapsed-border-row-track-footprint',
   evidence: {
     kind: 'office-observation',
-    syntheticFixtureId: 'collapsed-border-row-track-matrix',
+    syntheticFixtureId: 'issue-1904-table-rule-extent',
     application: 'Microsoft Word',
-    version: '16.111.1',
-    platform: 'macOS 26.5.2',
+    version: '16.0.20430',
+    platform: 'Windows',
   },
-  description: 'For automatic and at-least table rows with collapsed cell boundaries, Word includes half of the winning top and bottom rule widths in each row track. Exact rows retain their authored complete height, and cell spacing keeps independent edges out of the collapsed footprint.',
+  description: 'With collapsed cell boundaries each horizontal rule counts once, at its full width, inside the table box: a row\'s top rule (the table top rule for the first row, the winning inside rule otherwise) lies at the top of that row and its cell content starts below it, and the table\'s bottom rule is appended below the last row with the content ending above it. An automatic or at-least row adds its top rule to its content or minimum height; an exact row\'s authored height already holds its top rule, and its content is clipped to that authored box. Page-local slices treat their first and last rows as the table\'s. Cell spacing keeps independent edges out of this footprint. Evidence: issue #1904 Windows controls (body and full-width page-anchored floating tables; two exact, at-least and automatic rows; no borders, all 0.5/3/6pt, outer-only 3pt and inside-only 3pt; modes 14 and 15): all 38 match within 0.3pt. Word 16.111.1 on macOS had been observed charging half of each adjacent rule to automatic and at-least rows and none to exact rows; the Windows behaviour is followed where the two differ.',
 });
 
 export const WORD_EFFECTIVE_FLOATING_TABLE_POSITIONING = defineCompatibilityRule({
@@ -400,10 +400,12 @@ export function wordExactRowFloorPt(
 /** Compatibility projection governed by
  * {@link WORD_COLLAPSED_BORDER_ROW_TRACK_FOOTPRINT}. */
 export function wordCollapsedBorderRowTrackFootprintPt(
-  topBoundaryWidthPt: number,
-  bottomBoundaryWidthPt: number,
+  exact: boolean,
+  topRuleWidthPt: number,
+  tableBottomRuleWidthPt: number,
 ): number {
-  return (Math.max(0, topBoundaryWidthPt) + Math.max(0, bottomBoundaryWidthPt)) / 2;
+  // An exact row's authored height already holds its top rule.
+  return (exact ? 0 : Math.max(0, topRuleWidthPt)) + Math.max(0, tableBottomRuleWidthPt);
 }
 
 export function wordAuthoredBorderParticipates(
