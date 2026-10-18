@@ -104,6 +104,15 @@ export default defineConfig({
         '@silurus/ooxml-core/internal/script-preload-accumulator': fileURLToPath(
           new URL('../packages/core/src/internal/script-preload-accumulator.ts', import.meta.url),
         ),
+        '@silurus/ooxml-core/internal/sha256': fileURLToPath(
+          new URL('../packages/core/src/crypto/sha256.ts', import.meta.url),
+        ),
+        '@silurus/ooxml-core/internal/font-stack': fileURLToPath(
+          new URL('../packages/core/src/fonts/font-stack.ts', import.meta.url),
+        ),
+        '@silurus/ooxml-core/internal/worker-model-source': fileURLToPath(
+          new URL('../packages/core/src/source/worker-model-source.ts', import.meta.url),
+        ),
         // Viewer collaborators have matching source and declaration shims in
         // core/src/internal; resolve them before the bare core entry alias.
         '@silurus/ooxml-core/internal/': fileURLToPath(
