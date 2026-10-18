@@ -27,6 +27,7 @@ import {
   RESET_SLICED_TEXT_MEASUREMENT,
   charScaleFactor,
   charSpacingDeltaPx,
+  leadingAutoSpacePx,
   legalTextSplitAtOrBefore,
   segAdvanceWidth,
   segmentCharacterGridDeltaPx,
@@ -47,7 +48,7 @@ import {
   rebaseSeaBreaks,
 } from './text-runs.js';
 import { fitCJKPrefix, hasEastAsianVisiblePredecessor } from './fit-search.js';
-import { LineGapRejection, fitJustifiedCompression, type PassOperationState } from './pass-operations.js';
+import { LineGapRejection, fitJustifiedCompression, justifiedCompressionApplies, justifiedPrefixCompression, lineEndsWithText, type PassOperationState } from './pass-operations.js';
 
 /** The iterator reads only its declared slice of the explicit pass state. */
 export type BreakOpportunityIteratorContext = Pick<
@@ -247,6 +248,11 @@ function processTextSegment(context: BreakOpportunityIteratorContext, seg: Layou
     sameLatinSpaceFace,
   } = context;
   const s = seg as LayoutTextSeg;
+  // WORD_EAST_ASIAN_AUTO_SPACE: a segment fitted after text on this line owes
+  // its gap; one that starts the line does not.
+  if (s.autoSpaceBeforePt !== undefined) {
+    s.autoSpaceLeadingPx = lineEndsWithText(breakerState.currentLine) ? undefined : 0;
+  }
   const segmentBox = textSegmentBox(s);
   const w = segmentBox.width;
   const prospectiveWidth = prospectiveSnapAdvance(s, w);
@@ -416,7 +422,10 @@ function processTextSegment(context: BreakOpportunityIteratorContext, seg: Layou
   // Complete-unit justified admission precedes the ordinary natural-only
   // joined-unit preflight, so a style/source seam cannot bypass compression.
   s.measuredWidth = w;
-  if (!prefersWholeWordAtScriptBoundary(context, s) && fitJustifiedCompression(context, s)) return;
+  // A whole word after an ideograph owns a WORD_EAST_ASIAN_AUTO_SPACE gap of
+  // the justified-compression family; it is admitted as one unit either way.
+  if ((!prefersWholeWordAtScriptBoundary(context, s) || s.autoSpaceBeforePt !== undefined)
+    && fitJustifiedCompression(context, s)) return;
   // The authored opportunity follows the existing whole-unit justified fit;
   // it must not introduce a wrap before a word admitted by that policy.
   if (placeOptionalHyphenPrefix(context, s)) return;
@@ -452,7 +461,7 @@ function processTextSegment(context: BreakOpportunityIteratorContext, seg: Layou
   // WORD_COMPRESSED_SPACE_LINE_FIT: once a mixed line's spaces are shrunk, a
   // following unit (such as a closing mark split into its own source run) is
   // judged by the same reduction rule; joined and split runs must agree.
-  if (breakerState.mixedSpace.compressed && mixedCandidateMayShrink(breakerState, s.text)) {
+  if (breakerState.mixedSpace.compressed && mixedCandidateMayShrink(breakerState, s.text, s)) {
     const required = context.mixedSpaceRequirement(mixedSeamCandidate(context, s, s.text, wForFit));
     if (required !== undefined) {
       s.measuredWidth = w;
@@ -585,7 +594,9 @@ function commitAlignedTabCell(context: BreakOpportunityIteratorContext): void {
     } else {
       const m = measureText(q);
       // #1014 — fold the vo=Tr ink deficit into the committed advance too.
-      const w = segAdvanceWidth(q, m.width + verticalInkExtra(q, q.text), characterGrid, scale);
+      // The same-line WORD_EAST_ASIAN_AUTO_SPACE gap is part of the cell.
+      const w = segAdvanceWidth(q, m.width + verticalInkExtra(q, q.text), characterGrid, scale)
+        + leadingAutoSpacePx(context, q);
       q.measuredWidth = w;
       const asc =
         m.fontBoundingBoxAscent ?? m.actualBoundingBoxAscent ?? q.fontSize * scale * SYNTHETIC_ASCENT_EM;
@@ -941,7 +952,7 @@ function fitMixedSpaces(
   segment: LayoutTextSeg,
   fitWidth: number,
 ): boolean {
-  if (!mixedCandidateMayShrink(context.breakerState, segment.text)) return false;
+  if (!mixedCandidateMayShrink(context.breakerState, segment.text, segment)) return false;
   const required = context.mixedSpaceRequirement(
     mixedSeamCandidate(context, segment, segment.text, fitWidth),
   );
@@ -959,7 +970,24 @@ function prefersWholeWordAtScriptBoundary(context: BreakOpportunityIteratorConte
     && hasCJKBreakOpportunity(previousChar) && !hasCJKBreakOpportunity(s.text);
 }
 
-function placeOrSplitText(context: BreakOpportunityIteratorContext, frame: TextFitFrame): void {
+/** A pre-flush (an atomic group or a SEA chunk moved to a fresh line) can
+ * leave a segment fitted with its WORD_EAST_ASIAN_AUTO_SPACE gap at a line
+ * start; release the gap before the line-start fit. */
+function settleLineStartAutoSpace(
+  context: BreakOpportunityIteratorContext,
+  frame: TextFitFrame,
+): TextFitFrame {
+  const { s } = frame;
+  if (s.autoSpaceBeforePt === undefined || lineEndsWithText(context.breakerState.currentLine)) {
+    return frame;
+  }
+  const leading = leadingAutoSpacePx(context, s);
+  s.autoSpaceLeadingPx = 0;
+  return leading === 0 ? frame : { ...frame, w: frame.w - leading, wForFit: frame.wForFit - leading };
+}
+
+function placeOrSplitText(context: BreakOpportunityIteratorContext, inputFrame: TextFitFrame): void {
+  const frame = settleLineStartAutoSpace(context, inputFrame);
   const {
     breakerState,
     flush,
@@ -1163,7 +1191,7 @@ function prepareAtomicTextFit(
       breakerState.currentWidth + groupFitWidth > availW() &&
       // WORD_COMPRESSED_SPACE_LINE_FIT judges a joined unit as one candidate,
       // so a source-run seam inside it cannot change the decision.
-      !(mixedCandidateMayShrink(breakerState, group.pieces.map((piece) => piece.text).join(''))
+      !(mixedCandidateMayShrink(breakerState, group.pieces.map((piece) => piece.text).join(''), group.pieces[0]?.segment)
         && context.mixedSpaceRequirement({ pieces: group.pieces, fitWidth: groupFitWidth }) !== undefined)
     ) {
       flush(undefined, false, s.src);
@@ -1347,7 +1375,7 @@ function splitCjkOverflow(context: BreakOpportunityIteratorContext, frame: TextF
   };
   let mixedSpaceExtended = false;
   const naturalRawSplit = [...rawPrefix].length;
-  if (breakerState.currentLine.length > 0 && mixedCandidateMayShrink(breakerState, s.text)) {
+  if (breakerState.currentLine.length > 0 && mixedCandidateMayShrink(breakerState, s.text, s)) {
     const characters = [...s.text];
     const admitted = (count: number): boolean => {
       const candidate = characters.slice(0, count).join('');
@@ -1388,6 +1416,41 @@ function splitCjkOverflow(context: BreakOpportunityIteratorContext, frame: TextF
     if (low > natural) {
       rawPrefix = characters.slice(0, low).join('');
       mixedSpaceExtended = true;
+    }
+  }
+  // WORD_JUSTIFIED_INTERWORD_COMPRESSION: on a justified mode-15 line a CJK
+  // prefix is admitted like a whole unit, by the line's compressible gaps
+  // (U+0020 and WORD_EAST_ASIAN_AUTO_SPACE). Admission is monotone in the
+  // prefix length (C grows; S and E do not), so the same bounded search applies.
+  let justifiedExtended = false;
+  // Only a line holding an automatic gap: other prefixes keep their
+  // established natural CJK fit.
+  if (!mixedSpaceExtended && breakerState.currentLine.length > 0 && justifiedCompressionApplies(context)
+    && (leadingAutoSpacePx(context, s) > 0 || breakerState.currentLine.some((item) =>
+      'text' in item && (item.autoSpaceLeadingPx ?? 0) > 0))) {
+    const characters = [...s.text];
+    const admitted = (count: number): boolean => {
+      const candidate = characters.slice(0, count).join('');
+      return !candidate.endsWith(' ') && justifiedPrefixCompression(context, s, candidate) !== undefined;
+    };
+    const natural = Math.max(naturalRawSplit, [...proposedPrefixFor(naturalRawSplit, true)].length);
+    let low = natural;
+    let high = characters.length;
+    for (let step = 1; low + step <= characters.length; step *= 2) {
+      if (!admitted(low + step)) {
+        high = low + step - 1;
+        break;
+      }
+      low += step;
+    }
+    while (low < high) {
+      const middle = Math.ceil((low + high) / 2);
+      if (admitted(middle)) low = middle;
+      else high = middle - 1;
+    }
+    if (low > natural && low < characters.length) {
+      rawPrefix = characters.slice(0, low).join('');
+      justifiedExtended = true;
     }
   }
   // Apply kinsoku to the break position: retract leftwards so the tail
@@ -1438,6 +1501,20 @@ function splitCjkOverflow(context: BreakOpportunityIteratorContext, frame: TextF
     }
     mixedSpaceExtended = needsShrink(prefix);
   }
+  let justifiedOverflow = 0;
+  if (justifiedExtended) {
+    // The final head (after kinsoku and hanging) is itself admitted, or the
+    // checked head, or the natural break.
+    const overflowOf = (head: string): number | undefined =>
+      head.length === 0 ? 0 : justifiedPrefixCompression(context, s, head);
+    let overflow = overflowOf(prefix);
+    if (overflow === undefined) {
+      const checked = proposedPrefixFor(rawSplit, false);
+      overflow = overflowOf(checked);
+      prefix = overflow === undefined ? proposedPrefixFor(naturalRawSplit, true) : checked;
+    }
+    justifiedOverflow = overflow ?? 0;
+  }
   if (breakerState.currentLine.length === 0) {
     // minSplit keeps progress on an empty line even when no legal prefix
     // fits; that retained prefix is forced unless a legal one exists.
@@ -1452,6 +1529,7 @@ function splitCjkOverflow(context: BreakOpportunityIteratorContext, frame: TextF
       // The retained head overflows naturally and was admitted above.
       context.markMixedSpacesCompressed();
     }
+    if (justifiedOverflow > 0) breakerState.justifiedCompressionPx = justifiedOverflow;
     // Grid advance for the head piece — the same model as the line box / draw.
     const pw = strNaturalAdvance(s, prefix);
     const headSeg: LayoutTextSeg = {

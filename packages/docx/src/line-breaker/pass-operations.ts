@@ -39,6 +39,7 @@ import {
 import {
   RESET_SLICED_TEXT_MEASUREMENT,
   charScaleFactor,
+  leadingAutoSpacePx,
   segLetterSpacingPx,
   charSpacingDeltaPx,
   protectedNoBreakOffsets,
@@ -806,15 +807,28 @@ export function performFlush(
             firstPositioned.resolvedDesignDescentRatio * firstPositioned.fontSize * scale,
         }
       : undefined;
+  const justifiedGapPlan = justifiedCompressionApplies(operationState)
+    ? lineGapModel(breakerState.currentLine.map(s => gapSegment(operationState, s)))
+    : undefined;
   breakerState.lines.push({
     ...(breakerState.isFirst && breakerState.numberingFirstLine
       ? { numberingFirstLine: breakerState.numberingFirstLine } : {}),
     physicalLineIndex: breakerState.physicalLineIndex,
-    ...(justifiedCompressionApplies(operationState)
+    ...(justifiedGapPlan
       ? {
-          justifiedCompressionPx: breakerState.justifiedCompressionPx,
+          // A unit forced onto a compressed line afterwards (a kinsoku
+          // leader or glued follower) lengthens it; the retained overflow is
+          // that of the line actually closed, which paint distributes.
+          // The accepted compression, never more than the closed line's own
+          // overflow (a retraction may shorten it). A unit forced onto the
+          // line afterwards (a kinsoku leader or glued follower) overflows
+          // beyond it instead of shrinking gaps past the accepted amount.
+          justifiedCompressionPx: Math.min(
+            breakerState.justifiedCompressionPx,
+            Math.max(0, justifiedGapPlan.visibleWidthPx - operationState.availW()),
+          ),
           gapPlan: {
-            ...lineGapModel(breakerState.currentLine.map(s => gapSegment(operationState, s))),
+            ...justifiedGapPlan,
             // CJK/ideographic/SEA expansion has no proportional measurement.
             // Retain its previous opportunities; family selection lives in core.
             expansionGaps: enumerateGaps(breakerState.currentLine.map(s => ({
@@ -933,6 +947,13 @@ export function performAddToLine(
   } = operationState;
 
   let committedWidth = w;
+  if ('text' in s && s.autoSpaceBeforePt !== undefined) {
+    const delta = resolveAutoSpaceAtPlacement(operationState, s);
+    if (delta !== 0) {
+      w += delta;
+      committedWidth = w;
+    }
+  }
   if ('text' in s) {
     const kind = snapToCharsClass(s, characterGrid);
     // `word-snap-to-chars-script-block-allocation`
@@ -1154,7 +1175,32 @@ export function performSegNaturalAdvance(
     measureText(s).width + verticalInkExtra(s, s.text),
     characterGrid,
     scale,
-  );
+  ) + leadingAutoSpacePx(operationState, s);
+}
+
+/** The committed line's last item is text: a following segment's automatic
+ * gap is then on the same line as its partner (assignment already requires
+ * the partner to be the immediately preceding text). */
+export function lineEndsWithText(line: readonly LayoutSeg[]): boolean {
+  const last = line.at(-1);
+  return last !== undefined && 'text' in last;
+}
+
+/** Resolve the gap a segment applies at placement: the same-line value after
+ * text, nothing at a line start. Keeps the committed width and the retained
+ * glyph shift in agreement. Returns the width change. */
+function resolveAutoSpaceAtPlacement(
+  operationState: Pick<PassOperationState, 'characterGrid' | 'scale' | 'breakerState'>,
+  s: LayoutTextSeg,
+): number {
+  if (s.autoSpaceBeforePt === undefined) return 0;
+  const applied = leadingAutoSpacePx(operationState, s);
+  const sameLine = lineEndsWithText(operationState.breakerState.currentLine);
+  const desired = sameLine && operationState.characterGrid?.type !== 'snapToChars'
+    ? (s.autoSpaceLeadingPx ?? s.autoSpaceBeforePt * operationState.scale)
+    : 0;
+  s.autoSpaceLeadingPx = desired;
+  return desired - applied;
 }
 
 export function performStandaloneSnapAdvance(
@@ -1197,6 +1243,7 @@ export function performStrNaturalAdvance(
       Math.max(0, start) + text.length,
     ),
   };
+  const leading = start <= 0 && text.length > 0 ? leadingAutoSpacePx(operationState, s) : 0;
   if (s.textLayoutService && s.textShapeRequest) {
     const shaped = s.textLayoutService.shape({
       ...sliceTextShapeRequest(s.textShapeRequest, Math.max(0, start), Math.max(0, start) + text.length),
@@ -1209,7 +1256,7 @@ export function performStrNaturalAdvance(
       shaped.advancePt + verticalInkExtra(s, text),
       characterGrid,
       scale,
-    );
+    ) + leading;
   }
   const natural = measurement.measureRunText(s, text).width;
   return segAdvanceWidth(
@@ -1217,7 +1264,7 @@ export function performStrNaturalAdvance(
     natural + verticalInkExtra(s, text),
     characterGrid,
     scale,
-  );
+  ) + leading;
 }
 
 export function performEastAsianSnapCellCount(
@@ -1405,12 +1452,43 @@ function gapSegment(state: Pick<PassOperationState, 'strAdvance' | 'scale' | 'ch
     const spacePx = spaceWidths.values().next().value ?? (start >= 0 && !segment.ruby
       ? state.strAdvance({ ...segment, text: ' ', ...slicedTextMetadata(segment, start, start + 1) }, ' ')
       : 0);
+    const leadingGapPx = leadingAutoSpacePx(state, segment);
     return {
       text: segment.metricOnly ? '' : segment.ruby ? undefined : segment.text,
       widthPx: segment.measuredWidth, spacePx, spaceWidths,
+      ...(leadingGapPx > 0 ? { leadingGapPx } : {}),
     };
   }
   return { widthPx: segment.measuredWidth, spacePx: 0 };
+}
+
+/** WORD_JUSTIFIED_INTERWORD_COMPRESSION for a prefix of a breakable (CJK)
+ * segment after the line's content: the overflow C the line keeps when the
+ * prefix is admitted (0 when it fits naturally), or undefined when refused.
+ * The same gap model and factor as a whole unit (fitJustifiedCompression). */
+export function justifiedPrefixCompression(state: Pick<PassOperationState,
+  'justifiedCompression' | 'baseRtl' | 'widthPolicy' | 'characterGrid' | 'breakerState'
+  | 'strAdvance' | 'availW' | 'scale'>, s: LayoutTextSeg, prefix: string): number | undefined {
+  const { breakerState: breaker } = state;
+  if (!justifiedCompressionApplies(state) || s.fitTextRegionIndex !== undefined
+    || breaker.currentLine.length === 0 || prefix.length === 0) return undefined;
+  if (!breaker.justifiedGapModel || breaker.justifiedGapModel.segmentCount !== breaker.currentLine.length) {
+    breaker.justifiedGapModel = lineGapModel(breaker.currentLine.map(item => gapSegment(state, item)), undefined, false);
+  }
+  const previous = breaker.justifiedGapModel;
+  const candidate: LayoutTextSeg = {
+    ...s, ...RESET_SLICED_TEXT_MEASUREMENT, text: prefix,
+    ...slicedTextMetadata(s, 0, prefix.length), measuredWidth: state.strAdvance(s, prefix),
+  };
+  const model = lineGapModel([gapSegment(state, candidate)], previous, false);
+  const overflow = model.visibleWidthPx - state.availW();
+  if (!(overflow > 0)) return 0;
+  return wordJustifiedInterwordCompressionFactor({
+    overflow, naturalGapSum: model.S,
+    candidateLineEndSeparator: model.lineEndSeparatorPx,
+    previousOpportunitySum: previous.S + previous.lineEndSeparatorPx,
+    expansionWithoutCandidate: state.availW() - previous.visibleWidthPx,
+  }) === undefined ? undefined : overflow;
 }
 
 /** Admit the whole unit against the same natural gap model that layout uses
@@ -1506,7 +1584,7 @@ export function performTextSegmentBox(
     measured.width + verticalInkExtra(s, s.text),
     characterGrid,
     scale,
-  );
+  ) + leadingAutoSpacePx(operationState, s);
   s.snapGridNaturalWidthPx = width;
   // Max-content uses the unbroken native context, as its ordinary intrinsic
   // text merge already does. Registered physical units must stay intact;

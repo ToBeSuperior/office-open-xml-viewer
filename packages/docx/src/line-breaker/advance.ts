@@ -100,6 +100,28 @@ export function effectiveCharacterSpacingPt(seg: LayoutTextSeg): number {
 }
 
 
+/** WORD_EAST_ASIAN_AUTO_SPACE gap a measurement of `seg` from its first
+ * character includes, in layout px: the placement's resolved value, or the
+ * same-line value while the segment is still being fitted. */
+export function autoSpaceLeadingAdvancePx(seg: LayoutTextSeg, scale: number): number {
+  if (seg.autoSpaceBeforePt === undefined) return 0;
+  return seg.autoSpaceLeadingPx ?? seg.autoSpaceBeforePt * scale;
+}
+
+
+/** {@link autoSpaceLeadingAdvancePx} under the paragraph's character grid.
+ * Grid-cell allocation under `snapToChars`
+ * (WORD_SNAP_TO_CHARS_SCRIPT_BLOCK_ALLOCATION) owns that grid's spacing; the
+ * automatic gap is not applied there. */
+export function leadingAutoSpacePx(
+  state: Readonly<{ characterGrid?: DocGridCtx; scale: number }>,
+  seg: LayoutTextSeg,
+): number {
+  if (state.characterGrid?.type === 'snapToChars') return 0;
+  return autoSpaceLeadingAdvancePx(seg, state.scale);
+}
+
+
 export function punctuationCompressionTotalPt(seg: LayoutTextSeg): number {
   return seg.punctuationCompressions?.reduce(
     (sum, compression) => sum + compression.adjustmentPt,
@@ -214,6 +236,7 @@ export function slicedTextMetadata(
   end: number,
 ): Pick<LayoutTextSeg,
   'punctuationCompressions' | 'noBreakRanges' | 'explicitBreaks' | 'textShapeRequest' | 'sourceTextOffset' | 'semanticSlotSpans' | 'semanticSlotRange' | 'script' | 'optionalHyphenBreaks'
+  | 'autoSpaceBeforePt' | 'autoSpaceLeadingPx'
 > {
   const slots = seg.semanticSlotSpans;
   const slotStart = (seg.semanticSlotRange?.start ?? 0) + start;
@@ -228,6 +251,9 @@ export function slicedTextMetadata(
       ? { textShapeRequest: sliceTextShapeRequest(seg.textShapeRequest, start, end) }
       : {}),
     punctuationCompressions: slicedPunctuationCompressions(seg, start, end),
+    // WORD_EAST_ASIAN_AUTO_SPACE: the gap precedes the first character only.
+    autoSpaceBeforePt: start === 0 ? seg.autoSpaceBeforePt : undefined,
+    autoSpaceLeadingPx: start === 0 ? seg.autoSpaceLeadingPx : undefined,
     noBreakRanges: slicedNoBreakRanges(seg, start, end),
     explicitBreaks: sliceTextBreakWindow(seg.explicitBreaks, start, end),
     optionalHyphenBreaks: seg.optionalHyphenBreaks?.filter(marker => marker.offset > start && marker.offset <= end)
