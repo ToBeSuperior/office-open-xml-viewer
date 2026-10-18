@@ -3,7 +3,6 @@ import {
   floatingTableAvoidance,
   resolveBlockFlowAdmission,
   resolveFloatPlacement,
-  resolvePageAnchoredTableDeferral,
   type FloatPlacementParticipant,
 } from './floats.js';
 
@@ -240,25 +239,36 @@ describe('block flow admission around floating-table exclusions', () => {
   });
 });
 
-describe('page-anchored floating-table compatibility admission', () => {
-  it('defers on the existing table text-exclusion band and reports the rule', () => {
-    const blocker = Object.freeze({
-      ...participant('blocker', 'table', 20, 1, 5, 'overlap'),
-      bounds: Object.freeze({ xPt: 20, yPt: 0, widthPt: 10, heightPt: 10 }),
-      exclusionBounds: Object.freeze({ xPt: 15, yPt: -5, widthPt: 20, heightPt: 20 }),
+describe('tblOverlap="never" displacement within the page (Windows Word #1902 controls)', () => {
+  const table = (id: string, yPt: number, heightPt: number, overlap: 'never' | 'overlap') =>
+    Object.freeze({
+      occurrenceId: id,
+      kind: 'table',
+      tableOverlap: overlap,
+      paragraphId: 0,
+      bounds: Object.freeze({ xPt: 0, yPt, widthPt: 612, heightPt }),
+      exclusionBounds: Object.freeze({ xPt: 0, yPt, widthPt: 612, heightPt }),
     }) as FloatPlacementParticipant;
-    const result = resolvePageAnchoredTableDeferral({
-      // Raw table extents do not overlap; only the blocker exclusion does.
-      bounds: { xPt: 10, yPt: 0, widthPt: 6, heightPt: 10 },
-      blockers: [blocker],
-      overlapEpsilonPt: 0.01,
-    });
+  const place = (blockerHeightPt: number, movingHeightPt: number) => resolveFloatPlacement({
+    moving: table('B', 98, movingHeightPt, 'never'),
+    blockers: [table('A', 149, blockerHeightPt, 'overlap')],
+    avoidance: floatingTableAvoidance(),
+    rightBoundaryPt: 612,
+    overlapEpsilonPt: 0.01,
+    pageVerticalBoundsPt: { topPt: 0, bottomPt: 792 },
+  }).bounds.yPt;
 
-    expect(result).toEqual({
-      defer: true,
-      appliedCompatibilityRuleIds: [
-        'word-page-anchored-table-collision-deferral',
-      ],
-    });
+  it('moves a full-width table below the table it meets when that stays on the page', () => {
+    expect(place(72, 72)).toBe(221);
+  });
+
+  it('moves it above that table when below would leave the page', () => {
+    expect(place(630, 72)).toBe(77);
+    // Above the top margin but on the page: pagination then moves the table.
+    expect(place(630, 120)).toBe(29);
+  });
+
+  it('keeps the authored position when above would leave the page too', () => {
+    expect(place(630, 160)).toBe(98);
   });
 });

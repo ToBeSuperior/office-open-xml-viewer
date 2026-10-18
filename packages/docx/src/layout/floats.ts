@@ -1,4 +1,3 @@
-import { WORD_PAGE_ANCHORED_TABLE_COLLISION_DEFERRAL } from './compatibility.js';
 import {
   axisAlignedRectsOverlap,
   resolveAxisAlignedOverlap,
@@ -153,6 +152,9 @@ export interface ResolveFloatPlacementInput {
    * coordinate path; exact anchor reflow deliberately omits both values. */
   readonly overlapEpsilonPt?: number;
   readonly rightBoundarySlackPt?: number;
+  /** The page's vertical extent. When supplied, a table that must avoid
+   * another (tblOverlap="never") only takes a position on the page. */
+  readonly pageVerticalBoundsPt?: Readonly<{ topPt: number; bottomPt: number }>;
 }
 
 function axisRect(rect: LayoutRect): AxisAlignedRect {
@@ -263,12 +265,45 @@ export function resolveFloatPlacement(
     return [];
   });
   const resolved = resolveObjectPosition(input, normativeBlockers);
+  const page = input.pageVerticalBoundsPt;
+  if (moving.kind === 'table' && page && normativeBlockers.length > 0
+    && resolved.top + moving.bounds.heightPt > page.bottomPt + (input.overlapEpsilonPt ?? 0)) {
+    // `word-never-table-page-displacement`: when neither moving right nor
+    // moving down keeps the table on the page, set it above the tables it
+    // meets; when that leaves the page too, keep its authored position.
+    // (Leaving the text area is a pagination decision, made by the caller.)
+    const above = resolveAbove(axisRect(moving.bounds), normativeBlockers, input.overlapEpsilonPt ?? 0);
+    const top = above !== null && above >= page.topPt - (input.overlapEpsilonPt ?? 0)
+      ? above
+      : moving.bounds.yPt;
+    return placement(moving, 0, top - moving.bounds.yPt, []);
+  }
   return placement(
     moving,
     resolved.left - moving.bounds.xPt,
     resolved.top - moving.bounds.yPt,
     [],
   );
+}
+
+/** Move `moving` straight up until it meets none of `blockers`; null when
+ * that does not settle. Each step clears every blocker it meets, so it
+ * settles within `blockers.length` steps. */
+function resolveAbove(
+  moving: AxisAlignedRect,
+  blockers: readonly AxisAlignedRect[],
+  overlapEpsilon: number,
+): number | null {
+  const height = moving.bottom - moving.top;
+  let top = moving.top;
+  for (let step = 0; step <= blockers.length; step += 1) {
+    const current = { ...moving, top, bottom: top + height };
+    const intersecting = blockers.filter((blocker) =>
+      axisAlignedRectsOverlap(current, blocker, overlapEpsilon));
+    if (intersecting.length === 0) return top;
+    top = Math.min(...intersecting.map((blocker) => blocker.top)) - height;
+  }
+  return null;
 }
 
 export interface ResolveBlockFlowAdmissionInput {
@@ -351,35 +386,4 @@ export function resolveBlockFlowAdmission(
       blocker.exclusionBounds.yPt + blocker.exclusionBounds.heightPt));
   }
   throw new Error('Block-flow float admission did not converge');
-}
-
-export interface ResolvePageAnchoredTableDeferralInput {
-  readonly bounds: LayoutRect;
-  readonly blockers: readonly FloatPlacementParticipant[];
-  readonly overlapEpsilonPt: number;
-}
-
-/** Established Word pagination behavior, deliberately separate from normative
- * §17.4.56 raw table placement. The authored object band is admitted against
- * already-reserved §17.4.57 floating-table text-exclusion bands. */
-export function resolvePageAnchoredTableDeferral(
-  input: ResolvePageAnchoredTableDeferralInput,
-): Readonly<{
-  defer: boolean;
-  appliedCompatibilityRuleIds: readonly string[];
-}> {
-  const moving = axisRect(input.bounds);
-  const defer = input.blockers.some((blocker) =>
-    blocker.kind === 'table'
-      && axisAlignedRectsOverlap(
-        moving,
-        axisRect(blocker.exclusionBounds),
-        input.overlapEpsilonPt,
-      ));
-  return Object.freeze({
-    defer,
-    appliedCompatibilityRuleIds: defer
-      ? Object.freeze([WORD_PAGE_ANCHORED_TABLE_COLLISION_DEFERRAL.id])
-      : Object.freeze([]),
-  });
 }

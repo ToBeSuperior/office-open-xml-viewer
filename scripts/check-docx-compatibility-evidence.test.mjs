@@ -42,7 +42,6 @@ function fixture({ microsoftSections = [] } = {}) {
     ['packages/docx/src/float-line-start-one-inch.test.ts', [
       'keeps an anchor-host metric-only line on the paragraph-mark threshold',
     ]],
-    ['packages/docx/src/float-table-page-fit.test.ts', ['(g) DEFERS a page-anchored floating table when its raw band intersects an existing table float']],
   ];
   for (const [path, titles] of references) {
     write(
@@ -80,9 +79,11 @@ function run(root, ...args) {
 test('accepts literal rules with live regression evidence', () => {
   const result = run(fixture());
   assert.equal(result.status, 0, result.stderr);
-  // compatibility.ts declares four rules since #1896 retired
-  // word-float-different-paragraph-displacement (Windows Word controls).
-  assert.match(result.stdout, /verified \(4 rules\)/);
+  // compatibility.ts declares six rules: the Windows Word controls of #1896
+  // and #1902 retired word-float-different-paragraph-displacement and
+  // word-page-anchored-table-collision-deferral, and #1902 added three
+  // office-observation table-pagination rules.
+  assert.match(result.stdout, /verified \(6 rules\)/);
 });
 
 test('rejects a stale regression test title', () => {
@@ -404,7 +405,7 @@ test('accepts quoted literal keys and extra static metadata', () => {
   `);
   const result = run(root);
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /verified \(5 rules\)/);
+  assert.match(result.stdout, /verified \(7 rules\)/);
 });
 
 test('rejects a rule that no production source cites', () => {

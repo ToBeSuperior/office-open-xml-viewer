@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import {
   defineCompatibilityRule,
   WORD_EMPTY_MARK_FLOAT_SIDE_GAP,
-  WORD_PAGE_ANCHORED_TABLE_COLLISION_DEFERRAL,
   WORD_SECTION_BTLR_TBRL_PAGE_FRAME,
   wordEmptyMarkMinimumStartWidthPx,
 } from './compatibility.js';
@@ -301,15 +300,6 @@ describe('Word table row-cut observations', () => {
       compatibility: 'standard',
       hasUnfinishedParagraphWithoutProgress: true,
     })).toBe(false);
-  });
-});
-
-describe('float compatibility evidence', () => {
-  it('names absolute floating-table collision deferral as compatibility behavior', () => {
-    expect(WORD_PAGE_ANCHORED_TABLE_COLLISION_DEFERRAL).toMatchObject({
-      id: 'word-page-anchored-table-collision-deferral',
-      evidence: { kind: 'regression-test' },
-    });
   });
 });
 
