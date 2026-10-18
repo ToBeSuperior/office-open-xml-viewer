@@ -662,7 +662,7 @@ export function resolvePathShade(
   }
   target.putImageData(pixels, 0, 0);
   const pattern = ctx.createPattern(surface, 'no-repeat');
-  if (!pattern || typeof pattern.setTransform !== 'function') return null;
+  if (!pattern || typeof pattern.setTransform !== 'function') return brushSurfaceUnavailable();
   const auxToUser = multiply(userInverse, auxToDevice);
   pattern.setTransform(counterRotatedFillTransform({
     a: auxToUser[0], b: auxToUser[1], c: auxToUser[2], d: auxToUser[3], e: auxToUser[4], f: auxToUser[5],

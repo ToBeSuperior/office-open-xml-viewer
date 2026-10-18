@@ -195,11 +195,13 @@ export function blipEffectsCoverageReach(
         x += width + d; y += height + d;
         break;
       }
-      case 'relativeOffset': x += finite(effect.tx) * width; y += finite(effect.ty) * height; break;
-      case 'transform':
-        if (effect.sx !== 1 || effect.sy !== 1 || effect.kx !== 0 || effect.ky !== 0) return null;
-        x += finite(effect.tx); y += finite(effect.ty);
+      // §20.1.8.51/.61 measure against the previous effect's grid, which
+      // earlier spatial nodes may already have grown; no static bound.
+      case 'relativeOffset':
+        if (effect.tx !== 0 || effect.ty !== 0) return null;
         break;
+      case 'transform':
+        return null;
       default: break;
     }
   }
@@ -210,12 +212,15 @@ export function blipEffectsCoverageReach(
   if (x > 0 || y > 0) {
     let spatialNodes = 0;
     for (const effect of blipEffectNodes(effects, false)) {
-      if (['blur', 'alphaOutset', 'glow', 'shadow', 'presetShadow', 'reflection', 'relativeOffset', 'transform']
+      if (['blur', 'alphaOutset', 'glow', 'shadow', 'presetShadow', 'reflection']
         .includes(effect.type)) spatialNodes++;
     }
     x += spatialNodes * width; y += spatialNodes * height;
   }
-  return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
+  // Report the same reach on both axes: a host may paint the frame rotated
+  // (or as a rotated group leaf), so the bound must not depend on axis.
+  const reach = Math.max(x, y);
+  return Number.isFinite(reach) ? { x: reach, y: reach } : null;
 }
 
 /** Iterative ownership traversal. Image fills own independent decode recipes;

@@ -3,6 +3,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   applyBlipPixelEffects,
   blipEffectsMayExtendCoverage,
+  blipEffectsCoverageReach,
   blipPixelEffectsKey,
   blipPixelEffectWork,
   assertBlipPixelEffectsBudget,
@@ -945,4 +946,18 @@ it('fails closed when a recursive tiled gradient pattern cannot be built after i
   } finally {
     vi.unstubAllGlobals();
   }
+});
+
+it('bounds effect reach conservatively and axis-independently, or not at all', () => {
+  // Offsets and transforms are measured on the previous effect's grid
+  // (§20.1.8.51/.61), so no static bound exists.
+  expect(blipEffectsCoverageReach([{ type: 'blur', radius: 100, grow: true },
+    { type: 'relativeOffset', tx: 10, ty: 0 }, { type: 'alphaRepl', alpha: 1 }], 1000, 1000)).toBeNull();
+  expect(blipEffectsCoverageReach([{ type: 'transform', sx: 1, sy: 1, kx: 0, ky: 0, tx: 5, ty: 0 }], 10, 10)).toBeNull();
+  // A shadow offset only along x is still reported on both axes (rotated
+  // hosts), including one whole-frame source-pixel rounding margin.
+  const shadow = { color: '000000', alpha: 1, blur: 0, dist: 50, dir: 0 };
+  expect(blipEffectsCoverageReach([{ type: 'shadow', shadow, inner: false }], 1000, 400))
+    .toEqual({ x: 1050, y: 1050 });
+  expect(blipEffectsCoverageReach([{ type: 'grayscale' }], 1000, 400)).toEqual({ x: 0, y: 0 });
 });
