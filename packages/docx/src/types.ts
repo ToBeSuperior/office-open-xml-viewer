@@ -1343,7 +1343,8 @@ export interface DocxTextRun {
    *  (`w:val`, 1/20 pt) plus the optional `w:id` that links consecutive runs
    *  into one region. The arbitrary-precision XSD integer id is serialized as a
    *  string; numeric synthetic inputs remain supported for layout tests and
-   *  direct model construction. An id-less run is always standalone. */
+   *  direct model construction. An id-less run has id 0
+   *  (WORD_FIT_TEXT_OMITTED_ID_LINKING). */
   fitTextVal?: number;
   fitTextId?: string | number;
   /** ECMA-376 §17.3.2.43 `<w:w w:val>` — horizontal text scale as a FRACTION of

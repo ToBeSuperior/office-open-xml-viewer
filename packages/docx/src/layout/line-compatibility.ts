@@ -775,6 +775,15 @@ export const WORD_FIT_TEXT_INTER_CHARACTER_EXPANSION = defineCompatibilityRule({
   description: 'Expand a multi-character fitText region to its authored width by distributing the residual evenly across interior character gaps. Evidence (observed Office behaviour): Word PDF of a corpus document in PR #918; [MS-OI29500] §2.1.78(d) supports ignoring authored spacing, not the even-gap formula.',
 });
 
+export const WORD_FIT_TEXT_OMITTED_ID_LINKING = defineCompatibilityRule({
+  id: 'word-fit-text-omitted-id-linking',
+  evidence: {
+    kind: 'microsoft-note',
+    reference: '[MS-OI29500] §2.1.78(b)',
+  },
+  description: 'A fitText run without w:id takes id 0 and shares one fit region with contiguous fitText runs whose id is omitted or 0, where ECMA-376 §17.3.2.14 leaves an id-less run unlinked.',
+});
+
 export const WORD_CJK_BOTH_INTER_CHARACTER_EXPANSION = defineCompatibilityRule({
   id: 'word-cjk-both-inter-character-expansion',
   evidence: {

@@ -2146,6 +2146,8 @@ export interface TableInfo {
     lastColumnDxf?: number;
     band1HorizontalDxf?: number;
     band2HorizontalDxf?: number;
+    styleElements?: PivotTableStyleElement[];
+    styleError?: string;
     columns: TableColumnInfo[];
 }
 export class TiffDecodeError extends Error {

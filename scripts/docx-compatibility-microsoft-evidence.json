@@ -24,6 +24,10 @@
       "sourceUrl": "https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/1fd4a662-8623-49c0-82f0-18fa91b413b8",
       "sections": [
         {
+          "id": "2.1.78",
+          "title": "Part 1 Section 17.3.2.14, fitText (Manual Run Width)"
+        },
+        {
           "id": "2.1.116",
           "title": "Part 1 Section 17.4.2, bottom (Table Cell Bottom Margin Exception)"
         },

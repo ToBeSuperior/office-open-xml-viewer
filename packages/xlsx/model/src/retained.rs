@@ -666,6 +666,8 @@ retained_struct!(TableInfo {
     last_column_dxf,
     band1_horizontal_dxf,
     band2_horizontal_dxf,
+    style_elements,
+    style_error,
     columns
 });
 

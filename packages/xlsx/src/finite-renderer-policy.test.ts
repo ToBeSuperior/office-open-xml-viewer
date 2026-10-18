@@ -186,6 +186,7 @@ describe('renderer coordinate index honours the bound worksheet policy', () => {
       showLastColumn: false,
       accentColor: '#4472C4',
       columns: [],
+      styleElements: [{ kind: 'wholeTable', size: 1, dxf: { font: null, fill: null, border: null } }],
     };
     const tabled = baseWorksheet({ rows: twoCellRows(), tables: [tableInfo] } as Partial<Worksheet>);
     bindWorksheetPolicy(tabled, raisedPolicy());

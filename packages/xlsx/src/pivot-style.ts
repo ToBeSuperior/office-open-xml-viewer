@@ -1,4 +1,14 @@
-// PivotTable style formatting (ECMA-376 §18.8.40-41, §18.10.1.97).
+// Table and PivotTable style formatting (ECMA-376 §18.8.40-41, §18.5.1.5,
+// §18.10.1.97).
+//
+// A Table style has the same shape: its elements apply in the Table style
+// element order of §18.8.41 over the Table regions of §18.18.77 (whole table,
+// column and row stripes over the data body, first and last column, header
+// and total rows and their end cells). [MS-XLS] 2.5.176
+// List12TableStyleClientInfo states the gating the XLSX tableStyleInfo
+// booleans (§18.5.1.5) name: showFirstColumn / showLastColumn apply
+// firstColumn / lastColumn, and the stripe flags apply their stripes; the
+// header, total and corner-cell elements apply wherever those rows exist.
 //
 // A PivotTable style is a list of `tableStyleElement`s, each a differential
 // format for one structured region of the PivotTable (§18.18.77, whose
@@ -29,13 +39,18 @@ import {
   setCoordinateIndexValue,
   type CoordinateIndexIdentity,
 } from './renderer-coordinate-index.js';
-import type { BorderEdge, CellFill, Dxf, PivotAxisItem, PivotTableMetadata, Worksheet } from './types.js';
+import type {
+  BorderEdge, CellFill, Dxf, PivotAxisItem, PivotTableMetadata, PivotTableStyleElement, TableInfo, Worksheet,
+} from './types.js';
 import { getWorksheetPolicy } from './worksheet-policy-context.js';
 
-/** The merged PivotTable style format of one cell. */
-export interface PivotCellFormat {
+/** The merged Table / PivotTable style format of one cell. */
+export interface StructuredCellFormat {
   fill?: CellFill;
   fontColor?: string;
+  /** `fontColor` was set by a Table style layer (rich-text runs take only a
+   *  Table style's color; see the renderer's `tableRunFontColor`). */
+  fontColorFromTable?: boolean;
   bold?: boolean;
   italic?: boolean;
   underline?: boolean;
@@ -161,11 +176,17 @@ function regions(p: PivotTableMetadata, sizes: Map<string, number>): Map<string,
   return out;
 }
 
-function apply(target: PivotCellFormat, dxf: Dxf, rect: Rect, row: number, col: number): void {
+function apply(
+  target: StructuredCellFormat, dxf: Dxf, rect: Rect, row: number, col: number, fromTable: boolean,
+): void {
   if (dxf.fill) target.fill = dxf.fill;
   const font = dxf.font;
   if (font) {
-    if (font.color) target.fontColor = font.color;
+    if (font.color) {
+      target.fontColor = font.color;
+      if (fromTable) target.fontColorFromTable = true;
+      else delete target.fontColorFromTable;
+    }
     for (const key of DXF_FONT_TOGGLES) {
       const value = dxfFontToggle(dxf, key);
       if (value !== undefined) target[key] = value;
@@ -185,39 +206,113 @@ function apply(target: PivotCellFormat, dxf: Dxf, rect: Rect, row: number, col: 
   if (right) target.right = right;
 }
 
-/** Merged PivotTable style formats by `row:col`. */
-export function buildPivotStyleMap(worksheet: Worksheet): Map<string, PivotCellFormat> {
-  const map = new Map<string, PivotCellFormat>();
-  const identity: CoordinateIndexIdentity = {
-    resource: 'worksheet-pivot-style-index',
-    operation: 'expand-pivot-style-coordinates',
-    limit: getWorksheetPolicy(worksheet).maxCoordinateIndexEntries,
+/** §18.8.41 Table Style Element Order (later wins). */
+const TABLE_ORDER = [
+  'wholeTable',
+  'firstColumnStripe',
+  'secondColumnStripe',
+  'firstRowStripe',
+  'secondRowStripe',
+  'lastColumn',
+  'firstColumn',
+  'headerRow',
+  'totalRow',
+  'firstHeaderCell',
+  'lastHeaderCell',
+  'firstTotalCell',
+  'lastTotalCell',
+] as const;
+
+/** The regions of every element kind for one Table (§18.18.77). */
+function tableRegions(t: TableInfo, sizes: Map<string, number>): Map<string, Rect[]> {
+  const { top, bottom, left, right } = t.range;
+  const header = Math.max(0, t.headerRowCount ?? 1);
+  const totals = Math.max(0, t.totalsRowCount ?? 0);
+  const bodyTop = top + header;
+  const bodyBottom = bottom - totals;
+  const out = new Map<string, Rect[]>();
+  const add = (kind: string, rect: Rect) => {
+    if (rect.top > rect.bottom || rect.left > rect.right) return;
+    const list = out.get(kind);
+    if (list) list.push(rect);
+    else out.set(kind, [rect]);
   };
-  for (const pivot of worksheet.pivotTables ?? []) {
-    const style = pivot.style;
-    if (!style || style.elements.length === 0) continue;
-    const elements = new Map(style.elements.map((element) => [element.kind, element]));
-    const sizes = new Map(style.elements.map((element) => [element.kind, element.size]));
-    assertCoordinateRangeArea(pivot.location, identity);
-    const areas = regions(pivot, sizes);
-    for (const kind of ORDER) {
-      const element = elements.get(kind);
-      const rects = areas.get(kind);
-      if (!element || !rects) continue;
-      for (const rect of rects) {
-        for (let row = rect.top; row <= rect.bottom; row++) {
-          for (let col = rect.left; col <= rect.right; col++) {
-            const key = `${row}:${col}`;
-            let format = map.get(key);
-            if (!format) {
-              format = {};
-              setCoordinateIndexValue(map, key, format, identity);
-            }
-            apply(format, element.dxf, rect, row, col);
+  add('wholeTable', { top, bottom, left, right });
+  if (t.showColumnStripes) {
+    const cols = bands(left, right, sizes.get('firstColumnStripe') ?? 1, sizes.get('secondColumnStripe') ?? 1);
+    for (const band of cols.first) add('firstColumnStripe', { top: bodyTop, bottom: bodyBottom, left: band.top, right: band.bottom });
+    for (const band of cols.second) add('secondColumnStripe', { top: bodyTop, bottom: bodyBottom, left: band.top, right: band.bottom });
+  }
+  if (t.showRowStripes) {
+    const rows = bands(bodyTop, bodyBottom, sizes.get('firstRowStripe') ?? 1, sizes.get('secondRowStripe') ?? 1);
+    for (const band of rows.first) add('firstRowStripe', { ...band, left, right });
+    for (const band of rows.second) add('secondRowStripe', { ...band, left, right });
+  }
+  if (t.showLastColumn) add('lastColumn', { top, bottom, left: right, right });
+  if (t.showFirstColumn) add('firstColumn', { top, bottom, left, right: left });
+  if (header > 0) {
+    add('headerRow', { top, bottom: bodyTop - 1, left, right });
+    add('firstHeaderCell', { top, bottom: bodyTop - 1, left, right: left });
+    add('lastHeaderCell', { top, bottom: bodyTop - 1, left: right, right });
+  }
+  if (totals > 0) {
+    add('totalRow', { top: bodyBottom + 1, bottom, left, right });
+    add('firstTotalCell', { top: bodyBottom + 1, bottom, left, right: left });
+    add('lastTotalCell', { top: bodyBottom + 1, bottom, left: right, right });
+  }
+  return out;
+}
+
+function layer(
+  map: Map<string, StructuredCellFormat>,
+  identity: CoordinateIndexIdentity,
+  order: readonly string[],
+  elementList: readonly PivotTableStyleElement[],
+  areas: Map<string, Rect[]>,
+  fromTable: boolean,
+): void {
+  const elements = new Map(elementList.map((element) => [element.kind, element]));
+  for (const kind of order) {
+    const element = elements.get(kind);
+    const rects = areas.get(kind);
+    if (!element || !rects) continue;
+    for (const rect of rects) {
+      for (let row = rect.top; row <= rect.bottom; row++) {
+        for (let col = rect.left; col <= rect.right; col++) {
+          const key = `${row}:${col}`;
+          let format = map.get(key);
+          if (!format) {
+            format = {};
+            setCoordinateIndexValue(map, key, format, identity);
           }
+          apply(format, element.dxf, rect, row, col, fromTable);
         }
       }
     }
+  }
+}
+
+/** Merged Table and PivotTable style formats by `row:col`. */
+export function buildStructuredStyleMap(worksheet: Worksheet): Map<string, StructuredCellFormat> {
+  const map = new Map<string, StructuredCellFormat>();
+  const identity: CoordinateIndexIdentity = {
+    resource: 'worksheet-structured-style-index',
+    operation: 'expand-structured-style-coordinates',
+    limit: getWorksheetPolicy(worksheet).maxCoordinateIndexEntries,
+  };
+  for (const table of worksheet.tables ?? []) {
+    const elements = table.styleElements ?? [];
+    if (elements.length === 0) continue;
+    assertCoordinateRangeArea(table.range, identity);
+    const sizes = new Map(elements.map((element) => [element.kind, element.size]));
+    layer(map, identity, TABLE_ORDER, elements, tableRegions(table, sizes), true);
+  }
+  for (const pivot of worksheet.pivotTables ?? []) {
+    const style = pivot.style;
+    if (!style || style.elements.length === 0) continue;
+    const sizes = new Map(style.elements.map((element) => [element.kind, element.size]));
+    assertCoordinateRangeArea(pivot.location, identity);
+    layer(map, identity, ORDER, style.elements, regions(pivot, sizes), false);
   }
   return map;
 }
