@@ -1,6 +1,12 @@
 import { clipCanvasHorizontally } from '@silurus/ooxml-core/internal/canvas-clip';
 import { ownValue } from '@silurus/ooxml-core/internal/own-key';
 import { quoteCssFontFamily } from '@silurus/ooxml-core/internal/css-font-family';
+import {
+  arabicFallbackFamilies,
+  containsArabicFallbackText,
+  officeFaceWebAlias,
+  quoteCssFontFamilies as quoteAll,
+} from '@silurus/ooxml-core/internal/font-stack';
 import { FONT_TRACKING_SENTINEL, FONT_BASELINE_SENTINEL, FONT_SPACE_SENTINEL } from '@silurus/ooxml-core/internal/font-measurement-sentinels';
 import { preparedPowerPointText } from './font-display-text.js';
 import { pptxSlideCjkFallback } from './google-fonts.js';
@@ -21,8 +27,6 @@ import type {
   Stroke,
   TextBody,
   Paragraph,
-  TextRun,
-  PathCmd,
   Shadow,
   Glow,
   RenderOptions,
@@ -47,10 +51,11 @@ import {
   applyStroke as applyStrokeCore,
   buildShapePath,
   EMU_PER_INCH,
+  EMU_PER_PX,
   EMU_PER_PT as PT_TO_EMU,
   mathToMathML,
   rasterizeMathSvg,
-  tintMathRaster,
+  cachedTintedMathRaster,
   applyOuterShadow,
   applyInnerShadow,
   createRasterCoveragePaint,
@@ -60,7 +65,6 @@ import {
   renderPresetShape,
   pathFillModeOverlay,
   hasPreset,
-  buildPresetGeometryPath,
   buildPresetGeometryFillPath,
   getPresetGeometryBounds,
   getCustomGeometryBounds,
@@ -94,15 +98,8 @@ import {
   cjkFallbackChain,
   NON_CJK_SANS_FALLBACKS,
   NON_CJK_SERIF_FALLBACKS,
-  DEFAULT_KINSOKU_RULES,
   isCjkBreakChar,
   isComplexScriptCodePoint,
-  isUax14NoBreakPair,
-  lineBreakClass,
-  containsSeaScript,
-  isGraphemeFillText,
-  seaMixedBreakOffsets,
-  fitSeaWordPrefix,
   graphemeClusterOffsets,
   getCachedSvgImageByPath,
   getCachedBitmapByPath,
@@ -120,7 +117,6 @@ import {
   isBrowserResizableRasterMimeType,
   isDecodeTargetResizableRasterFormat,
   peekCachedBitmapByPath,
-  dropDecodedBitmapCache,
   preferVectorBlip,
   drawImageCropped,
   metafileRasterSize,
@@ -132,6 +128,8 @@ import {
   symbolFontToUnicode,
   isSymbolFontFamily,
   drawUnderline,
+  DECORATION_LINE_WIDTH_EM,
+  STRIKE_RISE_EM,
   hasTextWarp,
   buildWarpEnvelope,
   warpGlyphTransform,
@@ -171,12 +169,11 @@ import {
   computeLineVisualOrder,
   type LineVisualOrder,
 } from './bidi-line';
-import { fitCjkLine, type MeasuredChar } from './cjk-wrap.js';
 import { justifyLine, type Justified } from './text-justify';
 import { justifiedPiecePositions } from '@silurus/ooxml-core';
 import { resolveTableBorderConflict } from './table-border-conflict.js';
 import { isSmartArtFallbackShape, smartArtFallbackTextColor } from './smartart-fallback-contrast';
-import { resolveTabWidths, type TabItem, type TabStopPx } from './tab-layout.js';
+import { resolveTabWidths } from './tab-layout.js';
 import {
   powerPointCompatOffNaturalLine, powerPointExactLinePoints, powerPointFaceMetrics, officeFaceWeight,
   powerPointNaturalLine, type PowerPointFaceMetrics,
@@ -691,21 +688,6 @@ export function paintHighlight(
   ctx.fillStyle = glyphPaint;
 }
 
-/** Simple fill resolver that returns a CSS color string.
- *  For gradient/pattern fills, returns a flat colour (used by table cells etc.,
- *  where we don't have ctx scope to build a CanvasPattern). */
-function resolveFill(fill: Fill | null): string | null {
-  if (!fill || fill.fillType === 'none') return null;
-  if (fill.fillType === 'solid') return hexToRgba(fill.color);
-  if (fill.fillType === 'gradient') {
-    return fill.stops.length > 0 ? hexToRgba(fill.stops[0].color) : null;
-  }
-  // Pattern fills degrade to their foreground colour outside the canvas-aware
-  // path; full bitmap rendering happens via resolveShapeFill (core resolveFill).
-  if (fill.fillType === 'pattern') return hexToRgba(fill.fg);
-  return null;
-}
-
 /** Context-aware fill resolver that creates a CanvasGradient for gradient
  * fills and a CanvasPattern for preset pattern fills. */
 export function resolveShapeFill(
@@ -732,11 +714,11 @@ function paintRunUnderline(ctx: CanvasRenderingContext2D, seg: LayoutSegment,
     // Office PDF shows a separately chosen underline pattern on the
     // same slide-aligned grid.
     const underlinePaint = seg.underlineFill
-      ? resolveFillCore(seg.underlineFill, ctx, x, baseline, width, drawSizePx * 0.05,
+      ? resolveFillCore(seg.underlineFill, ctx, x, baseline, width, drawSizePx * DECORATION_LINE_WIDTH_EM,
           0, scale * PT_TO_EMU) ?? 'rgba(0,0,0,0)'
       : seg.underlineLine?.fill
         ? resolveFillCore(seg.underlineLine.fill, ctx, x, baseline, width,
-            drawSizePx * 0.05, 0, scale * PT_TO_EMU) ?? 'rgba(0,0,0,0)'
+            drawSizePx * DECORATION_LINE_WIDTH_EM, 0, scale * PT_TO_EMU) ?? 'rgba(0,0,0,0)'
         : seg.underlineColor ?? glyphPaint;
     drawUnderline(ctx, x, baseline, width, drawSizePx,
       underlinePaint, seg.underlineStyle, dpr,
@@ -749,7 +731,7 @@ function paintRunStrike(ctx: CanvasRenderingContext2D, seg: LayoutSegment,
   dpr: number): void {
   const drawSizePx = seg.drawSizePx ?? seg.sizePx;
   if (seg.strikethrough && !seg.noFill) {
-    const lineW = Math.max(1, drawSizePx * 0.05);
+    const lineW = Math.max(1, drawSizePx * DECORATION_LINE_WIDTH_EM);
     ctx.strokeStyle = glyphPaint;
     ctx.lineWidth = lineW;
     ctx.setLineDash([]);
@@ -757,11 +739,13 @@ function paintRunStrike(ctx: CanvasRenderingContext2D, seg: LayoutSegment,
     // an odd device-pixel width is centered on one device row by snapping its
     // y onto the nearest crisp device position (otherwise it straddles two
     // rows → blurry). Snap each line from its own y.
-    const yMid = baseline - drawSizePx * 0.32;
+    // Strike rise and width: core library policy (see text/underline.ts).
+    const yMid = baseline - drawSizePx * STRIKE_RISE_EM;
     if (seg.strikeDouble) {
-      // Two parallel lines straddling the standard strike position,
-      // separated by ~ 1.5× the line weight (visually distinct yet
-      // staying inside the glyph's central band).
+      // Two parallel lines straddling the standard strike position, each
+      // 0.9 line widths from it (library policy; ST_TextStrikeType
+      // §20.1.10.79 `dblStrike` gives no spacing and no Office measurement
+      // is recorded).
       const offset = lineW * 0.9;
       const yUp = yMid - offset;
       const yDn = yMid + offset;
@@ -813,20 +797,6 @@ interface MathRender {
 }
 const mathRenders = new WeakMap<MathNode[], MathRender>();
 const failedMath = new WeakSet<MathNode[]>();
-
-/**
- * Tint the cached black equation image to `color`. PowerPoint equations follow
- * the run/paragraph text colour, which varies per slide (white on dark, theme
- * accents, …), so we recolour the glyphs at draw time via `source-in` instead
- * of baking a single colour. Cached per colour on the render.
- */
-function tintedMathImage(render: MathRender, color: string): CanvasImageSource {
-  const cached = render.tinted.get(color);
-  if (cached) return cached;
-  const tinted = tintMathRaster(render.raster, color);
-  render.tinted.set(color, tinted);
-  return tinted;
-}
 
 /** All currently supported text-bearing slide elements, including table cells. */
 function* elementTextBodies(element: SlideElement): Generator<TextBody> {
@@ -893,7 +863,7 @@ function paintEquation(ctx: CanvasRenderingContext2D, style: LayoutSegment, x: n
   const render = equation.unavailable ? undefined : mathRenders.get(equation.nodes);
   const height = equation.ascent + equation.descent;
   if (!(equation.width > 0 && height > 0)) return;
-  if (render) ctx.drawImage(tintedMathImage(render, style.color), x, y, equation.width, height);
+  if (render) ctx.drawImage(cachedTintedMathRaster(render, style.color), x, y, equation.width, height);
   else if (equation.fallbackText) {
     ctx.font = style.font;
     ctx.fillStyle = style.color;
@@ -1069,30 +1039,6 @@ function genericFallback(family: string): string {
 }
 
 /**
- * Optional published web aliases for authored Office faces. These enter the
- * canvas stack only when `useGoogleFonts` is enabled. The authored family
- * remains first, followed by a fallback of the same generic class. Keys are
- * lower-cased; this map is not a metric correction or a line-break rule.
- */
-const OFFICE_FONT_SUBSTITUTE: Record<string, string> = {
-  'calibri': 'Carlito',
-  'cambria': 'Caladea',
-  'franklin gothic book': 'Libre Franklin',
-  'franklin gothic medium': 'Libre Franklin',
-  // Optional aliases for common Arabic-script faces. "Naskh" covers
-  // traditional serif-like faces; "Sans" covers geometric ones.
-  'sakkal majalla': 'Noto Naskh Arabic',
-  'traditional arabic': 'Noto Naskh Arabic',
-  'simplified arabic': 'Noto Naskh Arabic',
-  'arabic typesetting': 'Noto Naskh Arabic',
-  'univers next arabic': 'Noto Sans Arabic',
-};
-
-/** Arabic fallbacks apply only to runs containing Arabic codepoints, before
- * the CSS generic so a missing authored face can retain the script. */
-const ARABIC_TEXT_RE = /[\u0600-\u06ff\u0750-\u077f\u08a0-\u08ff]/u;
-
-/**
  * True when `family` names an Arabic-script face. Its Arabic runs place the
  * script fallbacks before CJK and other script tails.
  *
@@ -1104,15 +1050,10 @@ const ARABIC_TEXT_RE = /[\u0600-\u06ff\u0750-\u077f\u08a0-\u08ff]/u;
  */
 function isArabicScriptFace(family: string): boolean {
   // Faces we explicitly substitute to a Noto Arabic web font are Arabic-script.
-  if (ownValue(OFFICE_FONT_SUBSTITUTE, family.toLowerCase())?.includes('Arabic')) return true;
+  if (officeFaceWebAlias(family)?.includes('Arabic')) return true;
   const l = family.toLowerCase();
   // Common Arabic-script family-name markers (Latin transliterations + Arabic).
   return /arabic|naskh|kufi|nastaliq|amiri|scheherazade|lateef|aldhabi|urdu|farsi|العرب|[؀-ۿ]/.test(l);
-}
-
-/** Quote each family for a CSS font-family list (no trailing comma). */
-function quoteAll(names: readonly string[]): string {
-  return names.map(quoteCssFontFamily).join(', ');
 }
 
 /**
@@ -1136,8 +1077,10 @@ export function cssFontStack(
   googleSubstitutes = false,
 ): string {
   const generic = genericFallback(authoredFamily);
-  const arabicText = ARABIC_TEXT_RE.test(text);
-  const alias = googleSubstitutes ? ownValue(OFFICE_FONT_SUBSTITUTE, authoredFamily.toLowerCase()) : undefined;
+  const arabicText = containsArabicFallbackText(text);
+  // Optional published web aliases for authored Office faces enter the stack
+  // only with `useGoogleFonts`; the authored family stays first.
+  const alias = googleSubstitutes ? officeFaceWebAlias(authoredFamily) : undefined;
   // Script-scoped visual substitutes (core substitute-script.ts) join only a
   // run that contains their script. A CSS stack cannot split a run, but the
   // authored family stays first, so an installed authored face still wins.
@@ -1148,9 +1091,7 @@ export function cssFontStack(
   const googleAlias = googleCjkFontAlias(authoredFamily);
   const aliasPart = googleAlias ? `${quoteCssFontFamily(googleAlias)}, ` : '';
   // Arabic faces lead with script fallbacks only for Arabic runs.
-  const arabicFamilies = generic === 'serif'
-    ? ['Noto Naskh Arabic', 'Noto Sans Arabic']
-    : ['Noto Sans Arabic'];
+  const arabicFamilies = arabicFallbackFamilies(generic === 'serif');
   const arabicPart = arabicText ? `${quoteAll(arabicFamilies)}, ` : '';
   if (isArabicScriptFace(authoredFamily) && arabicText) {
     const cjk = fallback ? cjkFallbackChain(fallback, 'sans') : [];
@@ -1486,70 +1427,9 @@ function firstLineIndentPxFor(hasBullet: boolean, indentPx: number): number {
   return hasBullet ? 0 : indentPx;
 }
 
-/**
- * Whether the seam is the explicit hyphen boundary of an alphabetic compound.
- *
- * UAX #14 gives HY (U+002D) and HH (for example U+2010) a break opportunity
- * AFTER the hyphen. Keep this helper deliberately narrower than a full UAX #14
- * implementation: it accepts only Latin-letter–hyphen–Latin-letter compounds,
- * rejecting the numeric-range case covered by LB25 and leaving other scripts
- * (including LB21a's Hebrew exception) to their dedicated layout paths.
- * DrawingML `latinLnBrk="0"` forbids splitting a Latin word without adding a
- * hyphen; it does not erase a break opportunity supplied by an authored hyphen.
- */
-const LATIN_SCALAR_RE = /^\p{Script_Extensions=Latin}$/u;
 // The core predicate covers the RTL cs axis. DrawingML also routes Indic and
 // Southeast Asian shaping scripts through a:cs when that font slot is present.
 const INDIC_CS_GLYPH_RE = /[\p{Script=Devanagari}\p{Script=Thai}\p{Script=Bengali}\p{Script=Tamil}\p{Script=Telugu}\p{Script=Kannada}\p{Script=Malayalam}\p{Script=Gujarati}\p{Script=Gurmukhi}\p{Script=Oriya}\p{Script=Sinhala}\p{Script=Khmer}\p{Script=Lao}\p{Script=Myanmar}\p{Script=Tibetan}]/u;
-const LETTER_SCALAR_RE = /^\p{L}$/u;
-const ASCII_SCALARS_RE = /^[\u0000-\u007f]*$/u;
-
-function isLatinCompoundHyphenBoundary(before: string, hyphen: string, after: string): boolean {
-  const hyphenCp = hyphen.codePointAt(0) as number;
-  // All ASCII scalars other than U+002D are permanently outside HY/HH. Most
-  // tokens take this constant-time path without searching the Unicode table.
-  if (hyphenCp <= 0x7f && hyphenCp !== 0x2d) return false;
-  // HY/HH are punctuation classes, so non-ASCII letters cannot be candidates.
-  if (LETTER_SCALAR_RE.test(hyphen)) return false;
-  const hyphenClass = lineBreakClass(hyphenCp);
-  if (hyphenClass !== 'HY' && hyphenClass !== 'HH') return false;
-  return LATIN_SCALAR_RE.test(before) && LATIN_SCALAR_RE.test(after);
-}
-
-/** Split one non-whitespace Latin token at its authored compound hyphens. */
-function splitLatinCompoundToken(text: string): { text: string; breakBefore: boolean }[] {
-  // The overwhelmingly common ASCII token without U+002D cannot contain an
-  // HY/HH scalar. Avoid a scalar array and per-boundary classification there.
-  if (!text.includes('-') && ASCII_SCALARS_RE.test(text)) {
-    return [{ text, breakBefore: false }];
-  }
-  const chars = [...text];
-  const pieces: { text: string; breakBefore: boolean }[] = [];
-  let start = 0;
-  for (let i = 1; i + 1 < chars.length; i++) {
-    if (!isLatinCompoundHyphenBoundary(chars[i - 1], chars[i], chars[i + 1])) {
-      continue;
-    }
-    const end = i + 1;
-    pieces.push({ text: chars.slice(start, end).join(''), breakBefore: pieces.length > 0 });
-    start = end;
-  }
-  pieces.push({ text: chars.slice(start).join(''), breakBefore: pieces.length > 0 });
-  return pieces;
-}
-
-/** Last two painted text scalars, without joining the whole line. */
-function trailingTextScalars(line: LayoutLine): string[] {
-  const tail: string[] = [];
-  for (let i = line.segments.length - 1; i >= 0 && tail.length < 2; i--) {
-    const segment = line.segments[i];
-    if (segment.isTab || segment.math) continue;
-    const chars = [...segment.text];
-    for (let j = chars.length - 1; j >= 0 && tail.length < 2; j--) tail.unshift(chars[j]);
-  }
-  return tail;
-}
-
 /** PowerPoint paints non-zero DrawingML baseline runs at about 65% of their
  * authored size. The authored size still owns line height and baseline offset;
  * this helper is only for the glyph font used by measure and paint. */
@@ -1619,15 +1499,6 @@ export function naturalWidthExceedsBbox(
       previous = item.style;
       if (lineW > textMaxW) return true;
     }
-  }
-  return false;
-}
-
-/** True when any character of `s` is a CJK / ideographic glyph that allows a
- *  per-character line break (see core's `isCjkBreakChar` for the ranges). */
-function tokenHasCjk(s: string): boolean {
-  for (const ch of s) {
-    if (isCjkBreakChar(ch.codePointAt(0) ?? 0)) return true;
   }
   return false;
 }
@@ -1884,7 +1755,7 @@ export function paragraphInputRuns(
       // `buildFont` depends on text only through these script predicates. Keep
       // cache cardinality bounded by face/script class, not grapheme count.
       const key = `${face}\0${named ? 1 : 0}\0${containsHanScript(text) ? 1 : 0}`
-        + `\0${ARABIC_TEXT_RE.test(text) ? 1 : 0}\0${extras.join('\0')}`;
+        + `\0${containsArabicFallbackText(text) ? 1 : 0}\0${extras.join('\0')}`;
       const cached = stackFonts.get(key);
       if (cached !== undefined) return cached;
       const built = buildFont(bold, italic, drawSizePx, face, rc, text, named, extras);
@@ -2361,13 +2232,6 @@ async function prepareBackground(
 }
 
 /**
- * EMU per pixel at 96 DPI. A blip without an authored DPI uses this established
- * compatibility basis to get its native EMU size.
- * 914400 EMU / inch ÷ 96 px / inch = 9525 EMU / px.
- */
-const EMU_PER_PX_96 = 9525;
-
-/**
  * Compute the anchor (origin) of the first tile inside the fill box for a
  * given §20.1.8.41 ST_RectAlignment value. The returned point is where the
  * tile grid is registered; tx/ty then shift it further. The pattern is then
@@ -2460,7 +2324,8 @@ function paintTiledBackground(
     intrinsicSize?.height ?? bitmap.height,
     srcRect,
   );
-  const pixelToEmu = EMU_PER_PX_96 * 96 / dpi;
+  // A blip without an authored DPI uses the 96-DPI EMU-per-px basis.
+  const pixelToEmu = EMU_PER_PX * 96 / dpi;
   const tileW = source.width * pixelToEmu * (tile.sx ?? 1) * scale;
   const tileH = source.height * pixelToEmu * (tile.sy ?? 1) * scale;
   if (!(tileW > 0) || !(tileH > 0)) return false;
@@ -3437,7 +3302,7 @@ function renderWarpedText(
           ctx.strokeStyle = underlinePaint;
           ctx.lineWidth = seg.underlineLine?.width
             ? emuToPx(seg.underlineLine.width, scale)
-            : Math.max(1, seg.sizePx * 0.05);
+            : Math.max(1, seg.sizePx * DECORATION_LINE_WIDTH_EM);
           ctx.beginPath();
           const samples = Math.max(2, Math.ceil((penW - segmentStartW) / 8));
           for (let sample = 0; sample <= samples; sample++) {
@@ -4154,14 +4019,12 @@ function renderShape(ctx: CanvasRenderingContext2D, el: ShapeElement, scale: num
   const custTailTrim = custEnds?.end ? tailTrim : 0;
 
   // ── Dispatch to preset engine when possible ────────────────────────────
-  // Preference order: custGeom → generic preset engine → legacy switch.
+  // Preference order: custGeom → generic preset engine → buildShapePath
+  // (only `rect` or a schema-invalid name, which the engine does not define).
   // `arc` (ECMA-376 §20.1.10.56 ST_ShapeType "arc") goes through the engine
   // too: its presetShapeDefinitions geometry is a two-<path> shape — path 0
   // (stroke="false") fills the pie wedge (arc + lnTo centre + close) and path 1
-  // (fill="none") strokes only the open arc edge. The engine honours those
-  // per-path fill/stroke flags, so arc renders its true pie-wedge fill + open
-  // outline. The legacy buildShapePath could only draw the open arc (filling it
-  // auto-closes into a *chord*), which is why arc used to be excluded here.
+  // (fill="none") strokes only the open arc edge.
   const usePresetEngine =
     !el.custGeom && hasPreset(geom);
 
@@ -4279,18 +4142,15 @@ function renderShape(ctx: CanvasRenderingContext2D, el: ShapeElement, scale: num
     if (el.custGeom && el.custGeom.length > 0) {
       buildCustomPath(target, el.custGeom, bx, by, bw, bh);
     } else if (usePresetEngine) {
-      // Silhouette of a preset shape: build a single filled outline. Preset
-      // path 0 is the body outline (secondary paths are highlights), so the
-      // legacy buildShapePath gives a faithful silhouette of the body.
+      // Silhouette of a preset shape. buildShapePath resolves spec-defined
+      // names through the ECMA-376 preset engine (all of its paths).
       buildShapePath(target, geom, bx, by, bw, bh, el.adj, el.adj2, el.adj3, el.adj4);
     } else {
       buildShapePath(target, geom, bx, by, bw, bh, el.adj, el.adj2, el.adj3, el.adj4);
     }
-    // Normal arc bodies render through the preset engine above; this legacy
-    // path is only reached for an arc as a custGeom/effect silhouette built by
-    // buildShapePath, which draws the OPEN arc — filling that auto-closes into
-    // a chord, not the pie wedge. So skip the fill for arc here (the engine,
-    // not this branch, owns arc's pie-wedge fill).
+    // Arc bodies render through the preset engine above, which owns arc's
+    // pie-wedge fill (path 0) and open-arc stroke (path 1); never fill an arc
+    // outline here, where both paths would be filled together.
     if (paintImageFill && geom !== 'arc') {
       if (paintImageFill(target)) tClearShadow();
     } else if (tFill && geom !== 'arc') {
@@ -5550,7 +5410,7 @@ export function renderTextBody(
     }
     return layout;
   };
-  let { allLines, totalHeight, requiredHeight } = layoutAt(1.0);
+  let { allLines, requiredHeight } = layoutAt(1.0);
 
   // ── normAutoFit ──────────────────────────────────────────────────────────
   // ECMA-376 §21.1.2.1.3 gives an omitted fontScale the value 100% and an
@@ -5564,7 +5424,7 @@ export function renderTextBody(
   // Therefore our own text metrics must not manufacture a new scale here.
   if (body.autoFit === 'norm') {
     if (body.fontScale != null && body.fontScale > 0) {
-      if (body.fontScale < 1.0) ({ allLines, totalHeight, requiredHeight } = layoutAt(body.fontScale));
+      if (body.fontScale < 1.0) ({ allLines, requiredHeight } = layoutAt(body.fontScale));
     }
   }
 

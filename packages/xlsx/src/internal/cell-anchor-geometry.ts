@@ -7,7 +7,7 @@ import type { DrawingAnchorTag } from '../types.js';
  * DrawingML size; a partial/malformed extent falls back as a unit so culling
  * and paint always derive the same rectangle. Tagged models never consult
  * this; see {@link resolveCellAnchorRect}. */
-export function usesNativeOneCellExtent(anchor: {
+function usesNativeOneCellExtent(anchor: {
   readonly editAs?: string;
   readonly nativeExtCx?: number;
   readonly nativeExtCy?: number;

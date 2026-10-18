@@ -74,6 +74,13 @@
     "./internal/own-key": "./src/internal/own-key.ts",
     "./internal/script-preload-accumulator": "./src/internal/script-preload-accumulator.ts",
     "./internal/wasm-runtime-generation": "./src/internal/wasm-runtime-generation.ts",
+    "./internal/abort": "./src/internal/abort.ts",
+    "./internal/deferred": "./src/internal/deferred.ts",
+    "./internal/utf16-prefix": "./src/internal/utf16-prefix.ts",
+    "./internal/selection-data": "./src/internal/selection-data.ts",
+    "./internal/sha256": "./src/crypto/sha256.ts",
+    "./internal/font-stack": "./src/fonts/font-stack.ts",
+    "./internal/worker-model-source": "./src/source/worker-model-source.ts",
     "./mathjax-stix2": "./assets/mathjax-stix2.js"
   },
   "scripts": {

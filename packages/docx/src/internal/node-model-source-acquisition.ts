@@ -5,17 +5,14 @@ import type { PullSessionCommand } from '@silurus/ooxml-core/worker';
 import { InProcessPullTransport } from '@silurus/ooxml-core/internal/in-process-pull-transport';
 import { DocumentPullWorker, readDocxDocumentCursorUsage } from '../document-pull-worker.js';
 import type { AcquiredDocxNodeDocument, DocxNodeAcquisitionOptions, DocxNodePullIdentity, DocxNodePullOptions, DocxNodePullTransport, DocxNodeSessionArchive } from './node-acquisition.js';
+import { throwIfAborted } from '@silurus/ooxml-core/internal/abort';
+
+const ABORT_MESSAGE = 'DOCX document session was aborted';
 
 export interface DocxOwnedArchiveSource {
   readonly archive: DocxNodeSessionArchive;
   readonly sourceByteLength: number;
   closeArchive(): void;
-}
-function throwIfAborted(signal: AbortSignal | undefined): void {
-  if (!signal?.aborted) return;
-  const error = new Error('DOCX document session was aborted');
-  error.name = 'AbortError';
-  throw error;
 }
 
 /**
@@ -55,7 +52,7 @@ export async function acquireDocxSessionFromArchive<TResult>(
       emitToConsole: resourceOptions.debug,
     });
     metrics.setSourceBytes(source.sourceByteLength);
-    throwIfAborted(options.signal);
+    throwIfAborted(options.signal, ABORT_MESSAGE);
     metrics.checkpoint('container ready');
   } catch (error) {
     try { closeArchive(); } catch {}

@@ -400,108 +400,6 @@ impl ooxml_common::chart::ChartReferenceResolver for XlsxChartReferenceResolver<
     }
 }
 
-/// Read the chartStyle part (`styleN.xml`) associated with a chart part at
-/// `chart_path` (e.g. `xl/charts/chart1.xml`), following that part's own
-/// relationships (`xl/charts/_rels/chart1.xml.rels`) to the
-/// Office 2011 or MS-ODRAWXML 2012 `chartStyle` target. Returns `None` when the chart
-/// has no chartStyle relationship or the part cannot be read (the chartEx
-/// title then falls back to its inline size, or the renderer's default).
-struct ChartRelatedParts {
-    theme_override_xml: Option<String>,
-    style_xml: Option<String>,
-    color_style_xml: Option<String>,
-    image_relationships: ooxml_common::chart::ChartImageRelationships,
-}
-
-fn load_chart_related_parts(archive: &mut crate::XlsxZip, chart_path: &str) -> ChartRelatedParts {
-    let mut result = ChartRelatedParts {
-        theme_override_xml: None,
-        style_xml: None,
-        color_style_xml: None,
-        image_relationships: Default::default(),
-    };
-    let rels_path = ooxml_common::rels::relationship_part_path(chart_path);
-    let Ok(rels_xml) = read_zip_string(archive, &rels_path) else {
-        return result;
-    };
-    let relationships = ooxml_common::rels::parse_rels(&rels_xml);
-    result.image_relationships.insert_parsed_relationships(
-        ooxml_common::chart::ChartImageSource::Chart,
-        chart_path,
-        &relationships,
-    );
-    let internal_target = |suffix: &str| {
-        relationships.values().find(|relationship| {
-            relationship.mode == ooxml_common::rels::TargetMode::Internal
-                && relationship
-                    .relationship_type
-                    .as_deref()
-                    .is_some_and(|kind| kind.ends_with(suffix))
-        })
-    };
-    if let Some(relationship) = internal_target("/themeOverride") {
-        if let Some(path) = relationship.resolve_part(chart_path) {
-            result.theme_override_xml = read_zip_string(archive, &path).ok();
-        }
-    }
-    let style_relationship = relationships.values().find(|relationship| {
-        relationship.mode == ooxml_common::rels::TargetMode::Internal
-            && relationship
-                .relationship_type
-                .as_deref()
-                .is_some_and(ooxml_common::chart::is_chart_style_relationship_type)
-    });
-    if let Some(style_relationship) = style_relationship {
-        let style_path = style_relationship
-            .resolve_part(chart_path)
-            .unwrap_or_default();
-        result.style_xml =
-            Some(read_zip_string(archive, &style_path).unwrap_or_else(|_| "\0".to_owned()));
-        let style_rels_path = ooxml_common::rels::relationship_part_path(&style_path);
-        if let Ok(style_rels_xml) = read_zip_string(archive, &style_rels_path) {
-            let style_relationships = ooxml_common::rels::parse_rels(&style_rels_xml);
-            result.image_relationships.insert_parsed_relationships(
-                ooxml_common::chart::ChartImageSource::Style,
-                &style_path,
-                &style_relationships,
-            );
-        }
-    }
-    if let Some(color_relationship) =
-        internal_target(ooxml_common::chart::CHART_COLOR_STYLE_REL_TYPE_SUFFIX)
-    {
-        let color_path = color_relationship
-            .resolve_part(chart_path)
-            .unwrap_or_default();
-        result.color_style_xml =
-            Some(read_zip_string(archive, &color_path).unwrap_or_else(|_| "\0".to_owned()));
-    }
-    result
-}
-
-/// Follow the owning legacy chart's `<c:userShapes r:id>` relationship to its
-/// Chart Drawing part (`cdr:CT_Drawing`, ECMA-376 dml-chartDrawing.xsd).
-fn load_chart_user_shapes_xml(
-    archive: &mut crate::XlsxZip,
-    chart_path: &str,
-    chart_xml: &str,
-) -> Option<String> {
-    let chart_doc = parse_guarded(chart_xml).ok()?;
-    let rid = chart_doc
-        .root_element()
-        .descendants()
-        .find(|node| node.is_element() && node.tag_name().name() == "userShapes")?
-        .attributes()
-        .find(|attribute| attribute.name() == "id" && is_r_ns(attribute.namespace()))?
-        .value()
-        .to_string();
-    let rels_path = ooxml_common::rels::relationship_part_path(chart_path);
-    let rels_xml = read_zip_string(archive, &rels_path).ok()?;
-    let target = parse_rels_map(&rels_xml).remove(&rid)?;
-    let user_shapes_path = resolve_zip_path(chart_path, &target);
-    read_zip_string(archive, &user_shapes_path).ok()
-}
-
 /// Given a sheet path (e.g. "worksheets/sheet1.xml"), locate and parse
 /// its drawing(s) for chart anchors (`<xdr:graphicFrame>` elements).
 #[cfg(test)]
@@ -765,7 +663,10 @@ pub(crate) fn load_sheet_charts_observing_frames(
                 // Office 2011 / MS-ODRAWXML 2012 `chartStyle`). Read it best-effort now
                 // (before the chart doc is parsed, since both borrow `archive`);
                 // legacy `<c:>` charts ignore it (their title size is inline).
-                let related_parts = load_chart_related_parts(archive, &chart_path);
+                let related_parts = ooxml_common::chart::load_chart_related_parts(
+                    |part| read_zip_string(archive, part).ok(),
+                    &chart_path,
+                );
                 // CT_BaseStylesOverride (§20.1.6.12) is chart-local: only
                 // present schemes replace the workbook's inherited schemes.
                 let schemes = related_parts
@@ -799,7 +700,13 @@ pub(crate) fn load_sheet_charts_observing_frames(
                 let user_shapes_xml = if is_chartex {
                     None
                 } else {
-                    load_chart_user_shapes_xml(archive, &chart_path, &chart_xml)
+                    parse_guarded(&chart_xml).ok().and_then(|chart_doc| {
+                        ooxml_common::chart::load_chart_user_shapes_xml(
+                            |part| read_zip_string(archive, part).ok(),
+                            &chart_path,
+                            &chart_doc,
+                        )
+                    })
                 };
                 // Parse the chart directly through the shared `parse_chart_part`
                 // (the single superset parser for pptx + xlsx). The xlsx theme
@@ -2658,82 +2565,5 @@ mod chartex_tests {
                 .and_then(Option::as_deref),
             Some("336699"),
         );
-    }
-
-    #[test]
-    fn chart_related_parts_support_root_nested_and_root_absolute_targets() {
-        for (chart_path, style_target, expected_style_path, expected_image_path) in [
-            ("chart1.xml", "style1.xml", "style1.xml", "media/marker.png"),
-            (
-                "chart2.xml",
-                "/style2.xml",
-                "style2.xml",
-                "media/marker.png",
-            ),
-            (
-                "xl/charts/chart3.xml",
-                "style3.xml",
-                "xl/charts/style3.xml",
-                "xl/media/marker.png",
-            ),
-        ] {
-            let style_rels_path = ooxml_common::rels::relationship_part_path(expected_style_path);
-            let chart_rels_path = ooxml_common::rels::relationship_part_path(chart_path);
-            let image_target = if chart_path.contains('/') {
-                "../media/marker.png"
-            } else {
-                "media/marker.png"
-            };
-            let mut bytes = Vec::new();
-            {
-                let mut writer = zip::ZipWriter::new(Cursor::new(&mut bytes));
-                let options = SimpleFileOptions::default();
-                writer.start_file(&chart_rels_path, options).unwrap();
-                writer.write_all(format!(
-                    r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="aExternal" Type="http://schemas.microsoft.com/office/2011/relationships/chartStyle" Target="https://example.invalid/style.xml" TargetMode="External"/><Relationship Id="rStyle" Type="http://schemas.microsoft.com/office/2011/relationships/chartStyle" Target="{style_target}"/></Relationships>"#,
-                ).as_bytes()).unwrap();
-                writer.start_file(expected_style_path, options).unwrap();
-                writer.write_all(b"<style/>").unwrap();
-                writer.start_file(&style_rels_path, options).unwrap();
-                writer.write_all(format!(
-                    r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rImage" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="{image_target}"/></Relationships>"#,
-                ).as_bytes()).unwrap();
-                writer.start_file(expected_image_path, options).unwrap();
-                writer.write_all(b"png").unwrap();
-                writer.finish().unwrap();
-            }
-            let mut archive = crate::XlsxZip::new(Cursor::new(bytes)).unwrap();
-            let related = load_chart_related_parts(&mut archive, chart_path);
-            assert_eq!(related.style_xml.as_deref(), Some("<style/>"));
-            assert_eq!(related.color_style_xml, None);
-            assert_eq!(
-                ooxml_common::chart::ChartImageResolver::resolve_image(
-                    &related.image_relationships,
-                    ooxml_common::chart::ChartImageSource::Style,
-                    "rImage",
-                ),
-                Some((expected_image_path.to_string(), "image/png".to_string())),
-            );
-        }
-    }
-
-    #[test]
-    fn chart_related_parts_preserve_missing_sidecar_relationships() {
-        let mut bytes = Vec::new();
-        {
-            let mut writer = zip::ZipWriter::new(Cursor::new(&mut bytes));
-            writer
-                .start_file(
-                    "xl/charts/_rels/chart9.xml.rels",
-                    SimpleFileOptions::default(),
-                )
-                .unwrap();
-            writer.write_all(br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rStyle" Type="http://schemas.microsoft.com/office/2011/relationships/chartStyle" Target="missing-style.xml"/><Relationship Id="rColors" Type="http://schemas.microsoft.com/office/2011/relationships/chartColorStyle" Target="missing-colors.xml"/></Relationships>"#).unwrap();
-            writer.finish().unwrap();
-        }
-        let mut archive = crate::XlsxZip::new(Cursor::new(bytes)).unwrap();
-        let related = load_chart_related_parts(&mut archive, "xl/charts/chart9.xml");
-        assert_eq!(related.style_xml.as_deref(), Some("\0"));
-        assert_eq!(related.color_style_xml.as_deref(), Some("\0"));
     }
 }

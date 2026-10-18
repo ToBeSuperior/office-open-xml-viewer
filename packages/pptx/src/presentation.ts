@@ -39,7 +39,6 @@ import {
   type ImageResourceOptions,
   type OoxmlResourceMetrics,
   type LoadedOfficeFontFallbacks,
-  type OfficeFontFallbackRoute,
   workerRendererDescriptors,
 } from '@silurus/ooxml-core';
 import {
@@ -96,6 +95,7 @@ import {
 } from './element-selection';
 import { publishPptxLayout } from './presentation-layout-events';
 import { yieldToHostTaskQueue } from './worker-task-scheduler';
+import { deferred, type Deferred } from '@silurus/ooxml-core/internal/deferred';
 
 /** Options for {@link PptxPresentation.load}. */
 export type LoadOptions = CoreLoadOptions & {
@@ -131,22 +131,6 @@ export type LoadOptions = CoreLoadOptions & {
    * directly and does not call this observer. Observer failures are isolated. */
   onLayoutComplete?: (error?: unknown) => void;
 };
-
-interface Deferred<T> {
-  readonly promise: Promise<T>;
-  resolve(value: T | PromiseLike<T>): void;
-  reject(reason?: unknown): void;
-}
-
-function deferred<T>(): Deferred<T> {
-  let resolve!: Deferred<T>['resolve'];
-  let reject!: Deferred<T>['reject'];
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
-}
 
 interface ProgressiveLoad {
   readonly onProgress?: LoadOptions['onLayoutProgress'];

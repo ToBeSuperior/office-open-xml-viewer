@@ -201,7 +201,7 @@ export function renderLineChart(
   let titleFontPx = titleBand.fontPx;
   let titleTopPad = titleBand.topPad;
   let titleH = titleBand.bandH;
-  const leg = measuredLegendReserve(ctx, chart, w, h, 0.22, ptToPx);
+  const leg = measuredLegendReserve(ctx, chart, w, h, ptToPx);
   const { legRightW, legLeftW, legTopH, legBottomH } = chartLegendBands(
     leg, chart.legendOverlay === true,
   );
@@ -271,6 +271,8 @@ export function renderLineChart(
     ? axisTitleFontPx(sec.titleFontSizeHpt, ptToPx) + 8
     : 0;
 
+  // Fixed gutter terms (2.2 x label font + 10 px, 5 % right): library policy,
+  // see ChartPad in layout.ts.
   let titleLeftBandW = legLeftW + Math.max(
     valAxFontPx * 2.2 + 10 + valTitleW,
     dataTableHeaderW,
@@ -339,7 +341,6 @@ export function renderLineChart(
 
   let lineFrame = computeChartFrame(chart, x, y, w, h, ptToPx, {
     titleBand,
-    legendSideReserveFrac: 0.22,
     legendReserve: leg,
     pad,
     honorPlotAreaManualLayout: true,
@@ -364,7 +365,6 @@ export function renderLineChart(
     pad.t = padT;
     lineFrame = computeChartFrame(chart, x, y, w, h, ptToPx, {
       titleBand,
-      legendSideReserveFrac: 0.22,
       legendReserve: leg,
       pad,
       honorPlotAreaManualLayout: true,

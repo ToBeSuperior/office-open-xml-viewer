@@ -1,6 +1,5 @@
-import { resizeViewer, viewerState } from './scroll-viewer-test-dom.js';
+import { viewerState } from './scroll-viewer-test-dom.js';
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { PptxScrollViewer } from './scroll-viewer.js';
 import { installDom, makeContainer, makeBorrowedPptxScrollViewer, FakePptxEngine, type FakeEl } from './scroll-viewer-test-dom.js';
 
 afterEach(() => {

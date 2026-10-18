@@ -15,28 +15,28 @@ import type {
 export const WORD_TERMINAL_COLUMN_BREAK = defineCompatibilityRule({
   id: 'word-terminal-column-break',
   evidence: {
-    kind: 'regression-test',
+    kind: 'library-policy',
     reference: 'packages/docx/src/pagination.test.ts#ignores a terminal last-column break before a hard page boundary',
   },
-  description: 'The established pagination regression contract does not materialize a column transition when no body flow content occurs before the next forced page or non-continuous section boundary.',
+  description: 'The established pagination regression contract does not materialize a column transition when no body flow content occurs before the next forced page or non-continuous section boundary. Library policy, no Office measurement: avoids an empty column transition before a forced page or section boundary (PR #1050); it departs from the literal ECMA-376 §17.18.4 column break and needs a Word control.',
 });
 
 export const WORD_PRE_BREAK_ANCHOR_PARAGRAPH = defineCompatibilityRule({
   id: 'word-pre-break-anchor-paragraph',
   evidence: {
-    kind: 'regression-test',
+    kind: 'library-policy',
     reference: 'packages/docx/src/pagination.test.ts#does not push an anchor-only pre-break paragraph to a new page just for its empty mark',
   },
-  description: 'The established pagination regression contract keeps an anchor-only paragraph immediately before an authored page break in the pre-break flow region without charging its otherwise visible paragraph mark.',
+  description: 'The established pagination regression contract keeps an anchor-only paragraph immediately before an authored page break in the pre-break flow region without charging its otherwise visible paragraph mark. Library policy, no Office measurement: keeps an anchor-only pre-break paragraph in the pre-break region (PR #898 corpus fix, nothing measured).',
 });
 
 export const WORD_PRE_BREAK_INLINE_DRAWING_GROUP = defineCompatibilityRule({
   id: 'word-pre-break-inline-drawing-group',
   evidence: {
-    kind: 'regression-test',
+    kind: 'library-policy',
     reference: 'packages/docx/src/pagination.test.ts#moves a preceding image with its pre-break callout when the pair only fits fresh',
   },
-  description: 'The established pagination regression contract relocates a preceding inline DrawingML resource with an immediately following host-owned anchor paragraph before an authored page break when the pair fits only in a fresh flow region.',
+  description: 'The established pagination regression contract relocates a preceding inline DrawingML resource with an immediately following host-owned anchor paragraph before an authored page break when the pair fits only in a fresh flow region. Library policy, no Office measurement: keeps a preceding inline drawing with its pre-break callout (PR #898 corpus fix, nothing measured).',
 });
 
 export const WORD_CONTINUOUS_SECTION_MARK_SPACING = defineCompatibilityRule({
@@ -45,7 +45,7 @@ export const WORD_CONTINUOUS_SECTION_MARK_SPACING = defineCompatibilityRule({
     kind: 'regression-test',
     reference: 'packages/docx/src/body-layout-input.test.ts#projects mutually exclusive collapsed-mark and drop-previous-after roles',
   },
-  description: 'The retained body input projects the established continuous-section empty-mark spacing behavior into one mutually exclusive role before pagination.',
+  description: 'The retained body input projects the established continuous-section empty-mark spacing behavior into one mutually exclusive role before pagination. Evidence (observed Office behaviour): Word PDF of a corpus document in PR #595, where Word and LibreOffice agree; no ECMA-376 or Microsoft note covers it.',
 });
 
 export const WORD_CONTEXTUAL_SPACING_PER_SIDE = defineCompatibilityRule({
@@ -54,25 +54,28 @@ export const WORD_CONTEXTUAL_SPACING_PER_SIDE = defineCompatibilityRule({
     kind: 'regression-test',
     reference: 'packages/docx/src/contextual-spacing-body-paint.test.ts#paints the adjudicated six-case gap table',
   },
-  description: 'For same-style adjacent paragraphs, contextualSpacing removes only the contribution owned by each toggling side; a current-only toggle preserves the previous paragraph spaceAfter contribution.',
+  description: 'For same-style adjacent paragraphs, contextualSpacing removes only the contribution owned by each toggling side; a current-only toggle preserves the previous paragraph spaceAfter contribution. Classification: normative, ECMA-376 §17.3.1.9 contextualSpacing; a six-case synthetic Word (macOS) control in issue #1015 / PR #1016 confirms it (application version not recorded).',
 });
 
 export const WORD_EMPTY_KEEP_NEXT_BRIDGE = defineCompatibilityRule({
   id: 'word-empty-keep-next-bridge',
   evidence: {
-    kind: 'regression-test',
+    kind: 'library-policy',
     reference: 'packages/docx/src/layout/body-paginator-production.test.ts#bridges an undecorated empty keepNext mark through the following paragraph',
   },
-  description: 'Word print pagination treats an undecorated empty keep-with-next paragraph as a bridge: the following paragraph is admitted completely with the first indivisible content of its successor.',
+  description: 'Word print pagination treats an undecorated empty keep-with-next paragraph as a bridge: the following paragraph is admitted completely with the first indivisible content of its successor. Library policy, no Office measurement: keeps an undecorated empty keepNext mark from stranding (PR #1080, corpus acceptance gate only).',
 });
 
 export const WORD_AUTOMATIC_KEEP_NEXT_START_SPACING = defineCompatibilityRule({
   id: 'word-automatic-keep-next-start-spacing',
   evidence: {
-    kind: 'regression-test',
-    reference: 'packages/docx/src/layout/body-paginator-production.test.ts#suppresses leading spacing when a $kind keepNext unit moves to an automatic page',
+    kind: 'office-observation',
+    syntheticFixtureId: 'automatic-paragraph-top-spacing',
+    application: 'Microsoft Word',
+    version: '16.0.20430',
+    platform: 'Windows',
   },
-  description: 'When automatic overflow relocates a keep-with-next unit to a fresh physical page, suppress the leading paragraph space-before for that grouped relocation. Standalone authored hard page breaks use a separate rule.',
+  description: 'When automatic overflow relocates a keep-with-next unit to a fresh physical page, suppress the leading paragraph space-before for that grouped relocation. Standalone authored hard page breaks use a separate rule. Evidence: the trr3 family C controls (keepNext off/on) recorded for word-automatic-paragraph-top-spacing; origin PR #1080.',
 });
 
 export const WORD_AUTOMATIC_PARAGRAPH_TOP_SPACING = defineCompatibilityRule({
@@ -102,19 +105,22 @@ export const WORD_STANDALONE_HARD_PAGE_BREAK_TOP_SPACING = defineCompatibilityRu
 export const WORD_TRAILING_SPACE_AFTER_FIT_ADMISSION = defineCompatibilityRule({
   id: 'word-trailing-space-after-fit-admission',
   evidence: {
-    kind: 'regression-test',
+    kind: 'library-policy',
     reference: 'packages/docx/src/layout/paragraph-pagination.test.ts#admits final visible content when only authored spaceAfter crosses the region edge',
   },
-  description: 'Admit the final visible paragraph content at a flow-region edge when only its authored trailing space crosses the edge, while retaining that space for placement and paint.',
+  description: 'Admit the final visible paragraph content at a flow-region edge when only its authored trailing space crosses the edge, while retaining that space for placement and paint. Library policy, no Office measurement: trailing space-after admission assumption from PR #1080; nothing measured.',
 });
 
 export const WORD_GRID_LINE_CONTENT_FIT_ADMISSION = defineCompatibilityRule({
   id: 'word-grid-line-content-fit-admission',
   evidence: {
-    kind: 'regression-test',
-    reference: 'packages/docx/src/line-spacing-baseline.test.ts#paginates a centered natural box with body bottom %s',
+    kind: 'office-observation',
+    syntheticFixtureId: 'grid-line-page-edge-admission',
+    application: 'Microsoft Word',
+    version: '16.0.20430',
+    platform: 'Windows',
   },
-  description: 'Windows Word 16.0 build 20430 admits a centered text box inside a 20pt line-grid cell when the natural box ends inside the body, even when the cell overhangs the bottom margin. A later-positioned caption whose natural box crosses the body bottom moves to the next page. These inside/outside observations support content-box admission, not baseline-only admission or a fixed overhang tolerance. ECMA-376 §§17.6.5 and 17.3.1.32 define grid participation, not this page-edge rule. trr3 family D further observes the same page boundary for 11pt MS Mincho empty marks and single-character paragraphs on a 16.4pt grid (modes 14/15, lines/linesAndChars, zero/one preceding empty mark): 15pt moves and 15.5pt stays. Empty marks carry the equivalent metric-only allowance through word-trailing-empty-mark-baseline-admission. Only leading added beyond its own natural/authored height is eligible; authored atLeast minima and auto multiples remain charged. The allowance is restricted to a positive whitelist of plain glyph paint in undecorated paragraphs: paragraph/run borders (including between/bar rules), shading/highlight, underline/strike/emphasis, ruby, fields, tabs, objects and unknown retained paint retain the full cell, even when a continuation slice omits paragraph edges. Off-grid and exact lines retain full-box admission. This observation applies only at the physical body bottom with no intervening reservation; note bands, wrap exclusions and shortened column regions retain the whole grid cell.',
+  description: 'Windows Word 16.0 build 20430 admits a centered text box inside a 20pt line-grid cell when the natural box ends inside the body, even when the cell overhangs the bottom margin. A later-positioned caption whose natural box crosses the body bottom moves to the next page. These inside/outside observations support content-box admission, not baseline-only admission or a fixed overhang tolerance. ECMA-376 §§17.6.5 and 17.3.1.32 define grid participation, not this page-edge rule. trr3 family D further observes the same page boundary for 11pt MS Mincho empty marks and single-character paragraphs on a 16.4pt grid (modes 14/15, lines/linesAndChars, zero/one preceding empty mark): 15pt moves and 15.5pt stays. Empty marks carry the equivalent metric-only allowance through word-trailing-empty-mark-baseline-admission. Only leading added beyond its own natural/authored height is eligible; authored atLeast minima and auto multiples remain charged. The allowance is restricted to a positive whitelist of plain glyph paint in undecorated paragraphs: paragraph/run borders (including between/bar rules), shading/highlight, underline/strike/emphasis, ruby, fields, tabs, objects and unknown retained paint retain the full cell, even when a continuation slice omits paragraph edges. Off-grid and exact lines retain full-box admission. This observation applies only at the physical body bottom with no intervening reservation; note bands, wrap exclusions and shortened column regions retain the whole grid cell. Evidence: issue #1674 / PR #1796 controls.',
 });
 
 // Positive paint whitelist for the bounded plain-caption observation. Unknown
@@ -493,9 +499,14 @@ export function wordActiveColumnBreakIndexes(
 
 export const WORD_PARAGRAPH_FOOTNOTE_CONTINUATION = defineCompatibilityRule({
   id: 'word-paragraph-footnote-continuation',
-  evidence: { kind: 'regression-test',
-    reference: 'packages/docx/src/layout/body-paginator-production.test.ts#keeps a reference on its page and paints a long footnote on both pages' },
-  description: 'Existing Word-produced controls cover a completed body paragraph with a long note, following body text and a following hard page/section break without an intervening note. Registered earlier controls kept a short-note/font-size case and a long body paragraph with references on opposite pages whole; their inputs are not retained, so later classes do not claim to reproduce them. Public Word 16.113.3 controls (exact lines, one note of two or four 10pt or two 8pt lines, 6pt authored after on the paragraph whose last line closes with the reference, widowControl off/on and keepLines) split the note when the whole note missed only because of that authored after and kept it whole at the exact charged fit or without after; a one-line note there has no head and stays on the unchanged fallback. This continuation-mode policy decides only whether a note may split; where its head is reserved is governed by word-reference-line-footnote-allocation. It does not claim general Word pagination equivalence or support width-changing continuation. Notes that cannot fit with their first reference line on a fresh page use the separate content-retention policy.',
+  evidence: {
+    kind: 'office-observation',
+    syntheticFixtureId: 'paragraph-footnote-continuation',
+    application: 'Microsoft Word',
+    version: '16.113.3',
+    platform: 'macOS',
+  },
+  description: 'Existing Word-produced controls cover a completed body paragraph with a long note, following body text and a following hard page/section break without an intervening note. Registered earlier controls kept a short-note/font-size case and a long body paragraph with references on opposite pages whole; their inputs are not retained, so later classes do not claim to reproduce them. Public Word 16.113.3 controls (exact lines, one note of two or four 10pt or two 8pt lines, 6pt authored after on the paragraph whose last line closes with the reference, widowControl off/on and keepLines) split the note when the whole note missed only because of that authored after and kept it whole at the exact charged fit or without after; a one-line note there has no head and stays on the unchanged fallback. This continuation-mode policy decides only whether a note may split; where its head is reserved is governed by word-reference-line-footnote-allocation. It does not claim general Word pagination equivalence or support width-changing continuation. Notes that cannot fit with their first reference line on a fresh page use the separate content-retention policy. Evidence: PR #1726 controls.',
 });
 
 /** Decide continuation admission within the documented input classes.

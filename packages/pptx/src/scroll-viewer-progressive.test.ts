@@ -1,4 +1,4 @@
-import { resizeViewer, viewerState } from './scroll-viewer-test-dom.js';
+import { viewerState } from './scroll-viewer-test-dom.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PptxPresentation } from './presentation.js';
 import { PptxScrollViewer } from './scroll-viewer.js';

@@ -7,6 +7,7 @@ import { inheritCellFontLanguage, usesJapaneseCellFonts } from './internal/cell-
 import { drawShapeStackedText } from './shape-stacked-text.js';
 import type { CjkLang } from '@silurus/ooxml-core';
 import { quoteCssFontFamily } from '@silurus/ooxml-core/internal/css-font-family';
+import { arabicFallbackFamilies, containsArabicFallbackText } from '@silurus/ooxml-core/internal/font-stack';
 import {
   breakDrawingMlText, drawingMlTextRect, drawingMlLineHeight,
   drawingMlSpacedLineBox, drawingMlParagraphSpacing, drawingMlBlockTop, drawingMlLineX, paintDrawingMlLine,
@@ -18,7 +19,7 @@ import { buildPivotStyleMap, type PivotCellFormat } from './pivot-style.js';
 import type {
   Worksheet, Styles, Cell, CellValue, CellFont, CellFill, Border, BorderEdge, CellXf,
   ViewportRange, RenderViewportOptions, XlsxTextRunInfo,
-  CfRule, CfStop, CfValue, Dxf, Hyperlink, DefinedName,
+  Dxf,
   Run, GradientFillSpec, ShapeInfo, ShapeAnchor, ImageAnchor, ChartAnchor,
   SlicerItem, SlicerStyle, SlicerElementStyle,
   PhoneticRun, PhoneticProperties, PhoneticAlignment, Duotone, PathInfo,
@@ -31,7 +32,7 @@ import type {
 } from '@silurus/ooxml-core';
 import { usesPathShade, trackPaintPath, currentStrokeBounds, chartImageFillKey, paintOptionalImagePlaceholder, pathFillModeOverlay, withDrawingMLShapeTransform, buildPresetGeometryFillPath } from '@silurus/ooxml-core';
 import { placePhoneticRuns } from './phonetic.js';
-import { crispOffset, renderChart, renderSparkline, renderPresetShape, createAuxCanvas, PT_TO_PX, EMU_PER_PX, mathToMathML, rasterizeMathSvg, tintMathRaster, classifyCjkFont, classifyFontGeneric, googleCjkFontAlias, cjkFallbackChain, NON_CJK_SANS_FALLBACKS, NON_CJK_SERIF_FALLBACKS, isCjkBreakChar, xlsxBorderDashArray, drawImageCropped, hexToRgba, verticalTrLongMark, verticalVertGlyphReachable, applyStroke, resolveFill, type SparklineModel, type MathNode, type MathRenderer, type RasterizedMathSvg } from '@silurus/ooxml-core';
+import { crispOffset, renderChart, renderSparkline, renderPresetShape, createAuxCanvas, PT_TO_PX, EMU_PER_PX, mathToMathML, rasterizeMathSvg, cachedTintedMathRaster, classifyCjkFont, classifyFontGeneric, googleCjkFontAlias, cjkFallbackChain, NON_CJK_SANS_FALLBACKS, NON_CJK_SERIF_FALLBACKS, isCjkBreakChar, xlsxBorderDashArray, drawImageCropped, hexToRgba, verticalTrLongMark, verticalVertGlyphReachable, applyStroke, resolveFill, type SparklineModel, type MathNode, type MathRenderer, type RasterizedMathSvg } from '@silurus/ooxml-core';
 import {
   canvasShapeFontBoxProbe, excelShapeSpacing, officeRequestKey, shapeOfficeRouteKey, shapeRunLineRatios,
   type ShapeRunLineRatios,
@@ -112,7 +113,6 @@ const NAMED_SERIF_TAIL =
   `"Times New Roman", "Liberation Serif", ${NON_CJK_SERIF_TAIL}, serif`;
 const CALIBRI_TAIL = `"Carlito", ${NAMED_SANS_TAIL}`;
 const CAMBRIA_TAIL = `"Caladea", ${NAMED_SERIF_TAIL}`;
-const ARABIC_TEXT_RE = /[\u0600-\u06ff\u0750-\u077f\u08a0-\u08ff]/u;
 type OfficeRoutes = Readonly<Record<string, import('@silurus/ooxml-core').OfficeFontFallbackRoute>>;
 const officeRoutesByContext = new WeakMap<object, OfficeRoutes>();
 const officeRoutesByWorksheet = new WeakMap<Worksheet, OfficeRoutes>();
@@ -278,9 +278,7 @@ export function cssTailFor(name: string | null | undefined, fallback?: CjkLang, 
     const families = [
       ...(includeRegional && fallback
         ? cjkFallbackChain(fallback, generic === 'serif' ? 'serif' : 'sans') : []),
-      ...(ARABIC_TEXT_RE.test(text)
-        ? generic === 'serif' ? ['Noto Naskh Arabic', 'Noto Sans Arabic'] : ['Noto Sans Arabic']
-        : []),
+      ...(containsArabicFallbackText(text) ? arabicFallbackFamilies(generic === 'serif') : []),
     ];
     if (families.length === 0) return base;
     const split = base.lastIndexOf(',');
@@ -1253,7 +1251,14 @@ export interface RichCellGeom {
  *  the underline sits a full text height below it and the strike near mid-height;
  *  `'middle'` / `'bottom'` shift relative to the centre / bottom baseline. The
  *  caller adds any super/subscript `yShift`. One function so the single-line and
- *  multi-line paths place decorations identically. */
+ *  multi-line paths place decorations identically.
+ *
+ *  The 0.55 / 0.35 / 0.5 font-size fractions (repeated by the single-run cell
+ *  path in renderQuadrant) are library policy dating from the initial xlsx
+ *  underline/strike support: SpreadsheetML `<u>` / `<strike>` (§18.4.13 /
+ *  §18.4.10) give no geometry, no Excel measurement is recorded, and the font
+ *  rule (OpenType post.underlinePosition / OS/2.yStrikeoutPosition) is not in
+ *  the reference-font-metrics table. */
 function decoYForBaseline(baseline: CanvasTextBaseline, textY: number, rSizePx: number): { underline: number; strike: number } {
   if (baseline === 'middle') return { underline: textY + Math.round(rSizePx * 0.55), strike: textY };
   if (baseline === 'bottom') return { underline: textY + 1, strike: textY - Math.round(rSizePx * 0.35) };
@@ -1989,7 +1994,13 @@ function buildSparklineMap(worksheet: Worksheet): Map<string, SparklineModel> {
 }
 
 function stripeColorFor(accent: string): string {
-  // Light tint of the accent — mimics TableStyleLight* banded rows.
+  // Library approximation, not the spec rule: a 20% accent / 80% white mix for
+  // banded rows of a built-in table style whose stripe dxf is not resolved.
+  // The normative definitions are the built-in table styles shipped with
+  // ECMA-376 Part 1 (SpreadsheetML presetTableStyles.xml: per-style dxfs with
+  // theme colour + tint, applied per §18.8.40 tableStyle / §18.5.1.5
+  // tableStyleInfo); no Excel measurement backs the 20% value. Resolving those
+  // definitions changes table rendering and is tracked as follow-up work.
   const hex = accent.replace('#', '');
   if (hex.length < 6) return '#F2F2F2';
   const r = parseInt(hex.slice(0, 2), 16);
@@ -2162,7 +2173,6 @@ function renderQuadrant(
     ctx.fillStyle = textColor ? hexToRgba(textColor) : '#000000';
 
     const paddingX = 3, paddingY = 2;
-    const isNumeric = cell.value.type === 'number';
     const alignH = xf.alignH ?? generalHorizontalAlignment(cell.value.type);
     const alignV = xf.alignV ?? 'bottom';
     // Indent: ECMA-376 §18.8.1 alignment@indent — one level indents by 3
@@ -4843,15 +4853,6 @@ interface MathRender {
 }
 const mathRenders = new WeakMap<MathNode[], MathRender>();
 
-/** Tint the cached black equation image to `color` via source-in (cached). */
-function tintedMathImage(render: MathRender, color: string): CanvasImageSource {
-  const cached = render.tinted.get(color);
-  if (cached) return cached;
-  const tinted = tintMathRaster(render.raster, color);
-  render.tinted.set(color, tinted);
-  return tinted;
-}
-
 /** Gather every math run reachable from a worksheet's shapes. Equations live
  *  only in shape text bodies (ECMA-376 §22.1) — never in cell values. */
 function collectWorksheetMath(ws: Worksheet): { nodes: MathNode[]; display: boolean }[] {
@@ -4933,8 +4934,6 @@ export function drawShapeText(
     lIns: txt.lIns, rIns: txt.rIns, tIns: txt.tIns, bIns: txt.bIns,
   }, cs / EMU_PER_PX);
   const padLeft = rect.left;
-  const padTop = rect.top;
-  const padBottom = (txt.bIns / EMU_PER_PX) * cs;
   const innerW = rect.width;
   const innerH = rect.height;
   if (innerW <= 0 || innerH <= 0) return;
@@ -4968,7 +4967,7 @@ export function drawShapeText(
       const width = render.widthEm * pxSize;
       const height = (render.ascentEm + render.descentEm) * pxSize;
       return { width, height, draw: (x, y) => {
-        if (width > 0 && height > 0) ctx.drawImage(tintedMathImage(render, run.color ?? '#000000'), x, y, width, height);
+        if (width > 0 && height > 0) ctx.drawImage(cachedTintedMathRaster(render, run.color ?? '#000000'), x, y, width, height);
       } };
     });
     return;
@@ -5316,7 +5315,7 @@ export function drawShapeText(
           ctx.fillStyle = seg.color;
           ctx.fillText(seg.text, penX, baseline);
         } else if (seg.kind === 'math') {
-          const img = tintedMathImage(seg.render, seg.color);
+          const img = cachedTintedMathRaster(seg.render, seg.color);
           ctx.drawImage(img, penX, baseline - seg.ascent, seg.w, seg.ascent + seg.descent);
         }
       });

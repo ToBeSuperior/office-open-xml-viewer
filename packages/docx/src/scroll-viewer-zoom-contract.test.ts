@@ -1,4 +1,4 @@
-import { resizeViewer, viewerState } from './scroll-viewer-test-dom.js';
+import { viewerState } from './scroll-viewer-test-dom.js';
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { DocxScrollViewer } from './scroll-viewer.js';
 import { DocxDocument } from './document.js';

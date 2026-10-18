@@ -13,8 +13,7 @@ import {
   type PaintShape,
 } from '../shape/effects.js';
 import { compactStyleIndex } from './sparse-style-index.js';
-
-const EMU_PER_PT = 12_700;
+import { EMU_PER_PT } from '../units.js';
 
 /**
  * One chart render may rasterize at most one maximum-size Canvas worth of
@@ -22,7 +21,7 @@ const EMU_PER_PT = 12_700;
  * chart can contain 10,000 points; an aggregate budget prevents a validly
  * bounded point list from multiplying auxiliary-canvas work without bound.
  */
-export const MAX_CHART_EFFECT_RASTER_PIXELS = MAX_CANVAS_AREA;
+const MAX_CHART_EFFECT_RASTER_PIXELS = MAX_CANVAS_AREA;
 
 interface Matrix2D {
   a: number;

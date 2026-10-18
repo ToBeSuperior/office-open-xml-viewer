@@ -1,5 +1,4 @@
 import { normalizeXlsxWorksheetPolicy } from './worksheet-policy.js';
-import type { OoxmlResourceUsageSnapshot } from '@silurus/ooxml-core';
 import {
   normalizeLoadResourceOptions,
   OoxmlResourceMetricsSession,
@@ -8,13 +7,10 @@ import {
 import type { ParsedWorkbook } from '../types.js';
 import { readXlsxArchiveBootstrap } from './archive-bootstrap-source.js';
 import type { XlsxNodeAcquisition, XlsxNodeAcquisitionOptions, XlsxNodeSessionArchive } from './node-acquisition.js';
+import { throwIfAborted } from '@silurus/ooxml-core/internal/abort';
 
-function throwIfAborted(signal: AbortSignal | undefined): void {
-  if (!signal?.aborted) return;
-  const error = new Error('XLSX workbook session was aborted');
-  error.name = 'AbortError';
-  throw error;
-}
+const ABORT_MESSAGE = 'XLSX workbook session was aborted';
+
 /** An already-opened archive admitted into the Node XLSX session. */
 export interface XlsxOwnedArchiveSource {
   readonly archive: XlsxNodeSessionArchive;
@@ -47,7 +43,7 @@ export function acquireXlsxSessionFromArchive(
       onMetrics: resourceOptions.onResourceMetrics, emitToConsole: resourceOptions.debug,
     });
     metrics.setSourceBytes(owned.sourceByteLength);
-    throwIfAborted(options.signal);
+    throwIfAborted(options.signal, ABORT_MESSAGE);
     const archive = owned.archive;
     const { workbook: workbookIndex, usage } = readXlsxArchiveBootstrap(
       () => JSON.parse(new TextDecoder().decode(archive.parse())) as ParsedWorkbook,
