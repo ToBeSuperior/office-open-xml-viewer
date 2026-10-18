@@ -298,6 +298,10 @@ pub struct LevelDef {
     /// marker hangs left of the body), `w:firstLine` ⇒ positive (an additional
     /// first-line indent). Mirrors how `styles.rs` stores a direct `w:ind`.
     pub indent_first: f64,
+    /// §17.9.6 level pPr `w:tabs`: custom stops the level contributes to the
+    /// paragraph cascade at the level's layer (see parser.rs). Windows Word
+    /// 16.0 uses them for a list item's suffix tab (#1883 controls B6/B8).
+    pub tab_stops: Option<Vec<(f64, String, String)>>,
     /// Whether `indent_first` came from authored `w:hanging` / `w:firstLine`.
     pub indent_first_authored: bool,
     /// pt — POSITIVE magnitude of the first-line indent (= `indent_first.abs()`).
@@ -377,6 +381,7 @@ impl Default for LevelDef {
             indent_left_authored: false,
             indent_right: None,
             indent_first: -36.0,
+            tab_stops: None,
             indent_first_authored: false,
             tab: 36.0,
             suff: "tab".to_string(),
@@ -488,7 +493,11 @@ fn parse_level_def(
                 .map(|v| -twips_to_pt(&v))
                 .or_else(|| attr_w(i, "firstLine").map(|v| twips_to_pt(&v)))
         })
-        .unwrap_or(-36.0);
+        // §17.3.1.12: an authored w:ind without hanging/firstLine has a zero
+        // first-line indent (Windows Word 16.0 places the marker at @left;
+        // #1883 control A7). The -36pt hanging is only the per-level default
+        // used when the level has no w:ind at all, like indent_left above.
+        .unwrap_or(if ind_node.is_some() { 0.0 } else { -36.0 });
     let tab = indent_first.abs();
     // §17.9.28: absent <w:suff> means "tab".
     let suff = child_w(lvl_node, "suff")
@@ -520,6 +529,8 @@ fn parse_level_def(
         indent_left_authored,
         indent_right,
         indent_first,
+        tab_stops: child_w(lvl_node, "pPr")
+            .and_then(|p| crate::styles::parse_para_fmt(p).tab_stops),
         indent_first_authored,
         tab,
         suff,

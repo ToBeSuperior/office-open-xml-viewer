@@ -59,6 +59,7 @@ import {
   selectResourceAverageWidthRatio,
   selectResourceMetric,
   allowsReferenceFontMetric,
+  authoredReferenceVerticalMetric,
   selectedFontLineMetric,
   type MetricTupleIndex,
 } from './font-metrics.js';
@@ -1441,7 +1442,10 @@ function emitResolvedTextSegment(
   const { resourceMetric: resourceFamilyLineMetric, referenceMetric: referenceLineMetric,
     lineMetric: familyLineMetric } = selectedFontLineMetric(resolvedSpan?.font, localFont, naturalMetricAllowed,
       allowsReferenceFontMetric(indexedFontMetrics(environment.layoutServices?.text.fontMetrics
-        ?? environment.layoutServices?.text.localMetrics ?? {}), resolvedSpan?.font));
+        ?? environment.layoutServices?.text.localMetrics ?? {}), resolvedSpan?.font),
+      environment.layoutServices ? { text: environment.layoutServices.text, probe: text } : undefined);
+  // LIBRARY_SYNTHESIZED_FACE_LINE_GEOMETRY does not extend to the East Asian
+  // floor of a run painted in another slot (see that rule's scope).
   const { lineMetric: eaLineMetric } = selectedFontLineMetric(eaResolution, localEaFloor, naturalMetricAllowed,
       allowsReferenceFontMetric(indexedFontMetrics(environment.layoutServices?.text.fontMetrics
         ?? environment.layoutServices?.text.localMetrics ?? {}), eaResolution));
@@ -2008,7 +2012,10 @@ function appendRunsToSegments(
         naturalMetricAllowed && !resourceMetric && mayUseAuthoredReferenceVerticalMetric(selected)
           && allowsReferenceFontMetric(indexedFontMetrics(environment.layoutServices?.text.fontMetrics
             ?? environment.layoutServices?.text.localMetrics ?? {}), selected)
-          ? referenceFontLineMetrics(selected.requestedFamily, weight, style)
+          ? (selected.weight === weight && selected.style === style
+            ? authoredReferenceVerticalMetric(selected, environment.layoutServices
+              ? { text: environment.layoutServices.text, probe: probeText } : undefined)
+            : referenceFontLineMetrics(selected.requestedFamily, weight, style))
           : undefined;
       const familyLineMetric = resourceMetric ?? referenceMetric;
       segs.push({

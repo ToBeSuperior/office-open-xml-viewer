@@ -83,6 +83,13 @@ export async function measureHostFontLines(
   }));
 }
 
+function synthesizesStyledFaces(route: OfficeFontFallbackRoute): boolean {
+  if (route.source !== 'local' || route.weight !== 400 || route.style !== 'normal') return false;
+  const faces = findReferenceFontMetrics(route.requestedFamily);
+  return !faces.some((face) => face.weight >= 600 && face.style === 'normal')
+    || !faces.some((face) => face.style === 'italic');
+}
+
 function localSource(route: OfficeFontFallbackRoute): string | undefined {
   return route.source === 'local' && route.resourceIdentity.startsWith('office-local:local(')
     ? route.resourceIdentity.slice('office-local:'.length) : undefined;
@@ -118,6 +125,18 @@ export async function prepareDocxHostFontMetrics(
     let metric = hostFontLineMetric(route, measured);
     const source = localSource(route);
     let probe: FontFace | null = null;
+    // LIBRARY_SYNTHESIZED_FACE_LINE_GEOMETRY needs glyph ownership for a
+    // regular face whose family the catalog holds without a bold or italic
+    // face: those styles paint as synthesized faces of this exact source.
+    let coverageProbeFamily: string | undefined;
+    if (face && source && synthesizesStyledFaces(route)) {
+      let pending = probes.get(face);
+      if (!pending) {
+        pending = loadLocalFontCoverageProbe(face, source, fontSet);
+        probes.set(face, pending);
+      }
+      coverageProbeFamily = (await pending)?.family;
+    }
     if (metric !== route.metric) {
       if (face && source) {
         let pending = probes.get(face);
@@ -132,7 +151,7 @@ export async function prepareDocxHostFontMetrics(
         // Without proof the new measured resource projection is unavailable.
         : route.metric;
     }
-    return { key, route: { ...route, metric }, probe };
+    return { key, route: { ...route, metric, ...(coverageProbeFamily ? { coverageProbeFamily } : {}) }, probe };
   }));
   const routes: typeof loaded.routes = {};
   for (const entry of entries) routes[entry.key] = entry.route;

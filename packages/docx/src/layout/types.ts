@@ -294,6 +294,10 @@ export interface RetainedGlyphPaintOperation {
   readonly fontWeight: number;
   readonly fontStyle: 'normal' | 'italic';
   readonly color: TextColorPolicy;
+  /** Present when the operation paints a contextual span whose acquisition
+   * was pair-kerned (WORD_ARABIC_PAIR_KERNING); absent operations paint one
+   * grapheme, which has no pair to kern. */
+  readonly kerning?: 'normal';
   /** Tight selected-face ink relative to this operation's baseline origin. */
   readonly inkBounds?: Readonly<{
     xMinPt: number;

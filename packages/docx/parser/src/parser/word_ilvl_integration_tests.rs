@@ -131,7 +131,7 @@ fn focused_counter_package(value: &str, level: usize) -> Vec<u8> {
         let mut zip = ZipWriter::new(Cursor::new(&mut output));
         for index in 0..input.len() {
             let mut part = input.by_index(index).expect("test source part");
-            let name = part.name().to_string();
+            let name = part.name().unwrap().into_owned();
             let mut text = String::new();
             part.read_to_string(&mut text).expect("test XML part");
             if name == "word/document.xml" {
@@ -155,7 +155,7 @@ fn package_with_parts(parts: &[(&str, String)]) -> Vec<u8> {
         let mut part = input.by_index(index).expect("test source part");
         let mut text = String::new();
         part.read_to_string(&mut text).expect("test XML part");
-        entries.insert(part.name().to_string(), text);
+        entries.insert(part.name().unwrap().into_owned(), text);
     }
     for (name, xml) in parts {
         entries.insert((*name).to_string(), xml.clone());
