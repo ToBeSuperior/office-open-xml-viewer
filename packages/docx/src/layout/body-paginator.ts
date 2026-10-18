@@ -3858,6 +3858,17 @@ function anchorPlanIdentity(plan: ReadonlyMap<string, unknown>): string {
   return JSON.stringify([...plan].sort(([left], [right]) => left.localeCompare(right)));
 }
 
+/** Source order of two page-owned table keys (`table:<story>:<instance>:<path>`):
+ * body paths compare element by element, numerically. */
+function compareTableSourceOrder(left: string, right: string): number {
+  const path = (key: string) => key.slice(key.lastIndexOf(':') + 1).split('.').map(Number);
+  const [a, b] = [path(left), path(right)];
+  for (let index = 0; index < Math.min(a.length, b.length); index += 1) {
+    if (a[index] !== b[index]) return a[index]! - b[index]!;
+  }
+  return a.length - b.length || (left < right ? -1 : left > right ? 1 : 0);
+}
+
 function changedAnchorKeys(
   applied: ReadonlyMap<string, PageWrapDestination>,
   observed: ReadonlyMap<string, PageWrapDestination>,
@@ -4220,11 +4231,13 @@ function* paginateBodyWithAnchorConvergenceSteps(
         leadingSecond = null;
         if (initialPlan !== null || !publish || !(error instanceof ExactConvergenceError) || error.reason !== 'cycle'
           || latest.carry === null) throw error;
-        // Library termination policy, not a claim about Word placement:
         // §17.4.57 defines page-relative geometry but not this solver's cycle
-        // recovery. Pin only oscillating tables to the latest page in the
-        // repeated cycle; never return a pass with stale exclusions. Normal
-        // acquisition then rebuilds text and table placement with these floors.
+        // recovery. `word-page-table-later-yields`: pin only the last
+        // oscillating table (in source order) to the latest page it reached
+        // in the repeated cycle, and let the earlier tables settle around it;
+        // a persisting cycle pins the next one on the following recovery.
+        // Never return a pass with stale exclusions: normal acquisition then
+        // rebuilds text and table placement with these floors.
         const repeated = error.states.at(-1)!;
         const cycle = error.states.slice(error.states.indexOf(repeated), -1)
           .map((state) => new Map(JSON.parse(state.split('\u0004')[0]!) as Array<[string, PageWrapDestination]>));
@@ -4237,13 +4250,11 @@ function* paginateBodyWithAnchorConvergenceSteps(
             later.set(key, Math.max(later.get(key) ?? -1, destination.pageIndex));
           }
         }
-        let raised = false;
-        for (const [key, pageIndex] of later) {
-          if (!changed.has(key) || pageIndex <= (settledFloors.get(key) ?? -1)) continue;
-          settledFloors.set(key, pageIndex);
-          raised = true;
-        }
-        if (!raised) throw error;
+        const pinned = [...later]
+          .filter(([key, pageIndex]) => changed.has(key) && pageIndex > (settledFloors.get(key) ?? -1))
+          .sort(([left], [right]) => compareTableSourceOrder(right, left))[0];
+        if (!pinned) throw error;
+        settledFloors.set(pinned[0], pinned[1]);
         // Every settlement strictly raises a table floor: at most one raise
         // per table per page. Restarts share the original operational pass
         // budget as well, so even a growing page count cannot run unbounded.

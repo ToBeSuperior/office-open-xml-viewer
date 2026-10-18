@@ -680,12 +680,12 @@ describe('canonical layout — floating-table page-fit / row-split (§17.4.57, W
     expect(floatCount).toBe(1);
   });
 
-  it('(d) does NOT split a page-anchored floating table (absolute y; clamped in place by geometry)', () => {
-    // vertAnchor="page", tblpY=90: the table is pinned at page-y 90 with total
-    // height 60 ⇒ it would reach y=150, past the 140 page edge. An absolute page
-    // position is the SAME on any page, so it is NOT split or relocated — it stays
-    // one element on page 1 (computeFloatTableBox clamps the box UP into the page;
-    // see float-table-geometry.test.ts for the clamped y).
+  it('(d) moves a page-anchored floating table ending below the bottom margin to the next page, unsplit', () => {
+    // vertAnchor="page", tblpY=90: 2 rows × 30pt reach y=150, past the 140
+    // page edge, so the box clamps up to y=80 — still below the 120 bottom
+    // margin. Windows Word 16.0.20430 #1902 controls move such a table, with
+    // the flow after it, to the next page when text precedes it there; at the
+    // top of that page it stays (clamped), as ONE element.
     const body = [
       para({ text: 'a' }),
       para({ text: 'b' }),
@@ -694,19 +694,18 @@ describe('canonical layout — floating-table page-fit / row-split (§17.4.57, W
       para({ text: 'x' }),
     ];
     const pages = layoutPages(body, section(), makeCtx());
-    expect(pages.length).toBe(1);
-    expect(hasFloatTable(pages[0])).toBe(true);
-    // Not sliced — both rows are on the single element.
-    expect(floatRowsOn(pages[0])).toEqual(['r1', 'r2']);
+    expect(pages.length).toBe(2);
+    expect(hasFloatTable(pages[0])).toBe(false);
+    expect(floatRowsOn(pages[1])).toEqual(['r1', 'r2']);
     const floatCount = pages.reduce((s, p) => s + p.layers.body.filter(isFloatTable).length, 0);
     expect(floatCount).toBe(1);
-    expect(hasAnchorText(pages[0], 'x')).toBe(true);
+    expect(hasAnchorText(pages[1], 'x')).toBe(true);
   });
 
-  it('(e) does NOT split a margin-anchored floating table (absolute y; clamped in place by geometry)', () => {
-    // vertAnchor="margin", tblpY=70: the table is at margin-top(20)+70 = 90 with
-    // total height 60 ⇒ bottom 150, past the bottom margin. Absolute ⇒ left as one
-    // element (mirrors vertAnchor="page"); the box clamps up into the margin band.
+  it('(e) moves a margin-anchored floating table ending below the bottom margin to the next page, unsplit', () => {
+    // vertAnchor="margin", tblpY=70: margin-top(20)+70 = 90, bottom 150 > 140
+    // ⇒ clamped to the page bottom (y=80), still below the bottom margin ⇒
+    // moved with its flow, as for vertAnchor="page".
     const body = [
       para({ text: 'a' }),
       para({ text: 'b' }),
@@ -715,11 +714,38 @@ describe('canonical layout — floating-table page-fit / row-split (§17.4.57, W
       para({ text: 'x' }),
     ];
     const pages = layoutPages(body, section(), makeCtx());
-    expect(pages.length).toBe(1);
-    expect(hasFloatTable(pages[0])).toBe(true);
-    expect(floatRowsOn(pages[0])).toEqual(['r1', 'r2']);
+    expect(pages.length).toBe(2);
+    expect(hasFloatTable(pages[0])).toBe(false);
+    expect(floatRowsOn(pages[1])).toEqual(['r1', 'r2']);
     const floatCount = pages.reduce((s, p) => s + p.layers.body.filter(isFloatTable).length, 0);
     expect(floatCount).toBe(1);
+  });
+
+  it('keeps an overlap-permitted page-anchored table on its page beside another table float', () => {
+    // §17.4.56: neither table sets tblOverlap="never", so they may overlap.
+    // Windows Word 16.0.20430 #1902 controls keep the later table at its
+    // authored position on the page its anchor reaches; nothing is deferred.
+    const body = [
+      para({ text: 'a' }),
+      floatTableRows(tblp({ vertAnchor: 'page', tblpY: 40 }), 1, 30),
+      para({ text: 'mid' }),
+      floatTableRows(tblp({ vertAnchor: 'page', tblpY: 50 }), 1, 30),
+      para({ text: 'end' }),
+    ];
+    const pages = layoutPages(body, section(), makeCtx());
+    expect(pages.length).toBe(1);
+    expect(pages[0]!.layers.body.filter(isFloatTable)).toHaveLength(2);
+  });
+
+  it('keeps a page-anchored table that ends below the bottom margin when nothing precedes it', () => {
+    // Windows Word #1902 control first-b760: moving would gain nothing.
+    const body = [
+      floatTableRows(tblp({ vertAnchor: 'page', tblpY: 90 }), 2, 30),
+      para({ text: 'x' }),
+    ];
+    const pages = layoutPages(body, section(), makeCtx());
+    expect(hasFloatTable(pages[0])).toBe(true);
+    expect(floatRowsOn(pages[0])).toEqual(['r1', 'r2']);
   });
 
   it('(d2) SPLITS a page-anchored floating table that is TALLER than the body content area', () => {
@@ -785,57 +811,4 @@ describe('canonical layout — floating-table page-fit / row-split (§17.4.57, W
     }
   });
 
-  it('(g) DEFERS a page-anchored floating table when its raw band intersects an existing table float', () => {
-    // Two page-anchored floating tables whose raw bands collide (§17.4.56 and
-    // observed Word behavior).
-    // Content band is 100pt (pageH 140 − margins 20+20), bodyTop 20.
-    //
-    // Table A: vertAnchor="page", tblpY=10, 4 rows × 30pt = 120pt > 100pt ⇒ it
-    //   ROW-SPLITS (pageAnchoredOverflows). Slice 1 (A1–A3) fills page 1 from its
-    //   absolute page-y 10; the continuation A4 flows onto page 2 at the body top
-    //   (content-relative y 0 → 30).
-    // Table B: vertAnchor="page", tblpY=25, 3 rows × 30pt = 90pt ≤ 100pt ⇒ B alone
-    //   FITS the text region (single element, no split). Its raw absolute box is at
-    //   page-y 25 (content-relative y 5), height 90 ⇒ it would occupy content-y
-    //   5 → 95 on whatever page it lands on.
-    //
-    // If B is placed on page 2 (where A4's continuation band sits at content-y
-    // 0 → 30), B's raw band (content-y 5 → 95) INTERSECTS A4's band — two floating
-    // tables overlapping. Word defers the whole of B to the next page, where its
-    // absolute tblpY=25 no longer collides with another table float.
-    const body = [
-      para({ text: 'a' }),
-      floatTableRows(tblp({ vertAnchor: 'page', tblpY: 10 }), 4, 30), // Table A → r1..r4
-      para({ text: 'mid' }),
-      floatTableRows(tblp({ vertAnchor: 'page', tblpY: 25 }), 3, 30), // Table B → r1..r3
-      para({ text: 'end' }),
-    ];
-    const pages = layoutPages(body, section(), makeCtx());
-    // Page 2 (index 1) carries A's continuation (A4) but MUST NOT also carry any of
-    // Table B — B is deferred so it never overlaps A4's band.
-    const bandCollisionPage = pages[1];
-    const tableFloatsOnPage2 = bandCollisionPage.layers.body.filter(isFloatTable);
-    // Exactly one table float on page 2 (A's continuation slice), not two stacked.
-    expect(tableFloatsOnPage2.length).toBe(1);
-    // And it is A's continuation (a single row on that band), not B.
-    expect(floatRowsOn(bandCollisionPage)).toEqual(['r4']);
-
-    // Table B is deferred to a LATER page and lands there as ONE un-split element
-    // (its 90pt fits the 100pt region once it is on a clean page).
-    const bPageIdx = pages.findIndex(
-      (p, i) => i > 1 && p.layers.body.some(isFloatTable),
-    );
-    expect(bPageIdx).toBeGreaterThan(1);
-    const bPage = pages[bPageIdx];
-    const bFloats = bPage.layers.body.filter(isFloatTable);
-    expect(bFloats.length).toBe(1);
-    expect(floatRowsOn(bPage)).toEqual(['r1', 'r2', 'r3']);
-
-    // No page ever holds two DISTINCT table-float bands that vertically overlap:
-    // assert every page has at most one floating-table element (each table's slice
-    // owns its page's band alone here, since neither co-resident split occurs).
-    for (const p of pages) {
-      expect(p.layers.body.filter(isFloatTable).length).toBeLessThanOrEqual(1);
-    }
-  });
 });

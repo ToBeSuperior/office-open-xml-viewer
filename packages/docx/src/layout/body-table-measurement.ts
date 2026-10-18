@@ -24,7 +24,6 @@ import {
 import {
   floatRegistryParticipant,
   resolveBlockFlowAdmission,
-  resolvePageAnchoredTableDeferral,
 } from './floats.js';
 import { ExactConvergenceError, convergeExactState } from './convergence.js';
 import { LayoutInvariantError } from './diagnostics.js';
@@ -871,53 +870,22 @@ function measurePositionedTable(
         ),
       })
     : sessionState.floatRegistry;
-  const pageAnchoredCollision =
-    request.cursor?.kind !== 'table' &&
-    (positioning.vertAnchor === 'page' || positioning.vertAnchor === 'margin') &&
-    resolvePageAnchoredTableDeferral({
-      bounds: {
-        xPt: raw.x,
-        yPt: raw.y,
-        widthPt: raw.w,
-        heightPt: raw.h,
-      },
-      blockers: sessionState.floatRegistry.entries
-        .filter((entry) => entry.occurrenceId !== ownPrescanOccurrenceId)
-        .map(floatRegistryParticipant),
-      overlapEpsilonPt: FLOAT_OVERLAP_EPS,
-    }).defer;
-  if (pageAnchoredCollision) {
-    // `word-page-anchored-table-collision-deferral`: a fresh page
-    // preserves the authored absolute anchor instead of converting
-    // the colliding table to a text continuation.
-    return Object.freeze({
-      layout: retained.layout,
-      blockExtentPt: 0,
-      nextCursor: Object.freeze({
-        kind: 'table' as const,
-        cursor,
-        floatingContinuationFrame: 'authored' as const,
-      }),
-      requiresFreshFlowRegion: true,
-    });
-  }
   const absoluteAnchorMustSplit =
     (positioning.vertAnchor === 'page' || positioning.vertAnchor === 'margin') &&
     retained.layout.advancePt > request.freshPageBlockExtentPt;
+  // A page- or margin-anchored table is admitted against the page, as it is
+  // clamped (resolveFloatingTableBoxPt); leaving the text area is decided
+  // below, after placement (`word-page-anchored-table-text-area-move`).
   const admissionBlockEndPt = absoluteAnchorMustSplit
     ? request.location.availableBounds.yPt + request.location.availableBounds.heightPt
-    : positioning.vertAnchor === 'page'
+    : positioning.vertAnchor === 'page' || positioning.vertAnchor === 'margin'
       ? frames.page.yPt + frames.page.heightPt
-      : positioning.vertAnchor === 'margin'
-        ? frames.margin.yPt + frames.margin.heightPt
-        : request.location.availableBounds.yPt + request.location.availableBounds.heightPt;
+      : request.location.availableBounds.yPt + request.location.availableBounds.heightPt;
   const freshAdmissionHeightPt = absoluteAnchorMustSplit
     ? request.freshPageBlockExtentPt
-    : positioning.vertAnchor === 'page'
+    : positioning.vertAnchor === 'page' || positioning.vertAnchor === 'margin'
       ? frames.page.heightPt
-      : positioning.vertAnchor === 'margin'
-        ? frames.margin.heightPt
-        : request.freshPageBlockExtentPt;
+      : request.freshPageBlockExtentPt;
   const transaction = convergeFloatingParentTransaction(context, request, operations, {
     table,
     retained,
@@ -964,6 +932,32 @@ function measurePositionedTable(
         kind: 'table' as const,
         cursor,
         floatingContinuationFrame: 'fresh-text' as const,
+      }),
+      requiresFreshFlowRegion: true,
+    });
+  }
+  // `word-page-anchored-table-text-area-move`: a page- or margin-anchored
+  // table whose box ends below the bottom margin, or that never-displacement
+  // moved above the top margin, moves to the next page together with the
+  // flow after it, unless nothing precedes it in this region (moving would
+  // gain nothing there). Its authored position applies on the next page.
+  const box = resolved.placement.bounds;
+  const textArea = frames.margin;
+  if (
+    (positioning.vertAnchor === 'page' || positioning.vertAnchor === 'margin') &&
+    !isFloatingContinuation &&
+    !absoluteAnchorMustSplit &&
+    request.availableBlockExtentPt < request.freshPageBlockExtentPt &&
+    (box.yPt + box.heightPt > textArea.yPt + textArea.heightPt + FLOAT_OVERLAP_EPS ||
+      (box.yPt < raw.y - FLOAT_OVERLAP_EPS && box.yPt < textArea.yPt - FLOAT_OVERLAP_EPS))
+  ) {
+    return Object.freeze({
+      layout: retained.layout,
+      blockExtentPt: 0,
+      nextCursor: Object.freeze({
+        kind: 'table' as const,
+        cursor,
+        floatingContinuationFrame: 'authored' as const,
       }),
       requiresFreshFlowRegion: true,
     });
