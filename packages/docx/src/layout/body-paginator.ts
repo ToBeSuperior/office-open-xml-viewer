@@ -2485,6 +2485,7 @@ function* paginateBodyPassSteps(
             availableInlineExtentPt: location.availableBounds.widthPt,
             availableBlockExtentPt,
             freshPageBlockExtentPt: freshPageExtent(state),
+            pageHasContent: state.flow.pageHasContent,
             ...(cursor ? { cursor } : {}),
           });
         let availableBlockExtentPt = location.availableBounds.heightPt;
@@ -2602,7 +2603,9 @@ function* paginateBodyPassSteps(
           if (rebasesFloatingTableOnFreshFrame) continue;
           cursor = enteringFreshRegion(cursor);
           yield* commitTransition(
-            advanceColumnOrPage(state.flow, 'overflow'),
+            acquired.requiresFreshPage
+              ? advanceToPage(state.flow, state.flow.section, 'overflow')
+              : advanceColumnOrPage(state.flow, 'overflow'),
             entryIndex,
           );
           continue;

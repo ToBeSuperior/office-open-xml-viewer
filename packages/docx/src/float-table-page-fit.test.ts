@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { layoutBodyModel } from './test-support/document-layout.test-support.js';
+import { layoutDocument } from './document-layout.js';
+import { createLayoutServices } from './layout-runtime.js';
 import { tableFormatInput } from './parser-model.js';
 import type { TableFragmentLayout } from './layout/table-pagination.js';
 import type { LayoutPage, PaintNode } from './layout/types.js';
@@ -9,6 +11,7 @@ import type {
   DocParagraph,
   DocTable,
   DocTableRow,
+  DocxDocumentModel,
   DocxTextRun,
   SectionProps,
   TblpPr,
@@ -719,6 +722,43 @@ describe('canonical layout — floating-table page-fit / row-split (§17.4.57, W
     expect(floatRowsOn(pages[1])).toEqual(['r1', 'r2']);
     const floatCount = pages.reduce((s, p) => s + p.layers.body.filter(isFloatTable).length, 0);
     expect(floatCount).toBe(1);
+  });
+
+  it('keeps a first-on-the-page table in place even when a first-page header shortens that page', () => {
+    // Occupancy, not the fresh-page extent, decides "nothing precedes": the
+    // first-page header reserve makes page 1's band shorter than page 2's.
+    const model: DocxDocumentModel = {
+      body: [
+        floatTableRows(tblp({ vertAnchor: 'page', tblpY: 90 }), 2, 30),
+        para({ text: 'x' }),
+      ],
+      section: section({ titlePage: true }),
+      headers: { default: null, first: { body: [para({ text: 'H', fontSize: 40 })] }, even: null },
+      footers: { default: null, first: null, even: null },
+      footnotes: [],
+      endnotes: [],
+      fontFamilyClasses: {},
+    };
+    const pages = layoutDocument(model, createLayoutServices(model, { measureContext: makeCtx() }), {
+      currentDateMs: 0,
+    }).pages;
+    expect(hasFloatTable(pages[0]!)).toBe(true);
+    expect(floatRowsOn(pages[0]!)).toEqual(['r1', 'r2']);
+  });
+
+  it('moves a table ending below the bottom margin to the next page, not the next column', () => {
+    const twoColumns = section({
+      columns: { count: 2, spacePt: 20, equalWidth: true, sep: false, cols: [] },
+    });
+    const body = [
+      para({ text: 'a' }),
+      floatTableRows(tblp({ vertAnchor: 'page', tblpY: 90 }), 2, 30),
+      para({ text: 'x' }),
+    ];
+    const pages = layoutPages(body, twoColumns, makeCtx());
+    expect(hasFloatTable(pages[0]!)).toBe(false);
+    expect(floatRowsOn(pages[1]!)).toEqual(['r1', 'r2']);
+    expect(hasAnchorText(pages[1]!, 'x')).toBe(true);
   });
 
   it('keeps an overlap-permitted page-anchored table on its page beside another table float', () => {

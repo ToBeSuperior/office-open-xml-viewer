@@ -98,6 +98,8 @@ export interface BodyTableAcquisitionInput {
   readonly availableInlineExtentPt: number;
   readonly availableBlockExtentPt: number;
   readonly freshPageBlockExtentPt: number;
+  /** Whether flow content already occupies the current page. */
+  readonly pageHasContent?: boolean;
   readonly cursor?: BodyTableContinuationCursor;
 }
 
@@ -134,6 +136,9 @@ export interface AcquiredTableBlock {
    * charged with its footnote reserve exactly like a placed paragraph frame. */
   readonly relocationBlockExtentPt?: number;
   readonly requiresFreshFlowRegion?: boolean;
+  /** With requiresFreshFlowRegion: the fresh region must start a new page,
+   * not the next column. */
+  readonly requiresFreshPage?: boolean;
   readonly retryAtBlockStartPt?: number;
   readonly placement?: Readonly<{
     coordinateSpace: 'logical-body' | 'upright-physical';

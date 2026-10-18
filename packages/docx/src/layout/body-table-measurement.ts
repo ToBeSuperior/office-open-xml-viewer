@@ -939,15 +939,16 @@ function measurePositionedTable(
   // `word-page-anchored-table-text-area-move`: a page- or margin-anchored
   // table whose box ends below the bottom margin, or that never-displacement
   // moved above the top margin, moves to the next page together with the
-  // flow after it, unless nothing precedes it in this region (moving would
-  // gain nothing there). Its authored position applies on the next page.
+  // flow after it to the next page (not the next column), unless nothing
+  // precedes it on this page (moving would gain nothing there). Its
+  // authored position applies on the next page.
   const box = resolved.placement.bounds;
   const textArea = frames.margin;
   if (
     (positioning.vertAnchor === 'page' || positioning.vertAnchor === 'margin') &&
     !isFloatingContinuation &&
     !absoluteAnchorMustSplit &&
-    request.availableBlockExtentPt < request.freshPageBlockExtentPt &&
+    request.pageHasContent === true &&
     (box.yPt + box.heightPt > textArea.yPt + textArea.heightPt + FLOAT_OVERLAP_EPS ||
       (box.yPt < raw.y - FLOAT_OVERLAP_EPS && box.yPt < textArea.yPt - FLOAT_OVERLAP_EPS))
   ) {
@@ -960,6 +961,7 @@ function measurePositionedTable(
         floatingContinuationFrame: 'authored' as const,
       }),
       requiresFreshFlowRegion: true,
+      requiresFreshPage: true,
     });
   }
   return Object.freeze({
