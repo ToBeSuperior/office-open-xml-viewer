@@ -551,6 +551,7 @@ impl StyleMap {
         self.table_styles.contains_key(style_id)
     }
 
+    #[cfg(test)]
     pub fn parse(xml: &str) -> Self {
         Self::parse_part(xml, "word/styles.xml")
     }
