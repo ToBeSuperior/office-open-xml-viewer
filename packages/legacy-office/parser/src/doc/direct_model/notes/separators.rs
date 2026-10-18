@@ -2,17 +2,17 @@
 //! MS-DOC 2.3.3/2.8.22 define slots and guards; 2.6.1 sprmCFSpec gives U+0003
 //! and U+0004 rule semantics only after the actual CHPX/style/PCD cascade.
 //! Role does not select kind. Numeric rule geometry is a shared layout policy,
-//! not acquired here. Supported CHPX/PAPX and native provenance move into the
-//! private wire; the shared consumer uses visible rule/control mark metrics.
-//! Acquisition alone does not admit custom content or establish Office-exact
-//! width/placement fidelity.
+//! not acquired here. Supported CHPX/PAPX move into the shared reserved
+//! separator wire; the shared consumer uses visible rule/control mark metrics.
+//! This module owns the MS-DOC story shape (CPs, guard, PAPX/CHPX cascade) and
+//! admits only the closed shapes that wire represents. Acquisition alone does
+//! not admit custom content or establish Office-exact width/placement fidelity.
 
 use super::super::{payload, ModelBudget};
 use crate::doc::{formatting, headers, unsupported};
 use docx_model::{
-    NativeNoteSeparatorCharacterWire, NativeNoteSeparatorParagraphWire,
-    NativeNoteSeparatorRuleWire, NativeNoteSeparatorSourceWire, NativeNoteSeparatorStoryClass,
-    NativeNoteSeparatorStoryWire, NoteSeparatorMark,
+    NoteSeparatorMark, ReservedNoteSeparatorCharacterWire, ReservedNoteSeparatorParagraphWire,
+    ReservedNoteSeparatorRuleWire, ReservedNoteSeparatorStoryWire,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -21,24 +21,10 @@ pub(super) enum RuleKind {
     Full,
 }
 
-/// CP is relative to the header document; FC and PRM retain its actual piece.
-/// These native addresses must not be mistaken for shared model source paths.
+/// CP relative to the header document. It stays in this module: a native
+/// address must not be mistaken for a shared model source path.
 pub(super) struct SourceAddress {
     pub(super) cp: usize,
-    pub(super) fc: usize,
-    pub(super) prm: u16,
-    pub(super) paragraph_style: usize,
-}
-
-impl SourceAddress {
-    fn wire(&self) -> NativeNoteSeparatorSourceWire {
-        NativeNoteSeparatorSourceWire {
-            header_cp: self.cp,
-            fc: self.fc,
-            prm: self.prm,
-            paragraph_style: self.paragraph_style,
-        }
-    }
 }
 
 pub(super) struct RuleFacts {
@@ -79,40 +65,56 @@ impl AcquiredSeparator<'_> {
         self.rule.as_ref()?.kind.map(RuleKind::mark)
     }
 
-    /// Move the acquired facts of an admitted story into the private wire.
+    /// Move the acquired facts of an admitted story into the shared wire.
     /// Owned paragraph/run payloads move without a clone, so their acquisition
     /// charges stand; the caller charges the new retained container. Borrowed
-    /// header text is never copied: CPs locate it.
-    pub(super) fn into_wire(self) -> Result<NativeNoteSeparatorStoryWire, String> {
-        let class = match (self.source.guard_cp, self.source.content) {
-            (None, "") => NativeNoteSeparatorStoryClass::Empty,
-            (Some(_), "") => NativeNoteSeparatorStoryClass::GuardOnly,
-            (Some(_), "\r") => NativeNoteSeparatorStoryClass::ParagraphOnly,
-            _ if self.rule.is_some() => NativeNoteSeparatorStoryClass::Rule,
-            _ => return Err(unsupported("custom Word note separators are not supported")),
+    /// header text is never copied, and native CPs stay here.
+    ///
+    /// MS-DOC 2.3.3 story shapes map onto the closed wire shapes: an empty or
+    /// guard-only story has no paragraph; a paragraph-only story is exactly
+    /// one paragraph mark before its guard; a rule story is exactly its
+    /// control, the content paragraph mark and the guard. Anything else is a
+    /// custom separator.
+    pub(super) fn into_wire(self) -> Result<ReservedNoteSeparatorStoryWire, String> {
+        let content = &self.source.content_cp;
+        let mark_ends_content = |paragraph: &ParagraphFacts| paragraph.source.cp + 1 == content.end;
+        let admitted = match (self.source.guard_cp, self.source.content) {
+            (_, "") => self.rule.is_none() && self.paragraph.is_none(),
+            (Some(_), "\r") => {
+                self.rule.is_none() && self.paragraph.as_ref().is_some_and(mark_ends_content)
+            }
+            (Some(guard), _) => {
+                guard == content.end
+                    && content.end - content.start == 2
+                    && self
+                        .rule
+                        .as_ref()
+                        .is_some_and(|rule| rule.source.cp == content.start)
+                    && self.paragraph.as_ref().is_some_and(mark_ends_content)
+            }
+            _ => false,
         };
-        Ok(NativeNoteSeparatorStoryWire {
-            class,
-            content_start_cp: self.source.content_cp.start,
-            content_end_cp: self.source.content_cp.end,
-            guard_cp: self.source.guard_cp,
-            rule: self.rule.map(|rule| NativeNoteSeparatorRuleWire {
+        if !admitted {
+            return Err(unsupported("custom Word note separators are not supported"));
+        }
+        Ok(ReservedNoteSeparatorStoryWire {
+            rule: self.rule.map(|rule| ReservedNoteSeparatorRuleWire {
                 mark: rule.kind.map(RuleKind::mark),
-                source: rule.source.wire(),
-                control: NativeNoteSeparatorCharacterWire {
+                control: ReservedNoteSeparatorCharacterWire {
                     run: rule.character.run,
                     insertion: rule.character.insertion,
                 },
             }),
             paragraph: self
                 .paragraph
-                .map(|paragraph| NativeNoteSeparatorParagraphWire {
-                    source: paragraph.source.wire(),
+                .map(|paragraph| ReservedNoteSeparatorParagraphWire {
                     paragraph: paragraph.paragraph,
-                    content_mark: paragraph.mark.map(|mark| NativeNoteSeparatorCharacterWire {
-                        run: mark.run,
-                        insertion: mark.insertion,
-                    }),
+                    content_mark: paragraph
+                        .mark
+                        .map(|mark| ReservedNoteSeparatorCharacterWire {
+                            run: mark.run,
+                            insertion: mark.insertion,
+                        }),
                     numbered: paragraph.numbered,
                     framed: paragraph.framed,
                 }),
@@ -237,12 +239,7 @@ pub(super) fn acquire<'a>(
             mark,
             numbered,
             framed,
-            source: SourceAddress {
-                cp: paragraph_cp,
-                fc: mark_fc,
-                prm: mark_piece.prm,
-                paragraph_style: style,
-            },
+            source: SourceAddress { cp: paragraph_cp },
         })
     } else {
         None
@@ -264,9 +261,6 @@ pub(super) fn acquire<'a>(
             character,
             source: SourceAddress {
                 cp: source.content_cp.start,
-                fc,
-                prm: piece.prm,
-                paragraph_style: style,
             },
         })
     } else {

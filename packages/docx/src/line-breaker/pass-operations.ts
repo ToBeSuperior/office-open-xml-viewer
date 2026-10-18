@@ -1479,7 +1479,7 @@ export function performTextSegmentBox(
   let metricMeasurement = measured;
   let metricEmPx = effectiveFontPx(s);
   if (s.metricOnly && s.metricProbeText) {
-    // Native reserved-separator participant (MS-DOC 2.3.3): its own text is
+    // Reserved-separator participant: its own text is
     // empty, so its vertical metrics come from its bounded probe through the
     // same selected face, at the existing effective metric size in this
     // caller's scale (super/sub scaling; small caps keep the full-size policy

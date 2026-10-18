@@ -79,12 +79,12 @@ function parseFiles(files: Map<string, string>): DocxDocumentModel {
   finally { archive.free(); }
 }
 
-/** The canonical native producer facts of an MS-ODRAW BtoT section: nominal
- * btLr plus the private raw flow, exactly as the native reader emits them. */
-function asNativeBottomToTop(doc: DocxDocumentModel): DocxDocumentModel {
+/** The producer facts of a bottomToTop section: nominal btLr plus the
+ * private section flow, as a producer emits them. */
+function asBottomToTop(doc: DocxDocumentModel): DocxDocumentModel {
   const section = doc.section as DocxDocumentModel['section'] & { __sectionPlacement?: Record<string, unknown> };
   section.textDirection = 'btLr';
-  section.__sectionPlacement = { ...(section.__sectionPlacement ?? { sectionId: 'section:0' }), nativeTextFlow: 2 };
+  section.__sectionPlacement = { ...(section.__sectionPlacement ?? { sectionId: 'section:0' }), sectionFlow: 'bottomToTop' };
   return doc;
 }
 
@@ -114,7 +114,7 @@ describe('nested text-box story ownership', () => {
     { label: 'native BtoT', native: true, bodyTransform: 'rotate(-90deg)' },
   ])('acquires a header text box with its own page and section ($label)', ({ native, bodyTransform }) => {
     const parsed = parsedDocument();
-    const doc = native ? asNativeBottomToTop(parsed) : parsed;
+    const doc = native ? asBottomToTop(parsed) : parsed;
     const layout = layoutDocument(doc, createLayoutServices(doc, { measureContext: context() }), { currentDateMs: 0 });
     expect(layout.pages).toHaveLength(2);
     for (const [pageIndex, bodyText] of ['One', 'Two'].entries()) {

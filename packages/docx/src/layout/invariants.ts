@@ -30,7 +30,7 @@ import type {
   WritingMode,
 } from './types.js';
 import { unionLayoutRects } from './rect-union.js';
-import { noteOwnedBlocks } from './native-note-separators.js';
+import { noteOwnedBlocks } from './reserved-note-separators.js';
 
 import { isDeepFrozenPlainDataRoot } from './plain-data.js';
 import { documentLayoutValidationEnabled } from './validation-policy.js';
@@ -432,12 +432,12 @@ function collectRetainedNodeIds(
   }
 }
 
-/** Native separator/notice occurrences belong to their note: they lie on its
+/** Reserved separator/notice occurrences belong to their note: they lie on its
  * block interval in its flow domain and replace, never add to, its scalar rule. */
 function requireNoteSeparatorOwnership(node: PaintNode, path: string): void {
   if (node.kind !== 'note') return;
   if (node.leading && node.separator.length !== 0) {
-    throw new LayoutInvariantError('INVALID_GEOMETRY', `${path} paints both a scalar and a native separator`);
+    throw new LayoutInvariantError('INVALID_GEOMETRY', `${path} paints both a scalar and a reserved separator`);
   }
   if (node.trailing && node.trailing.role !== 'continuationNotice') {
     throw new LayoutInvariantError('INVALID_REFERENCE', `${path}.trailing is not a continuation notice`);

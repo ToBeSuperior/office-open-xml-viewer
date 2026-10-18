@@ -41,7 +41,7 @@ pub fn parse_standalone_shape_part(
     // Source length is not an admission quota. On allocation failure, report
     // the unavailable additional retention through the ordinary resource wire
     // envelope (zero retained capacity, actual requested bytes), before opening
-    // a package session. Legacy alternative-shape callers preserve this marker.
+    // a package session. Callers preserve this marker.
     let mut source = Vec::new();
     source.try_reserve_exact(package.len()).map_err(|_| {
         format!(
@@ -77,8 +77,8 @@ pub fn parse_standalone_shape_part(
             standalone_xml_limits(zip, map_xml, None)?;
             let map_doc = parse_preflighted_pptx_xml(map_xml).map_err(|e| e.to_string())?;
             let node = map_doc.root_element();
-            // Slide masters carry p:clrMap (ECMA-376 §19.3.1.6), while
-            // [MS-PPT] §2.11.9 round-trip color mappings use a:clrMap.
+            // Slide masters carry p:clrMap (ECMA-376 §19.3.1.6); a DrawingML
+            // a:clrMap (§20.1.6.1, CT_ColorMapping) has the same attributes.
             if node.tag_name().name() != "clrMap"
                 || !(is_p_ns(node.tag_name().namespace()) || is_a_ns(node.tag_name().namespace()))
             {

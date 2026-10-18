@@ -3218,7 +3218,7 @@ fn parse_note_layout_settings(
         footnote_continuation_separator: None,
         footnote_separator_paragraph: None,
         footnote_continuation_separator_paragraph: None,
-        native_separators: None,
+        reserved_separators: None,
     };
     if result.footnote_position.is_none()
         && result.endnote_position.is_none()
@@ -5242,7 +5242,7 @@ fn section_placement_wire(
             doc_grid_char_space: None,
             gutter_pt: None,
             rtl_gutter: None,
-            native_text_flow: None,
+            section_flow: None,
             page_borders_authored: None,
             page_borders: None,
             page_geometry: None,
@@ -5276,8 +5276,8 @@ fn section_placement_wire(
                 .and_then(parse_on_off)
                 .unwrap_or(true)
         }),
-        // MS-DOC-only raw flow fact; WordprocessingML never supplies it.
-        native_text_flow: None,
+        // No Transitional token selects the counter-clockwise frame.
+        section_flow: None,
         page_borders_authored: child_w(sect_pr, "pgBorders").map(|_| true),
         page_borders: parse_page_borders(sect_pr),
         page_geometry: section_page_geometry_wire(sect_pr).map(Box::new),
