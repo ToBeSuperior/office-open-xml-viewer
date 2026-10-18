@@ -204,6 +204,11 @@ jobs:
       - name: Build packages
         run: pnpm build:packages:ci
 
+      # Each format's library dist must locate its parser WASM relative to the
+      # loading module, never at the hosting origin's root.
+      - name: Package WASM URLs are module-relative
+        run: pnpm check:relative-wasm-urls packages/docx/dist packages/xlsx/dist packages/pptx/dist
+
       - name: DOCX package build ownership
         run: pnpm test:docx-package-build
 
@@ -222,6 +227,7 @@ jobs:
           pnpm check:public-type-exports
           pnpm check:public-api:built
           pnpm check:no-inline-wasm
+          pnpm check:relative-wasm-urls dist packages/legacy-office/dist
 
       - name: Install Playwright Chrome (only if missing)
         timeout-minutes: 5

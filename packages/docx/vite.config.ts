@@ -9,6 +9,10 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
   define: { __OOXML_MODEL_SOURCES__: 'true' },
+  // Library assets (parser WASM, workers) must resolve from the importing
+  // module's URL, never from the hosting page's origin root, as in the root
+  // build. Without it Vite 8.3 emits root-absolute "/<asset>" references.
+  base: './',
   root: __dirname,
   plugins: [docxCompatibilityMetadata(), wasmAssetUrl(), wasm(), legacyBundleBoundary()],
   resolve: {
