@@ -203,6 +203,18 @@ export function blipEffectsCoverageReach(
       default: break;
     }
   }
+  // The evaluator grows its grid in whole source pixels, and a later alpha
+  // operation (alphaInv, alphaRepl, …) can make that rounding margin opaque.
+  // The source pixel size is unknown before decode but never exceeds the
+  // frame, so each spatial node may add up to one frame extent per side.
+  if (x > 0 || y > 0) {
+    let spatialNodes = 0;
+    for (const effect of blipEffectNodes(effects, false)) {
+      if (['blur', 'alphaOutset', 'glow', 'shadow', 'presetShadow', 'reflection', 'relativeOffset', 'transform']
+        .includes(effect.type)) spatialNodes++;
+    }
+    x += spatialNodes * width; y += spatialNodes * height;
+  }
   return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
 }
 

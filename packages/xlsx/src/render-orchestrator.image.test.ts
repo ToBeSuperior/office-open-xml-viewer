@@ -711,19 +711,17 @@ describe('render-orchestrator image decode (lazy bytes)', () => {
     group.nativeExtCx = group.nativeExtCy = 914400;
     const leaf = group.shapes[0]!.geom;
     if (leaf.type !== 'image') throw new Error('fixture leaf must be a picture');
-    const acquired = async (radius: number) => {
+    const acquired = async (viewport: { row: number; col: number; rows: number; cols: number }) => {
       fetchImage.mockClear();
-      leaf.blipEffects = [{ type: 'blur', radius, grow: true }];
-      await prefetchImages(ws, new Map(), fetchImage, {
-        viewport: { row: 1, col: 1, rows: 2, cols: 2 },
-      }).catch(() => undefined);
+      leaf.blipEffects = [{ type: 'blur', radius: 12700, grow: true }, { type: 'alphaInv' }];
+      await prefetchImages(ws, new Map(), fetchImage, { viewport }).catch(() => undefined);
       return fetchImage.mock.calls.map(([path]) => path).includes('xl/media/image2.png');
     };
-    // A blur reaching a whole picture width beyond the rectangle can paint
-    // into the viewport, so the off-viewport picture is acquired; a 1 pt blur
-    // cannot, so the picture stays culled.
-    expect(await acquired(2 * 914400)).toBe(true);
-    expect(await acquired(12700)).toBe(false);
+    // A grown grid rounds to whole source pixels and alphaInv can make that
+    // margin opaque, so a nearby viewport acquires the off-viewport picture;
+    // a distant viewport still culls it.
+    expect(await acquired({ row: 1, col: 1, rows: 2, cols: 2 })).toBe(true);
+    expect(await acquired({ row: 2000, col: 2000, rows: 2, cols: 2 })).toBe(false);
   });
 
   it('prefetchImages keeps culling an off-viewport picture whose chain is pointwise', async () => {
