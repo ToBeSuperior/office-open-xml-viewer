@@ -40,6 +40,7 @@ import {
   chartImageFillNeedsRenderedSize,
   chartFillRenderedSizeKey,
   collectChartFillRenderedSizes,
+  assertChartFillRenderedSizeCount,
   chartImageFillPixelTransform,
   chartImageFillUsageSize,
   collectChartImageFillUsages,
@@ -684,6 +685,7 @@ export async function prefetchImages(
         preserveNaturalSize: true, hasSourceCrop: fill.srcRect != null, renderedSize: occurrence,
       });
     }
+    assertChartFillRenderedSizeCount([...chartEntries.values()].filter(entry => entry.renderedSize).length);
     for (const { usage, size } of descriptor.usages) {
       const { fill } = usage;
       if (chartImageFillNeedsRenderedSize(fill)) continue;

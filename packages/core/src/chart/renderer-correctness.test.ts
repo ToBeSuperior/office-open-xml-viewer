@@ -25278,3 +25278,29 @@ describe('per-rendered-size chart picture-fill effects', () => {
     }
   });
 });
+
+describe('per-rendered-size preparation failures and sizes', () => {
+  const blurred = {
+    fillType: 'image' as const, stretch: true, imagePath: 'xl/media/marker.png', mimeType: 'image/png',
+    blipEffects: [{ type: 'blur' as const, radius: 12700, grow: true }],
+  };
+  it('normalizes a native scratch-surface failure to the typed effect error', async () => {
+    const { collectChartFillRenderedSizes } = await import('./renderer.js');
+    const model = baseModel({ chartType: 'line', categories: ['A'], series: [
+      series({ values: [1], showMarker: true, markerSymbol: 'picture', markerSize: 8, markerFillPaint: blurred }),
+    ] });
+    vi.stubGlobal('OffscreenCanvas', class { constructor() { throw new TypeError('native allocation failed'); } });
+    try {
+      expect(() => collectChartFillRenderedSizes(model, RECT, 1))
+        .toThrowError(expect.objectContaining({ code: 'unsupported-image-effect' }));
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+  it('keeps a tiny positive rendered size positive', async () => {
+    const { chartFillRenderedSize } = await import('./image-fill.js');
+    const size = chartFillRenderedSize(blurred, 0.001, 0.002);
+    expect(size!.widthPt).toBeGreaterThan(0);
+    expect(size!.heightPt).toBeGreaterThan(0);
+  });
+});

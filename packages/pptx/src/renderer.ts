@@ -116,6 +116,7 @@ import {
   chartFillRenderedSizeKey,
   chartImageFillStoreLookup,
   collectChartFillRenderedSizes,
+  assertChartFillRenderedSizeCount,
   chartImageFillUsageSize,
   collectChartImageFillUsages,
   collectChartImageFillUsagesForCharts,
@@ -8717,6 +8718,7 @@ async function renderSlideLeased(
         });
       }
     }
+    assertChartFillRenderedSizeCount([...chartFillMap.values()].filter(entry => entry.renderedSize).length);
     for (const el of slide.elements) {
       if (el.type !== 'shape' || !el.textBody) continue;
       for (const para of el.textBody.paragraphs) {

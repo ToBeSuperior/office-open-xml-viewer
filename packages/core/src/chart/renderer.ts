@@ -13,6 +13,7 @@ import {
 import { assertChartImageWork } from './image-fill-errors.js';
 import { createAuxCanvas } from '../canvas/aux-canvas.js';
 import { OoxmlError } from '../errors/ooxml-error.js';
+import { imageEffectError } from '../image/image-effect-error.js';
 
 import { paintChartStyleEffects, withChartEffectBudget } from './style-effects.js';
 
@@ -388,12 +389,19 @@ export function collectChartFillRenderedSizes(
   chartEx?: ChartExRenderer,
 ): ChartFillRenderedSizeRequest[] {
   if (!collectChartImageFillUsages(chart).some(({ fill }) => chartImageFillNeedsRenderedSize(fill))) return [];
-  const scratch = createAuxCanvas(1, 1);
-  const ctx = scratch?.getContext('2d') as CanvasRenderingContext2D | null | undefined;
-  if (!scratch || !ctx) throw new OoxmlError('unsupported-image-effect', 'Chart occurrence surface unavailable');
   const requests = new Map<string, ChartFillRenderedSizeRequest>();
+  let scratch: ReturnType<typeof createAuxCanvas> = null;
   try {
+    scratch = createAuxCanvas(1, 1);
+    const ctx = scratch?.getContext('2d') as CanvasRenderingContext2D | null | undefined;
+    if (!scratch || !ctx) throw new OoxmlError('unsupported-image-effect', 'Chart occurrence surface unavailable');
+    const stub = scratch as unknown as CanvasImageSource;
     renderChart(ctx, chart, rect, ptToPx, shapeRotationDeg, threeD, regionMap, (fill, occurrence) => {
+      // Only size-dependent fills are resolved in this pass: other fills
+      // (tiled, size-independent) are not painted, so no stub geometry can
+      // stand in for their real source metrics. Layout never depends on a
+      // fill's source, only on the chart model and frame.
+      if (!chartImageFillNeedsRenderedSize(fill)) return null;
       if (occurrence) {
         const key = chartFillRenderedSizeKey(fill, undefined, occurrence);
         if (!requests.has(key)) {
@@ -401,13 +409,23 @@ export function collectChartFillRenderedSizes(
           requests.set(key, { fill, occurrence });
         }
       }
-      // The recording pass draws into a 1×1 scratch surface; any drawable works.
-      return scratch as unknown as CanvasImageSource;
+      return stub;
     }, chartEx);
+  } catch (error) {
+    // Allocation, context and native paint failures in the preparation pass
+    // are the same typed diagnostic as any other chain preparation failure.
+    throw imageEffectError(error);
   } finally {
-    scratch.width = 0;
+    if (scratch) scratch.width = 0;
   }
   return [...requests.values()];
+}
+
+/** Aggregate cap over every rendered-size source one host render schedules
+ * (all charts, orientations and sizes), sharing the per-render
+ * picture-source ceiling. */
+export function assertChartFillRenderedSizeCount(count: number): void {
+  assertChartImageWork(count, MAX_CHART_MARKER_IMAGE_SOURCES);
 }
 
 /** Paint a chart in the host's user units. Excel's chart PDF controls keep a

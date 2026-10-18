@@ -13,6 +13,7 @@ import {
   chartFillRenderedSizeKey,
   chartImageFillStoreLookup,
   collectChartFillRenderedSizes,
+  assertChartFillRenderedSizeCount,
   chartImageFillUsageSize,
   collectChartImageFillUsages,
   collectChartImageFillUsagesForCharts,
@@ -359,6 +360,7 @@ async function resolveChartImages<TTextRun>(
         });
       }
     }
+    assertChartFillRenderedSizeCount([...chartEntries.values()].filter(entry => entry.renderedSize).length);
     for (const { usages } of chartOccurrences) {
       for (const { usage, size } of usages) {
         const { fill } = usage;

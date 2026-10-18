@@ -118,6 +118,7 @@ const SHARED_PAINT_IMPORTS = new Map([
     ['chartFillRenderedSizeKey', 'value'],
     ['chartImageFillStoreLookup', 'value'],
     ['collectChartFillRenderedSizes', 'value'],
+    ['assertChartFillRenderedSizeCount', 'value'],
     ['chartImageFillUsageSize', 'value'],
     ['collectChartImageFillUsages', 'value'],
     ['collectChartImageFillUsagesForCharts', 'value'],

@@ -149,14 +149,18 @@ export function chartImageFillNeedsRenderedSize(fill: ImageFill): boolean {
 
 /** The occurrence a destination box of `widthPt`×`heightPt` represents: the
  * full source frame after fillRect insets and the srcRect window
- * (stretchedSourceFrame), quantized to 1/100 pt so identical layouts in the
- * preparation and paint passes agree. Undefined for size-independent fills. */
+ * (stretchedSourceFrame), quantized to six significant digits so identical
+ * layouts in the preparation and paint passes agree. Undefined for
+ * size-independent fills. */
 export function chartFillRenderedSize(
   fill: ImageFill, widthPt: number, heightPt: number,
 ): ChartFillRenderedSize | undefined {
   if (!chartImageFillNeedsRenderedSize(fill)) return undefined;
   const frame = stretchedSourceFrame(widthPt, heightPt, fill.srcRect, fill.fillRect);
-  const quantize = (value: number) => Math.round(value * 100) / 100;
+  // Six significant digits: stable across identical layouts in the
+  // preparation and paint passes, and never collapses a positive authored
+  // size to the loader's "unspecified" zero.
+  const quantize = (value: number) => Number(value.toPrecision(6));
   if (![frame.width, frame.height].every(Number.isFinite)) rejectChartImageGeometry();
   return { widthPt: quantize(frame.width), heightPt: quantize(frame.height) };
 }

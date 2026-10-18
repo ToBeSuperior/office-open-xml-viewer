@@ -230,7 +230,7 @@ export {
   symbolTextToUnicodeSegments,
   type SymbolTextSegment,
 } from './fonts/symbol-font';
-export { renderChart, collectChartFillRenderedSizes } from './chart/renderer';
+export { renderChart, collectChartFillRenderedSizes, assertChartFillRenderedSizeCount } from './chart/renderer';
 export { formatLocalizedExcelShortDate } from './chart/chart-number-format';
 export { autoResize, type AutoResizeOptions } from './autoResize';
 export {
