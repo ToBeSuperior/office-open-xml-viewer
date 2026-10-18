@@ -1024,7 +1024,10 @@ fn load_document_parse_environment(zip: &mut Zip) -> DocumentParseEnvironment {
     let mut word_ilvl_error = parse_guarded(&styles_xml)
         .ok()
         .and_then(|document| validate_paragraph_ilvls(document.root_element()).err());
-    let mut style_map = StyleMap::parse(&styles_xml);
+    let mut style_map = StyleMap::parse_part(
+        &styles_xml,
+        styles_path.as_deref().unwrap_or("word/styles.xml"),
+    );
 
     let numbering_path = find_rel_part(&rels_xml, "numbering")
         .unwrap_or_else(|| Some("word/numbering.xml".to_string()));
@@ -3215,7 +3218,7 @@ fn parse_note_layout_settings(
         footnote_continuation_separator: None,
         footnote_separator_paragraph: None,
         footnote_continuation_separator_paragraph: None,
-        native_separators: None,
+        reserved_separators: None,
     };
     if result.footnote_position.is_none()
         && result.endnote_position.is_none()
@@ -5239,7 +5242,7 @@ fn section_placement_wire(
             doc_grid_char_space: None,
             gutter_pt: None,
             rtl_gutter: None,
-            native_text_flow: None,
+            section_flow: None,
             page_borders_authored: None,
             page_borders: None,
             page_geometry: None,
@@ -5273,8 +5276,8 @@ fn section_placement_wire(
                 .and_then(parse_on_off)
                 .unwrap_or(true)
         }),
-        // MS-DOC-only raw flow fact; WordprocessingML never supplies it.
-        native_text_flow: None,
+        // No Transitional token selects the counter-clockwise frame.
+        section_flow: None,
         page_borders_authored: child_w(sect_pr, "pgBorders").map(|_| true),
         page_borders: parse_page_borders(sect_pr),
         page_geometry: section_page_geometry_wire(sect_pr).map(Box::new),
@@ -6246,8 +6249,6 @@ fn parse_paragraph_cond_at_depth_with_diagnostics(
     let direct_para = ppr_node.map(parse_para_fmt).unwrap_or_default();
     // Style-chain tabs before the direct layer: a numbering level's tabs enter
     // the cascade between them (see `tab_stops` below).
-    let style_chain_tabs = base_para.tab_stops.clone();
-    let style_chain_clears = base_para.tab_clears.clone();
     let direct_indent_left = direct_para.indent_left;
     let direct_indent_first = direct_para.indent_first;
     let direct_indent_right = direct_para.indent_right;
@@ -6413,31 +6414,36 @@ fn parse_paragraph_cond_at_depth_with_diagnostics(
     // stays its natural text value (e.g. Tabletext = left).
 
     // A numbering level's pPr tabs (§17.9.6) take the same layer as its
-    // indents (resolve_numbered_indent_axes): directly selected numbering sits
-    // in the direct layer beneath the paragraph's own pPr; style-origin
-    // numbering sits beneath the paragraph style chain.
+    // indents (resolve_numbered_indent_axes), in the §17.7.2 order: document
+    // defaults and table formatting, then style-origin numbering, then the
+    // paragraph style, then directly selected numbering, then direct pPr. Each
+    // layer's clears remove lower stops at their positions.
     let level_tabs = numbering
         .as_ref()
         .and_then(|num| num_map.get_level(num.num_id, num.level))
         .and_then(|l| l.tab_stops.clone());
     let tab_stops = match level_tabs.as_deref() {
         Some(level_tabs) => {
-            let chain = style_chain_tabs.clone().unwrap_or_default();
-            let below_direct = if direct_numbering {
-                merge_tab_stops(&chain, level_tabs)
-            } else {
-                // The style chain outranks style-origin numbering, including
-                // the positions it clears.
-                let level_kept: Vec<_> = level_tabs
-                    .iter()
-                    .filter(|(pos, _, _)| style_chain_clears.iter().all(|c| (c - pos).abs() > 0.05))
-                    .cloned()
+            let layer = |base: Vec<(f64, String, String)>, fmt: &ParaFmt| {
+                let kept: Vec<_> = base
+                    .into_iter()
+                    .filter(|(pos, _, _)| fmt.tab_clears.iter().all(|c| (c - pos).abs() > 0.05))
                     .collect();
-                merge_tab_stops(&merge_tab_stops(&[], &level_kept), &chain)
+                match &fmt.tab_stops {
+                    Some(stops) => merge_tab_stops(&kept, stops),
+                    None => kept,
+                }
+            };
+            let lower = style_map.resolve_para_below_style(table_style_id, cond);
+            let lower_tabs = lower.tab_stops.clone().unwrap_or_default();
+            let with_style_and_level = if direct_numbering {
+                merge_tab_stops(&layer(lower_tabs, &paragraph_style), level_tabs)
+            } else {
+                layer(merge_tab_stops(&lower_tabs, level_tabs), &paragraph_style)
             };
             match &direct_para.tab_stops {
-                Some(direct) => merge_tab_stops(&below_direct, direct),
-                None => below_direct,
+                Some(direct) => merge_tab_stops(&with_style_and_level, direct),
+                None => with_style_and_level,
             }
         }
         None => base_para.tab_stops.clone().unwrap_or_default(),
@@ -6570,6 +6576,9 @@ struct FieldFrame {
     substitute: bool,
     /// True when this frame's instruction is a TOC field (§17.16.5.69).
     is_toc: bool,
+    /// Incremental first-token state for `is_toc`, so each instruction byte
+    /// is examined once however many `instrText` runs the field has.
+    toc_scan: FirstTokenScan,
     /// Classified when `separate` closes the instruction region.
     field_type: String,
     /// REF/PAGEREF bookmark when the field-specific `\\h` switch is authored.
@@ -6582,11 +6591,63 @@ struct FieldFrame {
     legacy_checkbox_nested: bool,
 }
 
+/// Library resource policy, not an ECMA-376 rule: §17.16.18 does not bound
+/// complex-field nesting, and `begin` fldChars are flat run siblings, so the
+/// XML depth guard does not apply. Real nesting (TOC → HYPERLINK → PAGEREF,
+/// nested IF/REF) stays in single digits; unclosed `begin`s of a damaged
+/// document also accumulate here. More open frames fail closed with a typed
+/// resource error instead of retaining unbounded field state.
+const MAX_OPEN_COMPLEX_FIELDS: usize = 256;
+
+/// The first whitespace-delimited token of a field instruction (§17.16.5.69
+/// TOC), matched ASCII case-insensitively against the accumulated text
+/// without rescanning it.
+#[derive(Default)]
+struct FirstTokenScan {
+    started: bool,
+    ended: bool,
+    len: usize,
+    prefix: [char; 3],
+}
+
+impl FirstTokenScan {
+    /// Feed the next instruction chunk; return whether the first token of the
+    /// instruction so far is `TOC` (ASCII case-insensitive).
+    fn feed_is_toc(&mut self, chunk: &str) -> bool {
+        for c in chunk.chars() {
+            if self.ended {
+                break;
+            }
+            if c.is_whitespace() {
+                self.ended = self.started;
+            } else {
+                if self.len < self.prefix.len() {
+                    self.prefix[self.len] = c;
+                }
+                self.started = true;
+                self.len += 1;
+            }
+        }
+        self.started
+            && self.len == 3
+            && self
+                .prefix
+                .iter()
+                .zip(['T', 'O', 'C'])
+                .all(|(c, expected)| c.eq_ignore_ascii_case(&expected))
+    }
+}
+
 /// Stack of open field frames for the current paragraph content walk.
 #[derive(Default)]
 struct FieldState {
     stack: Vec<FieldFrame>,
     next_occurrence_id: u32,
+    /// Open frames whose instruction is a TOC field; keeps `in_toc` O(1).
+    open_toc_frames: usize,
+    /// `(stack index, anchor)` of every open frame past `separate` whose
+    /// rendered result is a REF/PAGEREF `\h` hyperlink, innermost last.
+    result_anchors: Vec<(usize, String)>,
 }
 
 impl FieldState {
@@ -6605,15 +6666,28 @@ impl FieldState {
     /// on the stack being a TOC field counts, so the nested PAGEREF result is
     /// covered too; instruction-phase runs never reach the render path.
     fn in_toc(&self) -> bool {
-        self.stack.iter().any(|f| f.is_toc)
+        self.open_toc_frames != 0
     }
 
+    /// The innermost open frame past `separate`, rendering its stored result,
+    /// that carries a hyperlink anchor.
     fn result_hyperlink_anchor(&self) -> Option<String> {
-        self.stack
-            .iter()
-            .rev()
-            .filter(|frame| frame.past_separate && !frame.substitute)
-            .find_map(|frame| frame.hyperlink_anchor.clone())
+        self.result_anchors.last().map(|(_, anchor)| anchor.clone())
+    }
+
+    fn pop_frame(&mut self) -> Option<FieldFrame> {
+        let frame = self.stack.pop()?;
+        if frame.is_toc {
+            self.open_toc_frames -= 1;
+        }
+        if self
+            .result_anchors
+            .last()
+            .is_some_and(|(index, _)| *index == self.stack.len())
+        {
+            self.result_anchors.pop();
+        }
+        Some(frame)
     }
 }
 
@@ -6908,10 +6982,12 @@ fn field_control_run_fmt(r_node: roxmltree::Node, base_run: &RunFmt) -> RunFmt {
     fmt
 }
 
-fn begin_complex_field(field: &mut FieldState, r_node: roxmltree::Node, base_run: &RunFmt) {
-    let occurrence_id = field.next_occurrence_id;
-    field.next_occurrence_id = field.next_occurrence_id.saturating_add(1);
-    let legacy_checkbox = r_node
+/// A run's first legacy checkBox: (checked, size in points).
+type LegacyCheckbox = Option<(bool, Option<f64>)>;
+
+/// ECMA-376 §17.16.17 ffData: the run's first legacy checkBox state and size.
+fn run_legacy_checkbox(r_node: roxmltree::Node) -> LegacyCheckbox {
+    r_node
         .descendants()
         .find(|node| node.is_element() && node.tag_name().name() == "checkBox")
         .map(|check_box| {
@@ -6930,14 +7006,38 @@ fn begin_complex_field(field: &mut FieldState, r_node: roxmltree::Node, base_run
                 .and_then(|size| attr_w(size, "val"))
                 .and_then(|value| half_pt_to_pt(&value));
             (checked, size_pt)
-        });
+        })
+}
+
+fn begin_complex_field(
+    field: &mut FieldState,
+    r_node: roxmltree::Node,
+    checkbox_cache: &mut Option<LegacyCheckbox>,
+    control_fmt: &mut impl FnMut() -> RunFmt,
+) {
+    if field.stack.len() >= MAX_OPEN_COMPLEX_FIELDS {
+        // Latch the typed resource error before any per-field work; the
+        // operation fails at its boundary.
+        let _ = ooxml_common::resource::observe_hard_limit(
+            ooxml_common::resource::HardResourceLimitKind::DocxComplexFieldDepth,
+            None,
+            MAX_OPEN_COMPLEX_FIELDS as u64,
+            field.stack.len() as u64 + 1,
+        );
+        return;
+    }
+    let occurrence_id = field.next_occurrence_id;
+    field.next_occurrence_id = field.next_occurrence_id.saturating_add(1);
+    // Every `begin` in a run sees the run's first checkBox; the caller's
+    // per-run cache finds it once however many `begin` markers the run has.
+    let legacy_checkbox = *checkbox_cache.get_or_insert_with(|| run_legacy_checkbox(r_node));
     let legacy_checkbox_checked = legacy_checkbox.map(|(checked, _)| checked);
     let legacy_checkbox_size_pt = legacy_checkbox.and_then(|(_, size)| size);
     let legacy_checkbox_nested = legacy_checkbox.is_some() && !field.stack.is_empty();
     // Legacy form fields keep their visible control formatting on the fldChar
     // begin run. Other complex fields use the first instruction run.
     let legacy_checkbox_fmt = legacy_checkbox_checked.map(|_| {
-        let mut fmt = field_control_run_fmt(r_node, base_run);
+        let mut fmt = control_fmt();
         if let Some(size_pt) = legacy_checkbox_size_pt {
             fmt.font_size = Some(size_pt);
             fmt.font_size_cs = Some(size_pt);
@@ -6960,7 +7060,14 @@ fn separate_complex_field(
     runs: &[DocRun],
     complex_field_boundaries: &mut Vec<ComplexFieldBoundaryWire>,
 ) {
+    let index = field.stack.len().wrapping_sub(1);
     if let Some(frame) = field.top_mut() {
+        // §17.16.18: one `separate` divides instructions from the result. A
+        // repeated marker would only re-derive the same facts and duplicate
+        // the result boundary, so it is ignored.
+        if frame.past_separate {
+            return;
+        }
         frame.past_separate = true;
         // Only locally-computed fields swallow their stored result. Other
         // complex fields render their stored result as ordinary run content.
@@ -6971,6 +7078,12 @@ fn separate_complex_field(
         frame.hyperlink_anchor = semantics.hyperlink_anchor;
         if !frame.substitute {
             complex_field_boundaries.push(complex_field_boundary(frame, "start", runs.len()));
+        }
+        let anchor = (!frame.substitute)
+            .then(|| frame.hyperlink_anchor.clone())
+            .flatten();
+        if let Some(anchor) = anchor {
+            field.result_anchors.push((index, anchor));
         }
     }
 }
@@ -6983,7 +7096,7 @@ fn end_complex_field(
     runs: &mut Vec<DocRun>,
     complex_field_boundaries: &mut Vec<ComplexFieldBoundaryWire>,
 ) {
-    if let Some(mut frame) = field.stack.pop() {
+    if let Some(mut frame) = field.pop_frame() {
         // `separate` can be absent when no stored result exists. Locally
         // computed fields are still complete at `end`.
         if !frame.past_separate {
@@ -7063,14 +7176,34 @@ fn handle_run_in_para(
         .filter(|n| n.is_element())
         .any(|child| matches!(child.tag_name().name(), "fldChar" | "instrText"));
     if has_field_content {
-        let mut visible_children = HashSet::new();
+        // Everything derived from the run itself is computed at most once per
+        // run, however many field markers or visible segments it holds.
+        let run_rpr = child_w(r_node, "rPr");
+        // Resolved lazily: a run whose children are all field markup never
+        // needs it.
+        let mut segment_fmt: Option<RunFmt> = None;
+        let mut control_fmt_cache: Option<RunFmt> = None;
+        let mut control_fmt = || {
+            control_fmt_cache
+                .get_or_insert_with(|| {
+                    let mut fmt = base_run.clone();
+                    if let Some(rpr) = run_rpr {
+                        apply_direct_run(&mut fmt, &parse_run_fmt(rpr));
+                    }
+                    fmt
+                })
+                .clone()
+        };
+        let mut checkbox_cache: Option<LegacyCheckbox> = None;
+        // (first, last) visible children of the current segment.
+        let mut visible: Option<(roxmltree::Node, roxmltree::Node)> = None;
         let mut preserve_segment_boundary = preserve_comment_boundary;
         let mut collect_run_diagnostics = true;
 
         for child in r_node.children().filter(|n| n.is_element()) {
             let child_name = child.tag_name().name();
             if child_name == "fldChar" {
-                if !visible_children.is_empty() {
+                if let Some((first, last)) = visible.take() {
                     parse_run_inner(
                         r_node,
                         base_run,
@@ -7090,15 +7223,23 @@ fn handle_run_in_para(
                         depth,
                         diagnostics,
                         collect_run_diagnostics,
-                        Some(&visible_children),
+                        Some(RunSegment {
+                            first,
+                            last,
+                            rpr: run_rpr,
+                            fmt: segment_fmt.get_or_insert_with(|| {
+                                run_formatting(run_rpr, base_run, style_map)
+                            }),
+                        }),
                     );
                     collect_run_diagnostics = false;
-                    visible_children.clear();
                     preserve_segment_boundary = false;
                 }
 
                 match attr_w(child, "fldCharType").as_deref() {
-                    Some("begin") => begin_complex_field(field, r_node, base_run),
+                    Some("begin") => {
+                        begin_complex_field(field, r_node, &mut checkbox_cache, &mut control_fmt)
+                    }
                     Some("separate") => {
                         separate_complex_field(field, runs, complex_field_boundaries)
                     }
@@ -7118,17 +7259,23 @@ fn handle_run_in_para(
             if child_name == "instrText" {
                 if field.top().is_some_and(|frame| !frame.past_separate) {
                     let needs_fmt = field.top().and_then(|frame| frame.fmt.as_ref()).is_none();
-                    let fmt = needs_fmt.then(|| field_control_run_fmt(r_node, base_run));
+                    let fmt = needs_fmt.then(&mut control_fmt);
+                    let mut became_toc = false;
                     if let Some(frame) = field.top_mut() {
-                        frame.instruction.push_str(child.text().unwrap_or(""));
+                        let text = child.text().unwrap_or("");
+                        frame.instruction.push_str(text);
                         // Classify incrementally so enclosing TOC result runs
                         // receive their display semantics before `separate`.
-                        if classify_toc(&frame.instruction) {
+                        if frame.toc_scan.feed_is_toc(text) && !frame.is_toc {
                             frame.is_toc = true;
+                            became_toc = true;
                         }
                         if let Some(fmt) = fmt {
                             frame.fmt = Some(fmt);
                         }
+                    }
+                    if became_toc {
+                        field.open_toc_frames += 1;
                     }
                 }
                 continue;
@@ -7141,7 +7288,7 @@ fn handle_run_in_para(
                 if child_name == "t" {
                     let text = child.text().unwrap_or("");
                     if !text.is_empty() {
-                        let cached_result_fmt = field_control_run_fmt(r_node, base_run);
+                        let cached_result_fmt = control_fmt();
                         if let Some(frame) = field.top_mut() {
                             frame.fallback.push_str(text);
                             if frame.result_fmt.is_none() {
@@ -7153,11 +7300,12 @@ fn handle_run_in_para(
                 continue;
             }
             if child_name != "rPr" {
-                visible_children.insert(child.id());
+                let first = visible.map_or(child, |(first, _)| first);
+                visible = Some((first, child));
             }
         }
 
-        if !visible_children.is_empty() {
+        if let Some((first, last)) = visible {
             parse_run_inner(
                 r_node,
                 base_run,
@@ -7177,7 +7325,13 @@ fn handle_run_in_para(
                 depth,
                 diagnostics,
                 collect_run_diagnostics,
-                Some(&visible_children),
+                Some(RunSegment {
+                    first,
+                    last,
+                    rpr: run_rpr,
+                    fmt: segment_fmt
+                        .get_or_insert_with(|| run_formatting(run_rpr, base_run, style_map)),
+                }),
             );
         }
         return;
@@ -7243,16 +7397,6 @@ fn handle_run_in_para(
         true,
         None,
     );
-}
-
-/// §17.16.5.69 — true when the field instruction's leading token is `TOC`
-/// (case-insensitive). The instruction may still be partially accumulated; we
-/// only need the first whitespace-delimited token.
-fn classify_toc(instr: &str) -> bool {
-    instr
-        .split_whitespace()
-        .next()
-        .is_some_and(|tok| tok.eq_ignore_ascii_case("TOC"))
 }
 
 struct ComplexFieldSemantics {
@@ -7730,6 +7874,51 @@ fn prepend_anchor_host_metrics(
     }
 }
 
+/// Run formatting: the paragraph-level `base_run`, then the rStyle chain
+/// (§17.3.2.29), then direct rPr. ECMA-376 §17.7.2 (Style Hierarchy) applies
+/// character styles ON TOP of the paragraph's run formatting (Document
+/// defaults < Table < Numbering < Paragraph < Character < Direct); they must
+/// not re-introduce docDefaults or the default paragraph style — those are
+/// already baked into base_run.
+fn run_formatting(
+    rpr_node: Option<roxmltree::Node>,
+    base_run: &RunFmt,
+    style_map: &StyleMap,
+) -> RunFmt {
+    let mut fmt = base_run.clone();
+    if let Some(rpr) = rpr_node {
+        if let Some(rs) = child_w(rpr, "rStyle").and_then(|n| attr_w(n, "val")) {
+            let style_run = style_map.resolve_run_style(&rs);
+            apply_direct_run(&mut fmt, &style_run);
+        }
+        let direct = parse_run_fmt(rpr);
+        apply_direct_run(&mut fmt, &direct);
+    }
+    fmt
+}
+
+/// One visible stretch of a run that also carries complex-field markup: the
+/// element children from `first` to `last` (inclusive siblings) other than
+/// `rPr` and `instrText`, with the run's `rPr` found once for every segment.
+#[derive(Clone, Copy)]
+struct RunSegment<'a, 'input, 'f> {
+    first: roxmltree::Node<'a, 'input>,
+    last: roxmltree::Node<'a, 'input>,
+    rpr: Option<roxmltree::Node<'a, 'input>>,
+    /// [`run_formatting`] of the whole run, resolved once.
+    fmt: &'f RunFmt,
+}
+
+impl<'a, 'input> RunSegment<'a, 'input, '_> {
+    fn children(self) -> impl Iterator<Item = roxmltree::Node<'a, 'input>> {
+        let last = self.last.id();
+        std::iter::successors(Some(self.first), move |node| {
+            (node.id() != last).then(|| node.next_sibling()).flatten()
+        })
+        .filter(|node| node.is_element() && !matches!(node.tag_name().name(), "rPr" | "instrText"))
+    }
+}
+
 // Same parse-context threading as handle_run_in_para.
 #[allow(clippy::too_many_arguments)]
 fn parse_run_inner(
@@ -7755,25 +7944,20 @@ fn parse_run_inner(
     depth: DepthGuard,
     diagnostics: &mut Vec<PendingParseDiagnostic>,
     collect_run_diagnostics: bool,
-    selected_children: Option<&HashSet<roxmltree::NodeId>>,
+    segment: Option<RunSegment<'_, '_, '_>>,
 ) {
-    // Merge run-level formatting
-    let rpr_node = child_w(node, "rPr");
-    let mut fmt = base_run.clone();
-
-    // Apply rStyle (§17.3.2.29). ECMA-376 §17.7.2 (Style Hierarchy) applies
-    // character styles ON TOP of the paragraph's run formatting (Document
-    // defaults < Table < Numbering < Paragraph < Character < Direct); they must
-    // not re-introduce docDefaults or the default paragraph style — those are
-    // already baked into base_run.
-    if let Some(rpr) = rpr_node {
-        if let Some(rs) = child_w(rpr, "rStyle").and_then(|n| attr_w(n, "val")) {
-            let style_run = style_map.resolve_run_style(&rs);
-            apply_direct_run(&mut fmt, &style_run);
+    // Merge run-level formatting. A field-bearing run resolves it once for
+    // all of its visible segments.
+    let (rpr_node, mut fmt) = match segment {
+        // A hidden run is skipped below before any copy is needed; check the
+        // shared formatting first so hidden segments cost nothing.
+        Some(segment) if segment.fmt.vanish.unwrap_or(false) => return,
+        Some(segment) => (segment.rpr, segment.fmt.clone()),
+        None => {
+            let rpr_node = child_w(node, "rPr");
+            (rpr_node, run_formatting(rpr_node, base_run, style_map))
         }
-        let direct = parse_run_fmt(rpr);
-        apply_direct_run(&mut fmt, &direct);
-    }
+    };
 
     // Skip hidden runs entirely
     if fmt.vanish.unwrap_or(false) {
@@ -7933,10 +8117,11 @@ fn parse_run_inner(
     // otherwise erase that boundary; ordinary run children retain their order.
     let mut preserve_next_comment_boundary = preserve_comment_boundary;
 
-    for child in node.children().filter(|n| n.is_element()) {
-        if selected_children.is_some_and(|selected| !selected.contains(&child.id())) {
-            continue;
-        }
+    let children: Box<dyn Iterator<Item = roxmltree::Node>> = match segment {
+        Some(segment) => Box::new(segment.children()),
+        None => Box::new(node.children().filter(|n| n.is_element())),
+    };
+    for child in children {
         let merge_here = merge_into_prev_text;
         merge_into_prev_text = false;
         match child.tag_name().name() {
@@ -13962,7 +14147,7 @@ fn resolve_wps_line_ref(
     let StyleMatrixLookup::Entry(entry) = theme.format_scheme.lookup_line_ref(index) else {
         return None;
     };
-    let entry_xml = entry.to_xml();
+    let entry_xml = entry.to_xml().ok()?;
     let document = roxmltree::Document::parse(&entry_xml).ok()?;
     let line = document.root_element().children().find(|node| {
         node.is_element()
@@ -14143,7 +14328,7 @@ fn resolve_fill_ref(fill_ref: roxmltree::Node, theme: &ThemeColors) -> Option<Sh
     let StyleMatrixLookup::Entry(entry) = theme.format_scheme.lookup_fill_ref(idx) else {
         return None;
     };
-    let entry_xml = entry.to_xml();
+    let entry_xml = entry.to_xml().ok()?;
     let doc = parse_guarded(&entry_xml).ok()?;
     let fill = doc
         .root_element()

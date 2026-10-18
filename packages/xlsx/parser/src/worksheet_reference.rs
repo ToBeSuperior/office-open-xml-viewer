@@ -665,7 +665,10 @@ fn hidden_columns_from_shell(shell_xml: &str) -> BTreeMap<u32, bool> {
     let Ok(document) = parse_guarded(shell_xml) else {
         return BTreeMap::new();
     };
-    let mut hidden = BTreeMap::new();
+    // Merge the authored ranges before expanding them: every hidden `<col>`
+    // may span all 16 384 columns, so per-declaration expansion would be
+    // quadratic in the number of declarations.
+    let mut ranges = Vec::new();
     for column in document.descendants().filter(|node| {
         node.is_element()
             && node.tag_name().name() == "col"
@@ -685,9 +688,16 @@ fn hidden_columns_from_shell(shell_xml: &str) -> BTreeMap<u32, bool> {
             .filter(|value| *value >= min)
             .unwrap_or(min)
             .min(MAX_COL);
-        for index in min..=max {
+        ranges.push((min, max));
+    }
+    ranges.sort_unstable();
+    let mut hidden = BTreeMap::new();
+    let mut next = 1;
+    for (min, max) in ranges {
+        for index in min.max(next)..=max {
             hidden.insert(index, true);
         }
+        next = next.max(max.saturating_add(1));
     }
     hidden
 }
@@ -1980,5 +1990,21 @@ mod tests {
             .and_then(Option::as_ref)
             .expect("source index is cached");
         assert_eq!(indexed.cells.len(), ROWS * COLS);
+    }
+}
+
+#[cfg(test)]
+mod hidden_column_shell_tests {
+    use super::hidden_columns_from_shell;
+
+    #[test]
+    fn overlapping_hidden_declarations_mark_each_column_once() {
+        let shell = format!(
+            r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><cols>{}<col min="20" max="30" hidden="1"/><col min="5" max="9" hidden="true"/><col min="40" hidden="1"/><col min="50" max="60"/></cols><sheetData/></worksheet>"#,
+            r#"<col min="1" max="3" hidden="1"/>"#.repeat(3)
+        );
+        let hidden: Vec<u32> = hidden_columns_from_shell(&shell).into_keys().collect();
+        let expected: Vec<u32> = (1..=3).chain(5..=9).chain(20..=30).chain([40]).collect();
+        assert_eq!(hidden, expected);
     }
 }

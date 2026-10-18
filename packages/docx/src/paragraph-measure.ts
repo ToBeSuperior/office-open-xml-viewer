@@ -87,6 +87,9 @@ export interface MeasuredParagraph {
   readonly markGridAfterLeadingPt?: number;
   /** Selected empty-mark wrap gap, retained for measurement-free shading. */
   readonly markWrapBounds?: { readonly xPt: number; readonly yPt: number; readonly widthPt: number; readonly heightPt: number };
+  /** An empty numbered item whose marker leading edge a float moved: that
+   * edge, logical pt from the leading indent (placeNumberingFirstLine). */
+  readonly markNumberingLeadingEdgePt?: number;
   readonly requestedSpaceBeforePt: number;
   readonly requestedSpaceAfterPt: number;
   /** Established paragraph-wide ruby allocation in points, snapped to docGrid
@@ -218,8 +221,13 @@ export function measureParagraph(
   // then the line rule). The baseline sits four fifths down an exact line,
   // the mark's descent above the bottom of an atLeast line, and at the union
   // ascent of an automatic line, whose added leading falls below it.
+  // The controls are compatibility mode 15, exact lines within the 12-30pt
+  // interval of WORD_SPECIFIED_TEXT_LINE_BOX; other classes keep their path.
+  const markSpacing = context.lineSpacing;
   const textMarkerAscentPt = !continuation && firstLinePictureMarkerHeightPt === undefined
+    && environment.compatibilityMode === 15
     && !context.lineGrid.active && !context.hasRuby
+    && !(markSpacing?.rule === 'exact' && (markSpacing.value < 12 || markSpacing.value > 30))
     ? environment.markOnlyTextMarkerAscentPt : undefined;
   const textMarkerMarkBelowBaselinePt = (advancePt: number, ascentPt: number, descentPt: number) => {
     const spacing = context.lineSpacing;
@@ -246,6 +254,7 @@ export function measureParagraph(
     );
     const markAdvancePt = markMetrics.advancePx;
     let markWrapBounds: MeasuredParagraph['markWrapBounds'];
+    let markNumberingLeadingEdgePt: number | undefined;
     if (placement.wrap) {
       const window = placement.wrap.lineWindow({
         topYPt: markTopPt,
@@ -263,6 +272,26 @@ export function measureParagraph(
         columnWidthPt: placement.availableWidthPt,
       });
       markTopPt = window.topYPt;
+      const numbering = environment.numberingFirstLine;
+      if (numbering && !continuation) {
+        // The marker hosts on this mark line exactly as on a first text line
+        // (placeNumberingFirstLine): query the band widened by the authored
+        // hanging indent and place the marker at the moved leading edge.
+        const authored = numbering.authoredFirstIndentPx;
+        const hanging = Math.min(0, authored);
+        const band = placement.wrap.lineWindow({
+          topYPt: markTopPt, minimumStartWidthPt: 0, squareMinimumStartWidthPt: 0,
+          probeHeightPt: markAdvancePt,
+          paragraphXPt: paragraphXPt + (context.baseRtl ? 0 : hanging),
+          maximumWidthPt: paragraphWidthPt - hanging,
+          columnXPt: placement.paragraphXPt, columnWidthPt: placement.availableWidthPt,
+        });
+        const windowEdge = context.baseRtl
+          ? paragraphWidthPt - (band.xOffsetPt + band.maximumWidthPt)
+          : hanging + band.xOffsetPt;
+        const leadingEdge = Math.max(Math.max(0, windowEdge) + authored, windowEdge);
+        if (band.topYPt === markTopPt && leadingEdge > authored) markNumberingLeadingEdgePt = leadingEdge;
+      }
       if (window.xOffsetPt !== 0 || window.maximumWidthPt !== paragraphWidthPt) {
         markWrapBounds = { xPt: paragraphXPt + window.xOffsetPt, yPt: markTopPt,
           widthPt: window.maximumWidthPt, heightPt: markAdvancePt };
@@ -282,6 +311,7 @@ export function measureParagraph(
       : undefined;
     return {
       ...(markWrapBounds ? { markWrapBounds } : {}),
+      ...(markNumberingLeadingEdgePt === undefined ? {} : { markNumberingLeadingEdgePt }),
       ...(markPictureBaselineOffsetPt === undefined ? {} : { markPictureBaselineOffsetPt }),
       lines: [],
       markOnly: true,
@@ -347,7 +377,8 @@ export function measureParagraph(
   // (§17.3.3.25 describes the guide above the base; §17.6.5 supplies grid cells).
   // Resolve the complete physical unions before querying floats: a per-fragment
   // reserve cannot determine either a probe band or the next physical origin.
-  const specifiedParagraph = specifiedTextParagraphIsHomogeneous(paragraph, context.lineGrid.active);
+  const specifiedParagraph = specifiedTextParagraphIsHomogeneous(paragraph,
+    context.lineGrid.active || environment.compatibilityMode !== 15);
   const allocateLines = (lines: readonly LayoutLine[]) => {
     let uniformRubyAdvancePt = context.hasRuby
       ? snapParagraphLineToGrid(
@@ -396,41 +427,57 @@ export function measureParagraph(
         : fragment;
       // Windows Word 16.0 #1883 controls keep the same marker union beside a
       // square-wrapped float (a 42pt Symbol bullet raises the first line).
-      const markerBox = lineIndex === 0 && !continuation
+      // WORD_NUMBERING_MARKER_FIRST_LINE_UNION. Windows Word 16.0 #1884/#1883
+      // controls (compatibility mode 15: Arial 10pt / Times New Roman 12pt
+      // bodies, 6-20pt Symbol bullets and Arial numbers, auto 1/1.5/2 and
+      // atLeast 18/30/60, beside square floats): a taller marker raises the
+      // first physical line (every float fragment of it) by its own ascent
+      // with line gap; the line keeps the text's descent. Other modes keep
+      // the earlier union of both sides without floats or atLeast.
+      const windowsMarkerUnion = environment.compatibilityMode === 15;
+      const onFirstPhysicalLine = lineIndex === 0 || (windowsMarkerUnion
+        && lines[0]?.physicalLineIndex !== undefined
+        && fragment.physicalLineIndex === lines[0]!.physicalLineIndex);
+      const markerBox = onFirstPhysicalLine && !continuation
+        && (windowsMarkerUnion || !placement.wrap)
         && !context.lineGrid.active
-        && (context.lineSpacing == null || context.lineSpacing.rule === 'atLeast'
+        && (context.lineSpacing == null
+          || (windowsMarkerUnion && context.lineSpacing.rule === 'atLeast')
           || (context.lineSpacing.rule === 'auto' && context.lineSpacing.value >= 1))
         && !context.hasRuby
         && !originalLine.uniformPositionAuto && !originalLine.inlinePictureTextSingle
         ? environment.firstLineNumberingMarkerBox : undefined;
-      // Windows Word 16.0 (#1884 controls: Arial 10pt / Times New Roman 12pt
-      // bodies, 6-20pt Symbol bullets and Arial numbers, auto 1/1.5/2 and
-      // atLeast 18/30/60): a taller marker raises the first line by its own
-      // ascent (with its line gap, as text ascents carry it); the line keeps
-      // the text's descent, so the next line follows one text line below.
       const markerAscent = markerBox?.ascentPt;
-      const line = markerAscent !== undefined && Number.isFinite(markerAscent)
-        && markerAscent > originalLine.ascent
-        ? {
-            ...originalLine,
-            ascent: markerAscent,
-            visibleAscent: Math.max(originalLine.visibleAscent ?? originalLine.ascent, markerAscent),
-          }
-        : originalLine;
+      const markerDescent = markerBox?.descentPt;
+      const line = windowsMarkerUnion
+        ? (markerAscent !== undefined && Number.isFinite(markerAscent)
+          && markerAscent > originalLine.ascent
+          ? {
+              ...originalLine,
+              ascent: markerAscent,
+              visibleAscent: Math.max(originalLine.visibleAscent ?? originalLine.ascent, markerAscent),
+            }
+          : originalLine)
+        : markerAscent !== undefined && markerDescent !== undefined
+          && Number.isFinite(markerAscent) && Number.isFinite(markerDescent)
+          ? {
+              ...originalLine,
+              ascent: Math.max(originalLine.ascent, markerAscent),
+              descent: Math.max(originalLine.descent, markerDescent),
+              visibleAscent: Math.max(originalLine.visibleAscent ?? originalLine.ascent, markerAscent),
+              visibleDescent: Math.max(originalLine.visibleDescent ?? originalLine.descent, markerDescent),
+              intendedSingle: Math.max(originalLine.intendedSingle, markerBox?.intendedSinglePt ?? 0),
+              visibleIntendedSingle: Math.max(originalLine.visibleIntendedSingle ?? originalLine.intendedSingle,
+                markerBox?.intendedSinglePt ?? 0),
+            }
+          : originalLine;
       const textSinglePt = Math.max(
         originalLine.ascent + originalLine.descent,
         originalLine.intendedSingle,
       );
-      // ECMA-376 §17.9.6 supplies marker rPr and §17.3.1.33 the auto multiple,
-      // No inherited line value means single spacing (§17.3.1.33 @line), so
-      // omitted spacing and explicit auto1 use the same selected glyph union.
-      // The spec does not specify that union. Controlled Word omitted/auto1
-      // pairs independently agree, including a different marker face. Pagination
-      // uses the same allocation, including at keepNext boundaries.
-      // This selected-face projection is limited to non-grid text markers; other classes
-      // retain their established allocation.
       void WORD_NUMBERING_MARKER_FIRST_LINE_UNION;
-      const markerNaturalPt = line.ascent + line.descent;
+      const markerNaturalPt = windowsMarkerUnion ? line.ascent + line.descent
+        : Math.max(line.ascent + line.descent, markerBox?.intendedSinglePt ?? 0);
       const markerRaisesBox = line !== originalLine
         && markerNaturalPt > textSinglePt;
       const specified = specifiedParagraph

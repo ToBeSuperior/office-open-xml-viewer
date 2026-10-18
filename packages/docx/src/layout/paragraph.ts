@@ -1576,6 +1576,10 @@ function textPlacement(
         measure: true,
       })
     : undefined;
+  // Each guide grapheme is painted alone at its contextual prefix offset.
+  // Those offsets already carry the shaping decision (including
+  // WORD_ARABIC_PAIR_KERNING), and a single grapheme has no pair to kern, so
+  // the paint operations need no kerning state of their own.
   const rubySpans = segment.ruby && rubyShape
     ? (rubyShape.clusters ?? []).map((cluster) => {
         const span = rubyShape.spans.find((candidate) =>
@@ -1731,6 +1735,13 @@ function textPlacement(
   };
 }
 
+/** WORD_RUBY_LINE_ASCENT's measured class: a ruby line whose every guide has
+ * an authored hpsRaise (the absent-raise reserve is unmeasured). */
+function measuredRubyLine(raw: MeasuredParagraph['lines'][number]['layout']): boolean {
+  return raw.hasRuby === true && raw.segments.every((segment) =>
+    !('ruby' in segment) || !segment.ruby || segment.ruby.hpsRaisePt != null);
+}
+
 function plannedBaselinePt(
   measuredLine: MeasuredParagraph['lines'][number],
   context: ParagraphLayoutContext,
@@ -1745,7 +1756,7 @@ function plannedBaselinePt(
   // Lines without ruby in a ruby paragraph (its uniform reserve) are
   // unmeasured and stay centred.
   const autoMultiple = context.lineSpacing?.rule === 'auto'
-    && (!context.hasRuby || raw.hasRuby === true)
+    && (!context.hasRuby || measuredRubyLine(raw))
     && !context.lineGrid.active;
   const compressedAuto = autoMultiple && (context.lineSpacing?.value ?? 1) < 1;
   const centerBoxPt = autoMultiple && !compressedAuto
@@ -1805,7 +1816,8 @@ function numberingFirstLineWindow(
     authoredFirstIndentPx: paragraph.indentFirst,
     bodyIndentAt: (markerLeadingEdgePx) => resolveNumberingMarkerGeometry(numbering, markerInput, {
       authoredFirstIndentPt: markerLeadingEdgePx,
-      physicalIndentLeftPt: context.physicalIndentLeftPt,
+      // Tab stops are measured from the leading margin: the right one in RTL.
+      physicalIndentLeftPt: context.baseRtl ? context.physicalIndentRightPt : context.physicalIndentLeftPt,
       tabStops: paragraph.tabStops,
       defaultTabPt: context.defaultTabPt,
     }, service).bodyOffsetPt,
@@ -2630,7 +2642,8 @@ function planMeasuredLines(
     && /^[+\-(]?[\d., ]+\)?%?$/u.test(visibleText)
       ? earliestTab.pos - context.physicalIndentLeftPt
       : undefined;
-  const specifiedParagraph = specifiedTextParagraphIsHomogeneous(paragraph, context.lineGrid.active);
+  const specifiedParagraph = specifiedTextParagraphIsHomogeneous(paragraph,
+    context.lineGrid.active || compatibilityMode !== 15);
   return retainPhysicalLines(measured.lines.map((measuredLine, lineIndex) => {
     const raw = measuredLine.layout;
     // The measured allocation's first-line marker union (paragraph-measure.ts):
@@ -2646,16 +2659,16 @@ function planMeasuredLines(
     // text; 3-10pt guides raised 0-19pt): a ruby line keeps the four-fifths
     // exact partition of WORD_SPECIFIED_TEXT_LINE_BOX, within its 12-30pt
     // evidence interval; the guide may overhang the line top.
-    const exactRubyLine = !specified && raw.hasRuby === true
+    const exactRubyLine = !specified && measuredRubyLine(raw)
       && context.lineSpacing?.rule === 'exact' && context.lineSpacing.value >= 12
       && context.lineSpacing.value <= 30
-      && (compatibilityMode === 14 || compatibilityMode === 15)
+      && compatibilityMode === 15
       && !context.lineGrid.active && raw.topY === undefined;
     // Under atLeast the added leading falls before the line, which keeps its
     // own descent above the bottom (atLeast 18pt, the same controls).
-    const atLeastRubyLine = !specified && raw.hasRuby === true
+    const atLeastRubyLine = !specified && measuredRubyLine(raw)
       && context.lineSpacing?.rule === 'atLeast'
-      && (compatibilityMode === 14 || compatibilityMode === 15)
+      && compatibilityMode === 15
       && !context.lineGrid.active && raw.topY === undefined;
     const baselinePt = specified
       ? measuredLine.topYPt + specified.baselineOffsetPt
@@ -5814,7 +5827,8 @@ function projectAcquiredParagraph(
     }
   }
   const firstLineMovedMarkerEdgePx = options.continuesFromPrevious
-    ? undefined : measured.lines[0]?.layout.numberingFirstLine?.leadingEdgePx;
+    ? undefined : measured.lines[0]?.layout.numberingFirstLine?.leadingEdgePx
+      ?? measured.markNumberingLeadingEdgePt;
   if (numberingPlan && lines[0]) {
     const markerPlacements = numberingMarkerPlacements(
       numberingPlan, paragraph, options.context, paragraphXPt, availableWidthPt, lines[0],

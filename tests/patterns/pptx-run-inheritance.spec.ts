@@ -172,13 +172,15 @@ test('browser parser carries all inherited attributes through runs, fields, brea
   expect(parsed.breaks[1].endRunProperties.fontSize).toBe(96);
   expect(parsed.table).toHaveLength(2);
   for (const run of parsed.table) {
-    expect(run).toMatchObject({ bold: true, fontSize: 28, color: 'D21D54' });
+    // A defPPr size has no effect in PowerPoint (#1620 controls); its other
+    // character properties still cascade into cell runs and fields.
+    expect(run).toMatchObject({ bold: true, fontSize: null, color: 'D21D54' });
     expect(run.characterAttributes.lang).toBe('ja-JP');
     expect(run.fontFamilyCs).toBe('Amiri');
   }
 });
 
-test('authored break size changes the line box in both browser paint paths', async ({ page }) => {
+test('an a:br after text sizes its line with the preceding run in both browser paint paths', async ({ page }) => {
   await page.goto(url);
   await expect(page.locator('body')).toHaveAttribute('data-ready', 'true');
   const bytes = [...await readFile(fixturePath)];
@@ -205,12 +207,14 @@ test('authored break size changes the line box in both browser paint paths', asy
       return { mode, normal: bands(image, 50, 580), large: bands(image, 650, 1230) };
     }));
   }, bytes);
+  // PowerPoint sizes a line-break mark that follows text at the size of the
+  // run before it, never at its own (#1636 controls; renderer.ts
+  // followingMark). The 24 pt and 72 pt breaks after 24 pt text therefore
+  // produce the same line boxes, and the 96 pt endParaRPr after the final run
+  // does not grow the last line either.
   for (const result of results) {
     expect(result.normal.length, result.mode).toBeGreaterThanOrEqual(2);
-    expect(result.large.length, result.mode).toBeGreaterThanOrEqual(2);
-    expect(result.large[0] - result.normal[0], result.mode).toBeGreaterThan(40);
-    expect(result.large[1] - result.large[0], result.mode)
-      .toBeGreaterThan(result.normal[1] - result.normal[0] + 10);
+    expect(result.large, result.mode).toEqual(result.normal);
   }
   expect(results[0]).toMatchObject({ normal: results[1].normal, large: results[1].large });
 });

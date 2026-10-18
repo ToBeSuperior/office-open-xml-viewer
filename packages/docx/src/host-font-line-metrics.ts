@@ -162,9 +162,26 @@ export async function prepareDocxHostFontMetrics(
   return { ...loaded, routes };
 }
 
+/** LIBRARY_SYNTHESIZED_FACE_LINE_GEOMETRY compares a styled run against the
+ * regular face it may be synthesized from, so a family used only in a styled
+ * tuple the catalog lacks also loads its catalogued regular face. */
+function withSynthesisSources(
+  requests: Parameters<typeof loadOfficeFontFallbacks>[0],
+): Parameters<typeof loadOfficeFontFallbacks>[0] {
+  const extra = requests.flatMap((request) => {
+    const weight = request.weight ?? 400;
+    const style = request.style ?? 'normal';
+    if (request.presenceOnly || (weight === 400 && style === 'normal')) return [];
+    if (findReferenceFontMetrics(request.family, { weight, style }).length > 0) return [];
+    if (findReferenceFontMetrics(request.family, { weight: 400, style: 'normal' }).length === 0) return [];
+    return [{ family: request.family, weight: 400, style: 'normal' as const }];
+  });
+  return extra.length === 0 ? requests : [...requests, ...extra];
+}
+
 export async function loadDocxOfficeFontFallbacks(
   ...args: Parameters<typeof loadOfficeFontFallbacks>
 ): ReturnType<typeof loadOfficeFontFallbacks> {
-  const loaded = await loadOfficeFontFallbacks(...args);
+  const loaded = await loadOfficeFontFallbacks(withSynthesisSources(args[0]), args[1]);
   return prepareDocxHostFontMetrics(loaded, args[1] === undefined ? activeFontSet() : args[1]);
 }

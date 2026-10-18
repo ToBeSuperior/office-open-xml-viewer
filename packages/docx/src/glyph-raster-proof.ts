@@ -109,7 +109,7 @@ let graphemes: Intl.Segmenter | null | undefined;
  */
 export function ownsGlyphs(request: Readonly<GlyphOwnershipRequest>): boolean {
   const text = request.text;
-  if (!text.trim()) return false;
+  if (!text) return false;
   if (graphemes === undefined) {
     graphemes = typeof Intl !== 'undefined' && 'Segmenter' in Intl
       ? new Intl.Segmenter(undefined, { granularity: 'grapheme' }) : null;
@@ -118,15 +118,19 @@ export function ownsGlyphs(request: Readonly<GlyphOwnershipRequest>): boolean {
   const font = `${request.style} ${request.weight} 100px ${quoteCssFontFamily(request.coverageProbeFamily)}`;
   let context: RasterContext | null | undefined;
   for (const part of parts) {
-    if (!part.trim()) continue;
     const key = `${font}\u0000${part}`;
     let owned = ownership.get(key);
     if (owned === undefined) {
       context ??= sharedContext(1, PROBE_EM_PX * 2);
       if (!context) return false;
       context.font = font;
-      const width = context.measureText(part).width;
-      owned = width === 0;
+      // Owned glyphs keep zero advance AND zero ink (the outlines scale too);
+      // a fallback, even a zero-advance combining mark, keeps positive ink.
+      const metrics = context.measureText(part);
+      const inkWidth = (metrics.actualBoundingBoxLeft ?? 0) + (metrics.actualBoundingBoxRight ?? 0);
+      const inkHeight = (metrics.actualBoundingBoxAscent ?? 0) + (metrics.actualBoundingBoxDescent ?? 0);
+      owned = metrics.width === 0 && Number.isFinite(inkWidth) && Number.isFinite(inkHeight)
+        && inkWidth <= 0 && inkHeight <= 0;
       if (ownership.size >= OWNERSHIP_LIMIT) ownership.clear();
       ownership.set(key, owned);
     }

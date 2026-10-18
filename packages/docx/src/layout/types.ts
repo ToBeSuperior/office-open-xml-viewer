@@ -264,13 +264,13 @@ export interface TextRange {
 export type TextDirection = 'ltr' | 'rtl';
 /** `sideways-lr` is the counter-clockwise frame (lines advance upward, later
  * lines to the right, every glyph rotated with the page). Only a native
- * {@link NativeSectionFlow} selects it; no OOXML token does. */
+ * {@link SectionFlow} selects it; no OOXML token does. */
 export type WritingMode = 'horizontal-tb' | 'vertical-rl' | 'vertical-lr' | 'sideways-lr';
 
-/** Canonical per-section semantics normalized once from a native MS-DOC flow
+/** Canonical per-section semantics normalized once from a producer's flow
  * that no Transitional ST_TextDirection token expresses in this library:
- * MS-ODRAW 2.4.5 BtoT (upward, later lines rightward, glyph tops left). */
-export type NativeSectionFlow = 'bottomToTop';
+ * bottom to top (upward, later lines rightward, glyph tops left). */
+export type SectionFlow = 'bottomToTop';
 
 export type TextDecorationLayout = Readonly<{
   kind: 'underline' | 'strikethrough' | 'overline';
@@ -1025,8 +1025,8 @@ export interface StoryLayout {
   readonly bandDependent?: true;
 }
 
-/** Page-owned occurrence of one native reserved separator story (MS-DOC
- * 2.3.3): the separator or continuation separator leading a page's note band
+/** Page-owned occurrence of one reserved separator story: the separator or
+ * continuation separator leading a page's note band
  * (ECMA-376 §17.11.23 / §17.11.1), or the continuation notice ending a page on
  * which a note continues (§17.18.33). The canonical reserved source is shared
  * by every occurrence; geometry belongs to this destination page. */
@@ -1048,7 +1048,7 @@ export interface NoteSeparatorLayout {
 export interface NoteLayout extends LayoutNodeBase {
   readonly kind: 'note';
   /** Scalar library rule of the modern/absent-native path. Empty when a
-   * native {@link leading} occurrence owns the separator. */
+   * reserved {@link leading} occurrence owns the separator. */
   readonly separator: readonly BorderSegment[];
   readonly leading?: NoteSeparatorLayout;
   readonly story: StoryLayout;
