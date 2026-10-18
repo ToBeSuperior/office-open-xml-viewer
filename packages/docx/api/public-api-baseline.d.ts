@@ -2454,6 +2454,8 @@ export type ShapeFill = {
 };
 export interface ShapeRun {
     inline?: boolean;
+    inlineOffsetXPt?: number;
+    inlineOffsetYPt?: number;
     widthPt: number;
     heightPt: number;
     anchorXPt: number;

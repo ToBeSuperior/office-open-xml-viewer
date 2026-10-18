@@ -1961,6 +1961,13 @@ pub struct ShapeRun {
     /// participates in paragraph line flow like a glyph-sized drawing object.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub inline: bool,
+    /// Paint offset (pt) of an inline shape from its pen position: a VML
+    /// position:relative shape's left/top (ECMA-376 Part 4 §19.1.2.19). The
+    /// line advance is unchanged.
+    #[serde(skip_serializing_if = "is_zero_f64")]
+    pub inline_offset_x_pt: f64,
+    #[serde(skip_serializing_if = "is_zero_f64")]
+    pub inline_offset_y_pt: f64,
     /// pt
     pub width_pt: f64,
     /// pt

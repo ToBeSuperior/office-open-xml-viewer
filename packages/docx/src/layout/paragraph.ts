@@ -341,6 +341,8 @@ export interface MeasuredInlineDrawingPlanSegment {
   readonly widthPt: number;
   readonly heightPt: number;
   readonly topOffsetPt: number;
+  /** Relative paint offset from the pen position; the advance is unchanged. */
+  readonly leftOffsetPt?: number;
   readonly drawingId: string;
 }
 
@@ -1020,7 +1022,7 @@ export function planLine(input: PlanLineInput): LineLayout {
         range: segment.range,
         drawingId: segment.drawingId,
         bounds: {
-          xPt,
+          xPt: xPt + (segment.kind === 'inline-drawing' ? segment.leftOffsetPt ?? 0 : 0),
           yPt: line.baselinePt + segment.topOffsetPt,
           widthPt: segment.widthPt,
           heightPt: segment.heightPt,
@@ -2850,7 +2852,8 @@ function planMeasuredLines(
             measuredWidthPt: image.measuredWidth,
             widthPt: image.widthPt,
             heightPt: image.heightPt,
-            topOffsetPt: -image.heightPt,
+            topOffsetPt: -image.heightPt + (image.inlineOffsetYPt ?? 0),
+            ...(image.inlineOffsetXPt ? { leftOffsetPt: image.inlineOffsetXPt } : {}),
           });
           sourceOffset = Math.max(sourceOffset, segmentOffset + occurrenceLength);
           continue;

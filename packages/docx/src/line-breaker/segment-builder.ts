@@ -1886,6 +1886,8 @@ function appendRunsToSegments(
         anchorXFromMargin: false,
         anchorYFromPara: false,
         inlineShape: true,
+        ...(run.inlineOffsetXPt ? { inlineOffsetXPt: run.inlineOffsetXPt } : {}),
+        ...(run.inlineOffsetYPt ? { inlineOffsetYPt: run.inlineOffsetYPt } : {}),
         measuredWidth: 0,
       });
     } else if (run.type === 'unavailableDrawing') {
