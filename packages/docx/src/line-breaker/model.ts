@@ -128,6 +128,9 @@ export interface LayoutTextSeg extends LayoutSegSource {
   /** Metadata-only vertical reference for a native authored family. It grants
    * no width, cmap, resource ownership, shaping, or paint-route authority. */
   referenceFontVerticalMetric?: true;
+  /** The admitted reference face's own underline / strikethrough geometry
+   *  (set only with `referenceFontVerticalMetric`). */
+  referenceFontDecoration?: import('@silurus/ooxml-core/internal/font-decoration').FontDecorationGeometry;
   resolvedDesignAscentRatio?: number;
   resolvedDesignDescentRatio?: number;
   resolvedEastAsianLineHeightRatio?: number;

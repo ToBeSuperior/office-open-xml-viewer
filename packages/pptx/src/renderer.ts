@@ -735,9 +735,15 @@ const hexToRgba = hexToRgbaCore;
  * drawn so they (and any underline / strikethrough) sit on top, and before any
  * shadow is set on the context so the box itself isn't shadowed. `width` is the
  * glyph advance computed by the caller (it differs between the normal and
- * tab-stop paths only by the justification stretch added to it). The vertical
- * band comes from the shared `highlightBox` helper. Restore the resolved glyph
- * paint, which may be a CanvasPattern, before the subsequent fillText.
+ * tab-stop paths only by the justification stretch added to it). Restore the
+ * resolved glyph paint, which may be a CanvasPattern, before the subsequent
+ * fillText.
+ *
+ * With the face's #1610 metrics, the band is the face's glyph box (usWin, or
+ * typo under USE_TYPO_METRICS) ending at the bottom of the run's 1.2 x size
+ * line box: Windows PowerPoint 16.0.20430 #1896 controls (Arial, Times New
+ * Roman, Calibri at 48 pt, mixed sizes, lnSpc 150 %). Otherwise the shared
+ * `highlightBox` library band applies.
  */
 export function paintHighlight(
   ctx: CanvasRenderingContext2D,
@@ -747,8 +753,16 @@ export function paintHighlight(
   fontPx: number,
   highlight: string,
   glyphPaint: string | CanvasGradient | CanvasPattern,
+  metric?: PowerPointFaceMetrics,
 ): void {
-  const { top, height } = highlightBox(baseline, fontPx);
+  const glyph = metric?.glyph;
+  const { top, height } = metric && glyph
+    ? (() => {
+        const bottom = baseline + 1.2 * fontPx * (1 - metric.share);
+        const extent = (glyph.ascent + glyph.descent) * fontPx;
+        return { top: bottom - extent, height: extent };
+      })()
+    : highlightBox(baseline, fontPx);
   ctx.fillStyle = highlight;
   ctx.fillRect(x, top, width, height);
   ctx.fillStyle = glyphPaint;
@@ -786,9 +800,14 @@ function paintRunUnderline(ctx: CanvasRenderingContext2D, seg: LayoutSegment,
         ? resolveFillCore(seg.underlineLine.fill, ctx, x, baseline, width,
             drawSizePx * DECORATION_LINE_WIDTH_EM, 0, scale * PT_TO_EMU) ?? 'rgba(0,0,0,0)'
         : seg.underlineColor ?? glyphPaint;
+    const decoration = seg.lineMetric?.decoration;
     drawUnderline(ctx, x, baseline, width, drawSizePx,
       underlinePaint, seg.underlineStyle, dpr,
-      seg.underlineLine?.width ? emuToPx(seg.underlineLine.width, scale) : undefined);
+      seg.underlineLine?.width ? emuToPx(seg.underlineLine.width, scale) : undefined,
+      decoration ? {
+        topPx: decoration.underlineTopEm * drawSizePx,
+        thicknessPx: decoration.underlineThicknessEm * drawSizePx,
+      } : undefined);
   }
 }
 
@@ -797,7 +816,13 @@ function paintRunStrike(ctx: CanvasRenderingContext2D, seg: LayoutSegment,
   dpr: number): void {
   const drawSizePx = seg.drawSizePx ?? seg.sizePx;
   if (seg.strikethrough && !seg.noFill) {
-    const lineW = Math.max(1, drawSizePx * DECORATION_LINE_WIDTH_EM);
+    // The face's own strikeout (OS/2 yStrikeoutPosition top, yStrikeoutSize)
+    // when catalogued; a double strike puts one band on each side of it
+    // (Windows PowerPoint 16.0.20430, #1896 controls).
+    const decoration = seg.lineMetric?.decoration;
+    const lineW = decoration
+      ? decoration.strikeThicknessEm * drawSizePx
+      : Math.max(1, drawSizePx * DECORATION_LINE_WIDTH_EM);
     ctx.strokeStyle = glyphPaint;
     ctx.lineWidth = lineW;
     ctx.setLineDash([]);
@@ -806,13 +831,15 @@ function paintRunStrike(ctx: CanvasRenderingContext2D, seg: LayoutSegment,
     // y onto the nearest crisp device position (otherwise it straddles two
     // rows → blurry). Snap each line from its own y.
     // Strike rise and width: core library policy (see text/underline.ts).
-    const yMid = baseline - drawSizePx * STRIKE_RISE_EM;
+    const yMid = decoration
+      ? baseline + decoration.strikeTopEm * drawSizePx + lineW / 2
+      : baseline - drawSizePx * STRIKE_RISE_EM;
     if (seg.strikeDouble) {
-      // Two parallel lines straddling the standard strike position, each
-      // 0.9 line widths from it (library policy; ST_TextStrikeType
-      // §20.1.10.79 `dblStrike` gives no spacing and no Office measurement
-      // is recorded).
-      const offset = lineW * 0.9;
+      // Two parallel lines straddling the strike position: one line width
+      // from it with the face's own strikeout (#1896 controls), else 0.9
+      // line widths (library policy; ST_TextStrikeType §20.1.10.79
+      // `dblStrike` gives no spacing).
+      const offset = decoration ? lineW : lineW * 0.9;
       const yUp = yMid - offset;
       const yDn = yMid + offset;
       ctx.beginPath();
@@ -6001,7 +6028,7 @@ export function renderTextBody(
         const hlW = measureTextAdvance(ctx, seg.text, ls)
           + internalStretch
           + jext;
-        paintHighlight(ctx, penX, segBaseline, hlW, drawSizePx, seg.highlight, glyphPaint);
+        paintHighlight(ctx, penX, segBaseline, hlW, drawSizePx, seg.highlight, glyphPaint, seg.lineMetric);
       }
 
       // noFill is the GLYPH fill choice (§21.1.2.3.9).  It does not erase an

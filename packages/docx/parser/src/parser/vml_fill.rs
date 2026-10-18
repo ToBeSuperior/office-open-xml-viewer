@@ -217,9 +217,15 @@ pub(super) fn resolve(
                     fill_rect: None,
                     tile: None,
                     alpha: opacity,
+                    // A pattern recolours the image by its gray level: Windows
+                    // Word 16.0.20430 paints black pixels color2 and white
+                    // pixels color, blending grays linearly (#1896 controls:
+                    // checker, dots, gray ramp and two-gray 8x8 images). As a
+                    // duotone (dark -> clr1, light -> clr2) that is
+                    // clr1 = color2, clr2 = color.
                     duotone: (kind == "pattern").then_some(Duotone {
-                        clr1: color,
-                        clr2: color2,
+                        clr1: color2,
+                        clr2: color,
                     }),
                     blip_effects: Vec::new(),
                     vml: Some(VmlImageFill {
@@ -359,7 +365,9 @@ mod tests {
             r#"<type><v:fill type="pattern" r:id="pic" color="red" color2="blue" size="20pt,25%"/></type><shape><v:fill id="metadata" position="25%,50%"/></shape>"#,
         );
         assert_eq!(image["imagePath"], "word/media/a.png");
-        assert_eq!(image["duotone"]["clr1"], "ff0000");
+        // Black pixels take color2, white pixels color.
+        assert_eq!(image["duotone"]["clr1"], "0000ff");
+        assert_eq!(image["duotone"]["clr2"], "ff0000");
         assert_eq!(image["vml"]["size"][0]["value"], 20.0);
         assert_eq!(image["vml"]["size"][1]["value"], 0.25);
         assert_eq!(image["vml"]["position"][0], 0.25);

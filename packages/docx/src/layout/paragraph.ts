@@ -1,6 +1,11 @@
 import { countedSpacingAdvance, countSpacingCharacters, textSpacingAdvance } from '../character-spacing.js';
 import { ownValue } from '@silurus/ooxml-core/internal/own-key';
 import { charSpacingDeltaPx, segmentCharacterGridDeltaPx } from '../line-breaker/advance.js';
+import {
+  authoredReferenceVerticalMetric,
+  mayUseAuthoredReferenceVerticalMetric,
+} from '../line-breaker/font-metrics.js';
+import { referenceFontDecorationMetrics } from '../reference-font-line-metrics.js';
 import { shadowInkBounds } from './vml-shadow.js';
 import { createParagraphAnchorReferenceWorkBudget } from './resource-budgets.js';
 import { addExactRational, exactRationalFromNumber, exactRationalToNumberUp } from './exact-geometry.js';
@@ -241,6 +246,10 @@ type RetainedInkMetric = Pick<
 
 interface RetainedTextGeometryPlan {
   readonly base: RetainedInkMetric;
+  readonly fontRule?: Readonly<{
+    geometry: import('@silurus/ooxml-core/internal/font-decoration').FontDecorationGeometry;
+    sizePt: number;
+  }>;
   readonly underline?: Readonly<{
     authoredStyle?: string;
     color: string;
@@ -284,6 +293,11 @@ export interface MeasuredTabPlanSegment {
     readonly authoredStyle?: string;
     readonly color: string;
     readonly probe: RetainedInkMetric;
+    /** The admitted catalogued face's rule, as for text segments. */
+    readonly fontRule?: Readonly<{
+      geometry: import('@silurus/ooxml-core/internal/font-decoration').FontDecorationGeometry;
+      sizePt: number;
+    }>;
   }>;
   readonly leaderShape?: Readonly<{
     glyph: string;
@@ -970,6 +984,7 @@ export function planLine(input: PlanLineInput): LineLayout {
             base: segment.underline.base,
             color: segment.underline.color,
             underline: segment.underline,
+            ...(segment.underline.fontRule ? { fontRule: segment.underline.fontRule } : {}),
           })
         : undefined;
       placements.push({
@@ -1065,6 +1080,7 @@ export function planLine(input: PlanLineInput): LineLayout {
             color: retainedColorString(style.color),
             ...(retainedGeometry.underline ? { underline: retainedGeometry.underline } : {}),
             ...(retainedGeometry.strike ? { strike: retainedGeometry.strike } : {}),
+            ...(retainedGeometry.fontRule ? { fontRule: retainedGeometry.fontRule } : {}),
           })
         : style.decorations;
       const emphasis = retainedGeometry?.emphasis ? {
@@ -2142,8 +2158,16 @@ function retainedGeometryPlan(
       clusterInk,
     };
   })() : undefined;
+  // The admitted reference face's own rule, when the decorated text draws in
+  // that face (the low-line probe resolves to it); other faces keep the
+  // glyph-probe geometry.
+  const fontRule = (underline || strike) && segment.referenceFontDecoration
+    && shapeProbe('_').spans[0]?.font.requestedFamily === segment.authoredFontFamily
+    ? { geometry: segment.referenceFontDecoration, sizePt: request.fontSizePt }
+    : undefined;
   return {
     base,
+    ...(fontRule ? { fontRule } : {}),
     ...(underline ? { underline } : {}),
     ...(strike ? { strike } : {}),
     ...(emphasis ? { emphasis } : {}),
@@ -2764,9 +2788,17 @@ function planMeasuredLines(
         };
         if (textSource?.underline) {
           const textColor = textSource.color ? `#${textSource.color}` : '#000000';
+          // The face's own rule when its exact catalogued tuple is admitted,
+          // as for the run's text (retainedGeometryPlan).
+          const ruleFont = shapeTabGlyph('_').spans[0]?.font;
+          const ruleGeometry = ruleFont && mayUseAuthoredReferenceVerticalMetric(ruleFont)
+            && authoredReferenceVerticalMetric(ruleFont)
+            ? referenceFontDecorationMetrics(ruleFont.requestedFamily, ruleFont.weight, ruleFont.style)
+            : undefined;
           underline = {
             base: selectedMetric('M'),
             probe: selectedMetric('_'),
+            ...(ruleGeometry ? { fontRule: { geometry: ruleGeometry, sizePt: tab.fontSize } } : {}),
             color: richRun?.underlineColor && richRun.underlineColor !== 'auto'
               ? `#${richRun.underlineColor}` : textColor,
             ...(richRun?.underlineStyle ? { authoredStyle: richRun.underlineStyle } : {}),

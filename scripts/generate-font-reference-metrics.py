@@ -205,6 +205,17 @@ def face_profile(font: TTFont, source_id: str) -> dict[str, Any] | None:
         None if os2 is None
         else [int(os2.panose.bFamilyType), int(os2.panose.bSerifStyle)]
     )
+    # Decoration geometry in font units: post underlinePosition (top of the
+    # rule, negative below the baseline) and underlineThickness, OS/2
+    # yStrikeoutPosition (top of the rule) and yStrikeoutSize. Windows Word
+    # and PowerPoint 16.0.20430 draw single underline and strike from these
+    # (#1896 controls). Null when the face lacks post or OS/2.
+    post = font["post"] if "post" in font else None
+    profile["decoration"] = (
+        None if post is None or os2 is None
+        else [integer(post, "underlinePosition"), integer(post, "underlineThickness"),
+              integer(os2, "yStrikeoutPosition"), integer(os2, "yStrikeoutSize")]
+    )
     # OS/2 typo metrics, recorded only when fsSelection USE_TYPO_METRICS (bit 7,
     # OS/2 v4+) asks layout to use them (#1604: Gabriola in Excel).
     if os2 is not None and (os2_version or 0) >= 4 and (fs_selection or 0) & 0x80:
@@ -222,7 +233,7 @@ def face_profile(font: TTFont, source_id: str) -> dict[str, Any] | None:
     identity_profile = {
         **{key: value for key, value in profile.items()
            if key not in {"farEastCodePage", "win", "typoMetrics", "panose", "stackedVerticalGlyphs",
-                          "stackedVrt2OnlyGlyphs"}},
+                          "stackedVrt2OnlyGlyphs", "decoration"}},
         "os2": None if os2 is None else {
             "codePageRange1": provenance_code_page_range1,
         },

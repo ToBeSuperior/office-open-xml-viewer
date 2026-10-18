@@ -1,6 +1,7 @@
 import { findReferenceFontMetrics, SYNTHETIC_ASCENT_EM, SYNTHETIC_DESCENT_EM } from '@silurus/ooxml-core';
 import { ownValue } from '@silurus/ooxml-core/internal/own-key';
 import { excelDrawingMlLineRatios } from '@silurus/ooxml-core/internal/office-auto-line';
+import type { FontDecorationGeometry } from '@silurus/ooxml-core/internal/font-decoration';
 
 /**
  * PowerPoint's split of a text line at its baseline (observed behaviour; the
@@ -190,6 +191,32 @@ function resolveExcelBox(family: string, bold: boolean, italic: boolean): ExcelL
   return box;
 }
 
+/**
+ * The face's own underline and strikethrough geometry (post / OS/2) of the
+ * copy PowerPoint lays the face out with; undefined when that copy records
+ * none or the copies disagree.
+ */
+function resolveDecoration(family: string, bold: boolean, italic: boolean): FontDecorationGeometry | undefined {
+  let geometry: FontDecorationGeometry | undefined;
+  for (const profile of chosenProfiles(family, bold, italic)) {
+    const decoration = profile.decoration;
+    if (!decoration || !(profile.unitsPerEm > 0)) return undefined;
+    const [underlinePosition, underlineThickness, strikeoutPosition, strikeoutSize] = decoration;
+    if (!(underlineThickness > 0) || !(strikeoutSize > 0) || !(strikeoutPosition > 0)) return undefined;
+    const em = profile.unitsPerEm;
+    const next = {
+      underlineTopEm: -underlinePosition / em,
+      underlineThicknessEm: underlineThickness / em,
+      strikeTopEm: -strikeoutPosition / em,
+      strikeThicknessEm: strikeoutSize / em,
+    };
+    if (geometry && (Object.keys(next) as (keyof FontDecorationGeometry)[])
+      .some((key) => Math.abs(geometry![key] - next[key]) > 1e-12)) return undefined;
+    geometry = Object.freeze(next);
+  }
+  return geometry;
+}
+
 /** A face's natural line box as em ratios. */
 export interface ExcelLineBox {
   ascent: number;
@@ -209,6 +236,10 @@ export interface PowerPointFaceMetrics {
   readonly glyph: ExcelLineBox | undefined;
   /** #1604 natural box, used under an explicit compatLnSpc="0". */
   readonly excel: ExcelLineBox | undefined;
+  /** The face's own underline / strikethrough geometry (see
+   * `resolveDecoration`). Windows PowerPoint 16.0.20430 draws single
+   * underline and strikethrough from it (#1896 controls). */
+  readonly decoration: FontDecorationGeometry | undefined;
 }
 
 const faceCache = new Map<string, PowerPointFaceMetrics | null>();
@@ -234,6 +265,7 @@ export function powerPointFaceMetrics(
   const metrics = share === undefined ? null
     : Object.freeze({
       share, glyph: resolveGlyphBox(family, bold, italic), excel: resolveExcelBox(family, bold, italic),
+      decoration: resolveDecoration(family, bold, italic),
     });
   faceCache.set(key, metrics);
   if (faceCache.size > SHARE_CACHE_LIMIT) {

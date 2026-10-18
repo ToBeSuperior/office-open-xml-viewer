@@ -15,6 +15,8 @@ import {
 import { groupFitTextRegions, type FitTextRun } from '../fit-text.js';
 import { mathFallbackText } from '../layout/math-fallback-text.js';
 import type { FontResolution } from '../layout/font-service.js';
+import type { FontDecorationGeometry } from '@silurus/ooxml-core/internal/font-decoration';
+import { referenceFontDecorationMetrics } from '../reference-font-line-metrics.js';
 import type {
   ParagraphLayoutSource,
   ParagraphLayoutRun,
@@ -1543,6 +1545,7 @@ function emitResolvedTextSegment(
           referenceFontVerticalMetric: true as const,
           resolvedDesignAscentRatio: referenceLineMetric.designAscentRatio,
           resolvedDesignDescentRatio: referenceLineMetric.designDescentRatio,
+          ...admittedReferenceDecoration(resolvedSpan?.font),
         }
       : {}),
     resolvedEastAsianLineHeightRatio: familyLineMetric?.eastAsianLineHeightRatio,
@@ -2025,6 +2028,7 @@ function appendRunsToSegments(
               referenceFontVerticalMetric: true as const,
               resolvedDesignAscentRatio: referenceMetric.designAscentRatio,
               resolvedDesignDescentRatio: referenceMetric.designDescentRatio,
+              ...admittedReferenceDecoration(selected),
             }
           : {}),
         resolvedEastAsianLineHeightRatio: familyLineMetric?.eastAsianLineHeightRatio,
@@ -2118,4 +2122,16 @@ function projectNoBreakRanges(runs: readonly ParagraphLayoutRun[], segs: LayoutS
       displayedCursor = segmentEnd;
     }
   }
+}
+
+/** The underline / strikethrough geometry of a face whose reference vertical
+ * geometry was admitted: the exact catalogued tuple, else the regular face a
+ * proven synthesized style is drawn from (LIBRARY_SYNTHESIZED_FACE_LINE_GEOMETRY). */
+function admittedReferenceDecoration(
+  font: FontResolution | undefined,
+): { referenceFontDecoration?: FontDecorationGeometry } {
+  if (!font) return {};
+  const geometry = referenceFontDecorationMetrics(font.requestedFamily, font.weight, font.style)
+    ?? referenceFontDecorationMetrics(font.requestedFamily, 400, 'normal');
+  return geometry ? { referenceFontDecoration: geometry } : {};
 }

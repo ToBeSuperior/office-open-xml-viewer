@@ -31,6 +31,16 @@ export interface ReferenceFontMetricProfile {
   /** OS/2 PANOSE [bFamilyType, bSerifStyle]. Null means the face has no OS/2
    * table; undefined means this source did not record the field. */
   readonly panose?: readonly [familyType: number, serifStyle: number] | null;
+  /** post [underlinePosition, underlineThickness] and OS/2
+   * [yStrikeoutPosition, yStrikeoutSize] design units (positions are the
+   * rule's top edge, the underline's negative below the baseline). Null when
+   * the face lacks post or OS/2; undefined when the source did not record it. */
+  readonly decoration?: readonly [
+    underlinePosition: number,
+    underlineThickness: number,
+    strikeoutPosition: number,
+    strikeoutSize: number,
+  ] | null;
 }
 
 export interface FindReferenceFontMetricsOptions {
@@ -45,6 +55,7 @@ function freezeProfile(profile: ReferenceFontMetricProfile): ReferenceFontMetric
   if (profile.win) Object.freeze(profile.win);
   if (profile.typoMetrics) Object.freeze(profile.typoMetrics);
   if (profile.panose) Object.freeze(profile.panose);
+  if (profile.decoration) Object.freeze(profile.decoration);
   return Object.freeze(profile);
 }
 

@@ -12674,16 +12674,20 @@ fn parse_vml_shape(
             .map(|value| vec![Some(value * 100000.0 / 21600.0)])
             .unwrap_or_default()
     };
-    let anchor = vml_css_str(style, "position")
-        .is_some_and(|value| value.eq_ignore_ascii_case("absolute"))
-        && vml_word_has_complete_anchor_reference(shape, style);
+    let positioned =
+        vml_css_str(style, "position").is_some_and(|value| value.eq_ignore_ascii_case("absolute"));
+    let anchor = positioned && vml_word_has_complete_anchor_reference(shape, style);
     let anchor_acquisition =
         anchor.then(|| vml_word_anchor_acquisition(shape, style, width_pt, height_pt));
     let [text_inset_l, text_inset_t, text_inset_r, text_inset_b] =
         vml_textbox_insets(text_box_node);
 
     Some(ShapeRun {
-        inline: false,
+        // A shape whose CSS style is not position:absolute flows in the line
+        // as an inline object (ECMA-376 Part 4 §14.1.2.19 style; Windows Word
+        // 16.0.20430 #1896 controls stack such WordArt shapes line by line
+        // and seat one on a text baseline).
+        inline: !positioned,
         width_pt,
         height_pt,
         anchor_x_pt,
@@ -32062,7 +32066,7 @@ mod vml_pict_tests {
             Some(ShapeFill::Image {
                 duotone: Some(colors),
                 ..
-            }) => assert_eq!(colors.clr1, "d21d54"),
+            }) => assert_eq!((colors.clr1.as_str(), colors.clr2.as_str()), ("12ced4", "d21d54")),
             other => panic!("expected patterned textpath ink, got {other:?}"),
         }
     }
