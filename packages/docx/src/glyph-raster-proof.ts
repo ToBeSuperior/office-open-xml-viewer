@@ -1,6 +1,6 @@
 import { canvasFontString } from '@silurus/ooxml-core';
 import { quoteCssFontFamily } from '@silurus/ooxml-core/internal/css-font-family';
-import type { GlyphRasterComparisonRequest } from './layout/text.js';
+import type { GlyphOwnershipRequest, GlyphRasterComparisonRequest } from './layout/text.js';
 
 type RasterContext = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
 type RasterCanvas = HTMLCanvasElement | OffscreenCanvas;
@@ -91,4 +91,46 @@ export function sameGlyphRaster(request: Readonly<GlyphRasterComparisonRequest>)
     // An unreadable raster is no proof; the caller keeps its Canvas box.
     return false;
   }
+}
+
+// Bounded per realm: a grapheme's ownership by one registration never changes.
+const ownership = new Map<string, boolean>();
+const OWNERSHIP_LIMIT = 16384;
+let graphemes: Intl.Segmenter | null | undefined;
+
+/**
+ * Glyph ownership through a size-adjust:0% registration of the exact source
+ * (CSS Fonts 5 §4.4 scales outlines and advances, not cmap; the #1842 coverage
+ * probe): a grapheme the source owns shapes with zero advance, while one it
+ * lacks falls back to another face with a positive advance. Raster identity
+ * proves which face a route selects; this proves the span's own glyphs come
+ * from that face rather than a fallback (CSS Fonts 4 §5.2 permits fallback
+ * from the selected face).
+ */
+export function ownsGlyphs(request: Readonly<GlyphOwnershipRequest>): boolean {
+  const text = request.text;
+  if (!text.trim()) return false;
+  if (graphemes === undefined) {
+    graphemes = typeof Intl !== 'undefined' && 'Segmenter' in Intl
+      ? new Intl.Segmenter(undefined, { granularity: 'grapheme' }) : null;
+  }
+  const parts = graphemes ? Array.from(graphemes.segment(text), (part) => part.segment) : [...text];
+  const font = `${request.style} ${request.weight} 100px ${quoteCssFontFamily(request.coverageProbeFamily)}`;
+  let context: RasterContext | null | undefined;
+  for (const part of parts) {
+    if (!part.trim()) continue;
+    const key = `${font}\u0000${part}`;
+    let owned = ownership.get(key);
+    if (owned === undefined) {
+      context ??= sharedContext(1, PROBE_EM_PX * 2);
+      if (!context) return false;
+      context.font = font;
+      const width = context.measureText(part).width;
+      owned = width === 0;
+      if (ownership.size >= OWNERSHIP_LIMIT) ownership.clear();
+      ownership.set(key, owned);
+    }
+    if (!owned) return false;
+  }
+  return true;
 }

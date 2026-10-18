@@ -445,7 +445,10 @@ export function measureParagraph(
         && pictureMarkerHeightPt! >= line.ascent
         ? Math.max(line.gridCountSingle, line.ascent + line.descent)
         : undefined;
-      let advancePt = specified ? specified.advancePt : markerRaisesBox
+      // Automatic multiples add the text's own leading to the raised box; an
+      // atLeast line takes the larger of its minimum and that box (below).
+      let advancePt = specified ? specified.advancePt
+        : markerRaisesBox && context.lineSpacing?.rule !== 'atLeast'
         ? markerNaturalPt + textSinglePt * ((context.lineSpacing?.value ?? 1) - 1)
         : context.hasRuby
         ? uniformRubyAdvancePt

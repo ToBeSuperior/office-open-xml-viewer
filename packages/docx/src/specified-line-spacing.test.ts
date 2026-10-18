@@ -90,6 +90,16 @@ describe('Word specified spacing for numbered lines (#1884)', () => {
   });
 });
 
+describe('atLeast with a raised marker outside the specified class (#1884)', () => {
+  it('takes the larger of the minimum and the raised box', () => {
+    // Underlined text leaves WORD_SPECIFIED_TEXT_LINE_BOX; the stub's 30pt
+    // marker ascent (21pt) over the 3pt text descent still raises the box.
+    const paragraph = render('Arial', 10, { rule: 'atLeast', value: 18, explicit: true },
+      false, undefined, 15, true, 10, false, false, false, undefined, { markerSize: 30 });
+    expect(paragraph.lines[0].advancePt).toBeCloseTo(24, 6);
+  });
+});
+
 describe('Word specified spacing for ordinary Latin text', () => {
   it.each([
     ['Arial', 10, 30, false], ['Verdana', 10, 24, true],

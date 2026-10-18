@@ -6247,6 +6247,7 @@ fn parse_paragraph_cond_at_depth_with_diagnostics(
     // Style-chain tabs before the direct layer: a numbering level's tabs enter
     // the cascade between them (see `tab_stops` below).
     let style_chain_tabs = base_para.tab_stops.clone();
+    let style_chain_clears = base_para.tab_clears.clone();
     let direct_indent_left = direct_para.indent_left;
     let direct_indent_first = direct_para.indent_first;
     let direct_indent_right = direct_para.indent_right;
@@ -6425,7 +6426,14 @@ fn parse_paragraph_cond_at_depth_with_diagnostics(
             let below_direct = if direct_numbering {
                 merge_tab_stops(&chain, level_tabs)
             } else {
-                merge_tab_stops(&merge_tab_stops(&[], level_tabs), &chain)
+                // The style chain outranks style-origin numbering, including
+                // the positions it clears.
+                let level_kept: Vec<_> = level_tabs
+                    .iter()
+                    .filter(|(pos, _, _)| style_chain_clears.iter().all(|c| (c - pos).abs() > 0.05))
+                    .cloned()
+                    .collect();
+                merge_tab_stops(&merge_tab_stops(&[], &level_kept), &chain)
             };
             match &direct_para.tab_stops {
                 Some(direct) => merge_tab_stops(&below_direct, direct),

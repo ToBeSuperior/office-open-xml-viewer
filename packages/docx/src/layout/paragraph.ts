@@ -1841,7 +1841,8 @@ function numberingMarkerPlacements(
         range: { start: rangeBase + span.start, end: rangeBase + span.end },
         offset: { xPt: 0, yPt: 0 }, letterSpacingPt: 0, scaleX: 1,
         direction: context.baseRtl ? 'rtl' : 'ltr',
-        kerning: paragraph.numberingMarkerShapeInput?.kerning ? 'normal' : 'none',
+        kerning: paragraph.numberingMarkerShapeInput?.kerning || wordArabicTextKerned(span.text)
+          ? 'normal' : 'none',
         writingMode: 'horizontal-tb',
       }],
       color, fontRoute: span.fontRoute,
