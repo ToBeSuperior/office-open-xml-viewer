@@ -134,7 +134,10 @@ await viewer.load(await file.arrayBuffer());`,
       {
         title: 'Upgrading',
         paragraphs: [
-          'No migration is required. Existing OOXML imports and loading calls keep their current behavior; applications that switch on OoxmlError codes should add not-ooxml, unsupported-image-effect, invalid-numbering and, when the add-on is enabled, unsupported-content. XLSX loads also accept optional xlsxWorksheetLimits, and XlsxSheetViewer accepts minRows, minCols, marginRows and marginCols to size the empty grid. To opt in, install matching viewer and add-on versions and configure only the sources your application needs. Upgrade both packages together thereafter.',
+          'No migration is required. Existing imports, options and loading calls keep working without code changes.',
+          'If your application inspects OoxmlError.code, four new codes can now appear: not-ooxml for files that are not Office documents, unsupported-image-effect for picture effects that cannot be drawn, invalid-numbering for Word numbering that Word itself cannot open, and unsupported-content for files the legacy add-on cannot read. Show them like any other load error.',
+          'Two optional settings are new. xlsxWorksheetLimits changes the worksheet size limits for one load, and XlsxSheetViewer\'s minRows, minCols, marginRows and marginCols set the minimum grid size and the blank rows and columns shown after the content.',
+          'To try the legacy add-on, install @silurus/ooxml-legacy-office at exactly the same version as @silurus/ooxml, configure only the sources you need, and upgrade both packages together from then on.',
           'See the Legacy Office files guide for browser and Node examples, deployment assets, support boundaries and failure handling.',
         ],
       },
