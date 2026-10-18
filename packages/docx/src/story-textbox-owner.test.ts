@@ -1,12 +1,11 @@
 import { readFile } from 'node:fs/promises';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import init, { DocxArchive } from './wasm/docx_parser.js';
 import { storeZip } from './conformance/generate.js';
 import { layoutDocument } from './document-layout.js';
 import { createLayoutServices } from './layout-runtime.js';
 import { layoutSourceStore } from './layout-source-model-adapter.js';
-import { layoutDocumentProgressively } from './layout/progressive.js';
-import { layoutFingerprint } from './layout/invariants.js';
+import * as paginationWorkBudget from './layout/pagination-work-budget.js';
 import { textRunsForPage } from './text-run-projection.js';
 import type { DocxTextRunInfo } from './renderer.js';
 import type { DocxDocumentModel } from './types.js';
@@ -164,19 +163,30 @@ it.each([
 });
 
 // Detached rich text is source work on EVERY selected page, just like inline
-// header/footer paragraphs. The signed margins (§17.6.11) isolate accounting
-// from reserve geometry. No fields or changing selection can mint extra credit.
-it.each(['header', 'footer'] as const)('credits a repeated complete text box in a %s on blocking and progressive routes', async kind => {
+// header/footer paragraphs: the selecting story earns its complete text box's
+// whole closure, admitted at the acquisition seam before the box's paragraphs
+// are debited. The signed margins (§17.6.11) isolate accounting from reserve
+// geometry. Seeding the real ledger to a few spare misses makes the credit
+// observable on three pages: without it (no admission, or a story weight that
+// omits the detached box) the 110-paragraph box exhausts the ledger. A 300-page
+// fixture could not observe it, because page-independent paragraph reuse keeps
+// its misses far below the 25,000 floor. Unit coverage of the arithmetic lives
+// in layout/pagination-work-budget.test.ts; blocking and progressive routes run
+// one pagination generator, and progressive admission order is covered in
+// layout/canonical-producer-real-model.test.ts.
+it.each(['header', 'footer'] as const)('credits a repeated complete text box in a %s before its paragraphs are acquired', kind => {
+  const pages = 3;
+  const lines = 110;
   const p = (text: string, pageBreak = false) => '<w:p><w:pPr>'
     + (pageBreak ? '<w:pageBreakBefore/>' : '')
     + '<w:spacing w:before="0" w:after="0" w:line="200" w:lineRule="exact"/></w:pPr>'
     + `<w:r><w:rPr><w:sz w:val="20"/></w:rPr><w:t>${text}</w:t></w:r></w:p>`;
-  const box = textBox(Array.from({ length: 110 }, () => p('h')).join(''), true)
+  const box = textBox(Array.from({ length: lines }, () => p('h')).join(''), true)
     .replace('height:36pt', 'height:1400pt');
   const tag = kind === 'header' ? 'hdr' : 'ftr';
   const doc = parseFiles(new Map([
     ['word/document.xml', `<w:document xmlns:w="${W}" xmlns:r="${R}"><w:body>`
-      + Array.from({ length: 300 }, (_, i) => p('b', i > 0)).join('')
+      + Array.from({ length: pages }, (_, i) => p('b', i > 0)).join('')
       + `<w:sectPr><w:${kind}Reference w:type="default" r:id="story"/>`
       + '<w:pgSz w:w="4000" w:h="30000"/>'
       + '<w:pgMar w:top="-200" w:bottom="-200" w:left="200" w:right="200" w:header="100" w:footer="100"/>'
@@ -187,16 +197,32 @@ it.each(['header', 'footer'] as const)('credits a repeated complete text box in 
     ['[Content_Types].xml', '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
       + '<Default Extension="xml" ContentType="application/xml"/></Types>'],
   ]));
-  const source = layoutSourceStore(doc);
-  const open = () => createLayoutServices(source, { measureContext: context() });
-  const blocking = layoutDocument(source, open(), { currentDateMs: 0 });
-  const progressive = await layoutDocumentProgressively(source.bodyLayoutInput, open(), { currentDateMs: 0 });
-  expect(blocking.pages).toHaveLength(300);
-  expect(layoutFingerprint(progressive)).toBe(layoutFingerprint(blocking));
-  const texts = textRunsForPage(blocking, 299, { scale: 1 })
-    .filter(run => run.source?.story === 'textbox').map(run => run.text);
-  expect(texts).toEqual(Array(110).fill('h'));
-  // 300 pages that each repaint a 110-line text box, laid out blocking and
-  // progressively: ~34-39 s on an idle machine, so 60 s timed out when the
-  // suite ran on a loaded machine. Reducing the fixture is tracked in #1852.
-}, 180_000);
+  // Unreferenced definitions cost no layout. They lift the source allowance
+  // above its 25,000 floor so page-story credit raises the limit.
+  const source = layoutSourceStore({ ...doc,
+    endnotes: Array.from({ length: 800 }, (_, index) => ({ id: `unused-${index}`, content: [] })) });
+  const createBudget = paginationWorkBudget.createPaginationWorkBudget;
+  const budgets: { budget: ReturnType<typeof createBudget>; initialLimit: number }[] = [];
+  const factory = vi.spyOn(paginationWorkBudget, 'createPaginationWorkBudget').mockImplementation(store => {
+    const budget = createBudget(store);
+    const initialLimit = budget.limit;
+    // Keep the real ledger and its failure latch, leaving 16 misses: the body
+    // fits, but the text box's paragraphs need their owner's page credit.
+    for (let i = 0; i < initialLimit - 16; i++) budget.noteMiss();
+    budgets.push({ budget, initialLimit });
+    return budget;
+  });
+  try {
+    const layout = layoutDocument(source, createLayoutServices(source, { measureContext: context() }), { currentDateMs: 0 });
+    expect(layout.pages).toHaveLength(pages);
+    expect(budgets).toHaveLength(1);
+    expect(budgets[0]!.budget.misses).toBeGreaterThan(budgets[0]!.initialLimit);
+    for (let page = 0; page < pages; page++) {
+      const texts = textRunsForPage(layout, page, { scale: 1 })
+        .filter(run => run.source?.story === 'textbox').map(run => run.text);
+      expect(texts, `page ${page}`).toEqual(Array(lines).fill('h'));
+    }
+  } finally {
+    factory.mockRestore();
+  }
+});

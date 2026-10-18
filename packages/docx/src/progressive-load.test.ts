@@ -70,7 +70,8 @@ describe('progressive layout handover', () => {
   });
 
   it('serves provisional pages, then the authoritative layout', async () => {
-    const { source, services, retained } = retain('plain', 300);
+    // Five pages: the preview stops before the authoritative last page.
+    const { source, services, retained } = retain('plain', 80);
     const store = retained.layoutVariants;
     const layoutOptions = normalizeLayoutOptions(undefined, DEFAULT_CURRENT_DATE_MS);
 
@@ -98,8 +99,8 @@ describe('progressive layout handover', () => {
     expect(store.defaultLayout.pages.length).toBe(full.pages.length);
 
     const blocking = paginateBody(
-      layoutSourceStore(syntheticDocxModel('plain', { paragraphs: 300 })).bodyLayoutInput,
-      createLayoutServices(layoutSourceStore(syntheticDocxModel('plain', { paragraphs: 300 }))),
+      layoutSourceStore(syntheticDocxModel('plain', { paragraphs: 80 })).bodyLayoutInput,
+      createLayoutServices(layoutSourceStore(syntheticDocxModel('plain', { paragraphs: 80 }))),
       layoutOptions,
     );
     expect(layoutFingerprint(store.defaultLayout as DocumentLayout))
