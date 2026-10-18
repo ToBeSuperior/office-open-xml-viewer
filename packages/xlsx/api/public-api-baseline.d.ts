@@ -1187,6 +1187,7 @@ export interface DxfFontToggles {
     italic?: boolean;
     underline?: boolean;
     strike?: boolean;
+    automaticColor?: boolean;
 }
 type ExtensibleLiteral<Known extends string> = Known | (string & Record<never, never>);
 type Fill = SolidFill | NoFill | GradientFill | PatternFill | ImageFill;
