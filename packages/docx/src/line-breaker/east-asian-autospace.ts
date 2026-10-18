@@ -56,32 +56,28 @@ function firstScalar(text: string): string | undefined {
 /** Base character of the text's last grapheme cluster: a combining mark,
  * variation selector or voiced-sound mark belongs to its base (UAX #29). */
 function lastClusterBase(text: string): string | undefined {
+  if (text.length === 0) return undefined;
   const offsets = graphemeClusterOffsets(text);
-  return firstScalar(text.slice(offsets.at(-1) ?? 0));
+  return String.fromCodePoint(text.codePointAt(offsets.at(-1) ?? 0)!);
 }
 
-/** Split an ordinary text segment before UTF-16 offset `split`, with every
- * offset-bearing fact projected through the shared slicing authority. */
-function splitSegment(segment: LayoutTextSeg, split: number): [LayoutTextSeg, LayoutTextSeg] {
-  const head: LayoutTextSeg = {
+/** The [start, end) piece of an ordinary text segment, with every
+ * offset-bearing fact projected through the shared slicing authority. A piece
+ * after the first starts at a grapheme boundary that is not a source seam. */
+function segmentPiece(segment: LayoutTextSeg, start: number, end: number): LayoutTextSeg {
+  return {
     ...segment,
     ...RESET_SLICED_TEXT_MEASUREMENT,
-    text: segment.text.slice(0, split),
+    text: segment.text.slice(start, end),
     measuredWidth: 0,
-    ...slicedTextMetadata(segment, 0, split),
+    ...slicedTextMetadata(segment, start, end),
+    ...(start > 0 ? {
+      joinPrev: undefined,
+      hardJoinPrev: undefined,
+      explicitBreakBefore: undefined,
+      breakBefore: true,
+    } : {}),
   };
-  const tail: LayoutTextSeg = {
-    ...segment,
-    ...RESET_SLICED_TEXT_MEASUREMENT,
-    text: segment.text.slice(split),
-    measuredWidth: 0,
-    ...slicedTextMetadata(segment, split, segment.text.length),
-    joinPrev: undefined,
-    hardJoinPrev: undefined,
-    explicitBreakBefore: undefined,
-    breakBefore: true,
-  };
-  return [head, tail];
 }
 
 /**
@@ -115,17 +111,21 @@ export function assignEastAsianAutoSpace(
     );
   for (let index = 0; index < segs.length; index += 1) {
     const segment = segs[index]!;
-    if (!('text' in segment) || !participates(segment) || segment.seaBreaks !== undefined) continue;
+    if (!('text' in segment) || !participates(segment) || segment.seaBreaks !== undefined
+      || segment.text.length === 0) continue;
+    const splits: number[] = [];
     let before: string | undefined;
     for (const cursor of [0, ...graphemeClusterOffsets(segment.text)]) {
-      const base = firstScalar(segment.text.slice(cursor));
-      if (cursor > 0 && applies(before, base)) {
-        const [head, tail] = splitSegment(segment, cursor);
-        segs.splice(index, 1, head, tail);
-        break;
-      }
+      const base = String.fromCodePoint(segment.text.codePointAt(cursor)!);
+      if (cursor > 0 && applies(before, base)) splits.push(cursor);
       before = base;
     }
+    if (splits.length === 0) continue;
+    const bounds = [0, ...splits, segment.text.length];
+    const pieces = splits.map((_, piece) => segmentPiece(segment, bounds[piece]!, bounds[piece + 1]!));
+    pieces.push(segmentPiece(segment, bounds.at(-2)!, segment.text.length));
+    segs.splice(index, 1, ...pieces);
+    index += pieces.length - 1;
   }
   let previous: LayoutTextSeg | undefined;
   for (const segment of segs) {
