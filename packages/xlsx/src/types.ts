@@ -1122,6 +1122,10 @@ export interface DxfFontToggles {
   italic?: boolean;
   underline?: boolean;
   strike?: boolean;
+  /** `true` when the differential font names the automatic color
+   *  (`<color auto="1"/>`), which a later layered format applies over an
+   *  earlier color. */
+  automaticColor?: boolean;
 }
 
 export interface CellFont {

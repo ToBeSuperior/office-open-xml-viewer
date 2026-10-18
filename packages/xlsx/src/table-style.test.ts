@@ -100,6 +100,30 @@ describe('table style element layering', () => {
     expect(map.get('3:2')?.left).toBeUndefined();
   });
 
+  it('lets an explicit automatic color clear an earlier element color', () => {
+    const blue = { font: { color: '#0000FF' }, fill: null, border: null } as unknown as Dxf;
+    const auto = { font: { color: null }, fontToggles: { automaticColor: true }, fill: null, border: null } as unknown as Dxf;
+    const map = buildStructuredStyleMap(table({}, [element('wholeTable', blue), element('headerRow', auto)]));
+    expect(map.get('1:2')?.fontColor).toBeUndefined();
+    expect(map.get('2:2')?.fontColor).toBe('#0000FF');
+  });
+
+  it('paints a style element solid fill with its bgColor', () => {
+    const solid = {
+      font: null, border: null, fill: { patternType: 'solid', fgColor: '#D9D9D9', bgColor: '#F2F2F2' },
+    } as unknown as Dxf;
+    const map = buildStructuredStyleMap(table({}, [element('wholeTable', solid)]));
+    expect(fg(map, 2, 2)).toBe('#F2F2F2');
+  });
+
+  it('resolves legacy dxf indices for a model without styleElements', () => {
+    const ws = table({ headerRowDxf: 0 } as Partial<TableInfo>, []);
+    delete (ws.tables![0] as { styleElements?: unknown }).styleElements;
+    const map = buildStructuredStyleMap(ws, [fill('#000007')]);
+    expect(fg(map, 1, 2)).toBe('#000007');
+    expect(buildStructuredStyleMap(ws).size).toBe(0);
+  });
+
   it('applies nothing for a table without style elements', () => {
     expect(buildStructuredStyleMap(table({}, [])).size).toBe(0);
   });

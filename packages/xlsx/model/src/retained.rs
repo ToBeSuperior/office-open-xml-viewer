@@ -194,7 +194,8 @@ retained_struct!(DxfFontToggles {
     bold,
     italic,
     underline,
-    strike
+    strike,
+    automatic_color
 });
 
 retained_struct!(Fill {

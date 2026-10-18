@@ -2799,6 +2799,9 @@ function renderQuadrant(
  *  cell-Map rebuild and a conditional-formatting recompile per frame. */
 interface SheetRenderCache {
   rowCount: number;
+  /** Workbook dxfs the structured style map resolved legacy table fields
+   *  against (undefined when built without styles). */
+  styleDxfs: readonly Dxf[] | undefined;
   /** Bound per-index entry limit these indexes were built under. */
   coordinateIndexLimit: number;
   cellMap: Map<string, Cell>;
@@ -2832,13 +2835,14 @@ function coordinateIndexIdentity(
   };
 }
 
-export function getSheetRenderCache(worksheet: Worksheet): SheetRenderCache {
+export function getSheetRenderCache(worksheet: Worksheet, styles?: Styles): SheetRenderCache {
   const coordinateIndexLimit = getWorksheetPolicy(worksheet).maxCoordinateIndexEntries;
   const cached = sheetRenderCache.get(worksheet);
   if (
     cached &&
     cached.rowCount === worksheet.rows.length &&
-    cached.coordinateIndexLimit === coordinateIndexLimit
+    cached.coordinateIndexLimit === coordinateIndexLimit &&
+    (styles === undefined || cached.styleDxfs === styles.dxfs)
   ) {
     return cached;
   }
@@ -2933,7 +2937,8 @@ export function getSheetRenderCache(worksheet: Worksheet): SheetRenderCache {
     autoFilterCells,
     hyperlinkMap,
     commentCells,
-    structuredStyleMap: buildStructuredStyleMap(worksheet),
+    structuredStyleMap: buildStructuredStyleMap(worksheet, styles?.dxfs),
+    styleDxfs: styles?.dxfs,
     sparklineMap: buildSparklineMap(worksheet),
   };
   sheetRenderCache.set(worksheet, entry);
@@ -3172,7 +3177,7 @@ export function applyAutoRowHeights(
     1.2,
   );
   const { cfContext, mergeAnchorSet, mergeSkipSet, structuredStyleMap } =
-    getSheetRenderCache(worksheet);
+    getSheetRenderCache(worksheet, styles);
   const derived = new Map<number, number>();
   let changed = false;
   ctx.save();
@@ -3599,7 +3604,7 @@ export function renderViewport(
     cellMap, cfContext, mergeSkipSet, autoFilterCells,
     hyperlinkMap, commentCells, structuredStyleMap, sparklineMap,
     nonEmptyColsByRow,
-  } = getSheetRenderCache(worksheet);
+  } = getSheetRenderCache(worksheet, styles);
 
   // Merge anchor sizes are cellScale-scaled, so they stay per-frame.
   const mergeAnchorMap = new Map<string, { totalW: number; totalH: number; right: number; bottom: number }>();

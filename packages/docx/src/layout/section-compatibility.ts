@@ -12,10 +12,13 @@ export const WORD_DEFAULT_LINE_NUMBER_DISTANCE = defineCompatibilityRule({
 export const WORD_CONTINUOUS_SECTION_PAGE_NUMBER_RESTART = defineCompatibilityRule({
   id: 'word-continuous-section-page-number-restart',
   evidence: {
-    kind: 'regression-test',
-    reference: 'packages/docx/src/page-number-field-render.test.ts#restarts a spilling continuous section after its shared first page',
+    kind: 'office-observation',
+    syntheticFixtureId: 'continuous-section-page-number-restart',
+    application: 'Microsoft Word',
+    version: '16.0.20430',
+    platform: 'Windows',
   },
-  description: 'Issue #804 records that Word anchors a continuous section page-number restart to the first physical page containing that section body content, even when another section owns the page top. An empty same-page region does not consume the restart. Evidence (observed Office behaviour): Word-rendered synthetic fixture in issue #804 / PR #818 (page numbers 1, 51, 52); application version not recorded.',
+  description: 'Issue #804 records that Word anchors a continuous section page-number restart to the first physical page containing that section body content, even when another section owns the page top. An empty same-page region does not consume the restart. Evidence: issue #804 / PR #818 fixture, and the #1896 controls in Windows Word 16.0.20430 (a shared first page, a section starting near the page bottom, a section first painting on the next page, and a one-page document).',
 });
 
 export const WORD_TRAILING_EMPTY_MARK_BASELINE_ADMISSION = defineCompatibilityRule({

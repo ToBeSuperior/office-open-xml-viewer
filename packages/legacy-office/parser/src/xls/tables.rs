@@ -344,10 +344,13 @@ fn table_info(
         // the Annex G definition under the workbook theme. A theme-less
         // workbook has no colors for its theme references.
         if let Some(presets) = ooxml_common::spreadsheet_style_presets::table_style(&style_name) {
-            let theme = context
-                .theme
-                .scheme()
-                .ok_or_else(|| unsupported("XLS built-in table style lacks its theme"))?;
+            // A theme-less workbook has no colors for the preset's theme
+            // references (no Office default theme is assumed): the table is
+            // drawn without its style and the reason is retained.
+            let Some(theme) = context.theme.scheme() else {
+                info.style_error = Some("theme".into());
+                return Ok(info);
+            };
             info.style_elements = presets
                 .map(|preset| xlsx_model::PivotTableStyleElement {
                     kind: preset.kind.to_string(),
@@ -376,16 +379,16 @@ fn table_info(
         .pivot_elements(&style_name, context)?
         .unwrap_or_default()
         .into_iter()
-        .map(|(tse, size, dxf)| {
-            let kind = table_element_kind(tse)
-                .ok_or_else(|| unsupported("XLS table style element is not a table region"))?;
-            Ok(xlsx_model::PivotTableStyleElement {
+        // A style shared with PivotTables may carry PivotTable-only regions
+        // (2.4.321 tseType 0x0D-0x1B), which a Table does not have.
+        .filter_map(|(tse, size, dxf)| {
+            table_element_kind(tse).map(|kind| xlsx_model::PivotTableStyleElement {
                 kind: kind.to_string(),
                 size,
                 dxf,
             })
         })
-        .collect::<Result<Vec<_>, String>>()?;
+        .collect();
     Ok(info)
 }
 
@@ -521,6 +524,9 @@ fn xfprops(
     let mut at = offset + 4;
     let mut dxf = xlsx_model::Dxf::default();
     let mut font: Option<xlsx_model::Font> = None;
+    // Which font properties the DXF states (ECMA-376 18.8.14-15 layering
+    // distinguishes an explicit off or automatic color from an omission).
+    let mut toggles = xlsx_model::DxfFontToggles::default();
     let mut fill: Option<xlsx_model::Fill> = None;
     let mut border: Option<xlsx_model::Border> = None;
     let mut format_code = None;
@@ -562,6 +568,9 @@ fn xfprops(
             5 => {
                 let target = font_entry(&mut font);
                 target.color = color(value, 0)?;
+                if target.color.is_none() {
+                    toggles.automatic_color = Some(true);
+                }
             }
             6..=12 => {
                 let style = u16_at(value, 8)?;
@@ -612,6 +621,7 @@ fn xfprops(
             0x19 => {
                 let weight = u16_at(value, 0)?;
                 font_entry(&mut font).bold = weight >= 0x02bc;
+                toggles.bold = Some(weight >= 0x02bc);
             }
             0x1a => {
                 let (underline, style) = match byte()? {
@@ -625,6 +635,7 @@ fn xfprops(
                 let target = font_entry(&mut font);
                 target.underline = underline;
                 target.underline_style = style.map(str::to_string);
+                toggles.underline = Some(underline);
             }
             0x1b => {
                 let target = font_entry(&mut font);
@@ -640,8 +651,10 @@ fn xfprops(
                 let target = font_entry(&mut font);
                 if kind == 0x1c {
                     target.italic = on;
+                    toggles.italic = Some(on);
                 } else {
                     target.strike = on;
+                    toggles.strike = Some(on);
                 }
             }
             0x24 => {
@@ -728,6 +741,9 @@ fn xfprops(
         if fill.fg_color.is_none() {
             fill.fg_color = fill.bg_color.clone();
         }
+    }
+    if font.is_some() {
+        dxf.font_toggles = Some(toggles);
     }
     dxf.font = font;
     dxf.fill = fill;
@@ -896,6 +912,17 @@ mod tests {
             element.dxf.fill.as_ref().unwrap().fg_color.as_deref(),
             Some("#F2F2F2")
         );
+        // A built-in style in a theme-less workbook keeps the table and
+        // reports why it is drawn without its style.
+        let plain = project(
+            &records(&[feature(1, (8, 35), (1, 6)), style_info(1, 0x05, "TableStyleMedium2")]),
+            &mut Styles::default(),
+            &context,
+            &mut Vec::new(),
+        )
+        .unwrap();
+        assert!(plain[0].style_elements.is_empty());
+        assert_eq!(plain[0].style_error.as_deref(), Some("theme"));
         // A List12 for another table is rejected.
         assert!(project(
             &records(&[feature(1, (8, 35), (1, 6)), style_info(2, 0, "S")]),

@@ -1901,6 +1901,11 @@ pub struct DxfFontToggles {
     pub underline: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub strike: Option<bool>,
+    /// `true` when the differential font names the automatic color
+    /// (`<color auto="1"/>`, ECMA-376 §18.3.1.15), which a later layered
+    /// format applies over an earlier color; absent when no color is named.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub automatic_color: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]

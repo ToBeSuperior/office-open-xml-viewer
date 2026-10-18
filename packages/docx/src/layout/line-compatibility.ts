@@ -5,10 +5,13 @@ import type { LineSpacing, TabStop } from '../types.js';
 export const WORD_TAB_DISPLACED_READING_FRAME = defineCompatibilityRule({
   id: 'word-float-tab-reading-frame',
   evidence: {
-    kind: 'regression-test',
-    reference: 'packages/docx/src/layout/first-line-float-indent.test.ts#$kind $alignment ($count), rtl=$rtl, float=$float matches Word geometry',
+    kind: 'office-observation',
+    syntheticFixtureId: 'tabs-floats-round3',
+    application: 'Microsoft Word',
+    version: '16.0.20430',
+    platform: 'Windows',
   },
-  description: 'Issue #1672 controlled Word exports cover ordinary left/right/center/decimal tabs, one/two tabs, both paragraph directions and either float edge, with no-float counterexamples. Eligibility stays margin-relative (ECMA-376 §17.3.1.37), but an authored target moves with a float-displaced leading line edge. Library policy retains this observation only where text fits the available float band. Word also overflows some tab cells into floats or past the margin; that unspecified fallback is intentionally unsupported. Out-of-band targets break the line and following text uses ordinary legal-break and emergency fitting, without an overflow allowance or a fabricated wide reference band. Evidence (observed Office behaviour): issue #1672 Word 16 controls, PR #1698; application build and platform not recorded.',
+  description: 'Issue #1672 controlled Word exports cover ordinary left/right/center/decimal tabs, one/two tabs, both paragraph directions and either float edge, with no-float counterexamples. Eligibility stays margin-relative (ECMA-376 §17.3.1.37), but an authored target moves with a float-displaced leading line edge. Library policy retains this observation only where text fits the available float band. Word also overflows some tab cells into floats or past the margin; that unspecified fallback is intentionally unsupported. Out-of-band targets break the line and following text uses ordinary legal-break and emergency fitting, without an overflow allowance or a fabricated wide reference band. Evidence: issue #1672 controls (PR #1698), re-exported in Windows Word 16.0.20430 for #1896 with every in-band line identical to the earlier export; only the four unsupported overflow cells differ.',
 });
 
 /** Projection of {@link WORD_TAB_DISPLACED_READING_FRAME}. The caller has already
@@ -24,10 +27,13 @@ export function wordFloatTabStopPosition(
 export const WORD_POSITIONAL_TAB_AVAILABLE_BAND = defineCompatibilityRule({
   id: 'word-positional-tab-available-band',
   evidence: {
-    kind: 'regression-test',
-    reference: 'packages/docx/src/layout/first-line-float-indent.test.ts#$kind $alignment ($count), rtl=$rtl, float=$float matches Word geometry',
+    kind: 'office-observation',
+    syntheticFixtureId: 'tabs-floats-round3',
+    application: 'Microsoft Word',
+    version: '16.0.20430',
+    platform: 'Windows',
   },
-  description: 'Issue #1672 Word exports cover all 36 positional-tab combinations of left/center/right alignment, margin/indent reference, LTR/RTL paragraph direction and no/left/right float. Word intersects the normative reference box (ECMA-376 §§17.3.3.23, 17.18.71, 17.18.73) with the available float band and aligns the following cell in reading order; no-float references remain unchanged. A target at the current pen is reachable without a line break; only a target behind it requires the next line. RTL must retain the positional descriptor through the bidi post-pass rather than resolving it as an ordinary tab. Evidence (observed Office behaviour): issue #1672 controls (36 combinations), PR #1698; application build and platform not recorded.',
+  description: 'Issue #1672 Word exports cover all 36 positional-tab combinations of left/center/right alignment, margin/indent reference, LTR/RTL paragraph direction and no/left/right float. Word intersects the normative reference box (ECMA-376 §§17.3.3.23, 17.18.71, 17.18.73) with the available float band and aligns the following cell in reading order; no-float references remain unchanged. A target at the current pen is reachable without a line break; only a target behind it requires the next line. RTL must retain the positional descriptor through the bidi post-pass rather than resolving it as an ordinary tab. Evidence: issue #1672 controls (36 combinations, PR #1698), re-exported in Windows Word 16.0.20430 for #1896 with every in-band line identical to the earlier export.',
 });
 
 /** Reference-box projection of {@link WORD_POSITIONAL_TAB_AVAILABLE_BAND}. */

@@ -176,16 +176,30 @@ function regions(p: PivotTableMetadata, sizes: Map<string, number>): Map<string,
   return out;
 }
 
+/** A Table / PivotTable style element's solid fill shows its bgColor: Excel's
+ *  export of a table style whose firstRowStripe dxf carries a different
+ *  fgColor paints the bgColor (sample-1), unlike a cell fill (§18.8.32). */
+function styleElementFill(fill: CellFill): CellFill {
+  return fill.patternType === 'solid' && fill.bgColor && fill.bgColor !== fill.fgColor
+    ? { ...fill, fgColor: fill.bgColor }
+    : fill;
+}
+
 function apply(
   target: StructuredCellFormat, dxf: Dxf, rect: Rect, row: number, col: number, fromTable: boolean,
 ): void {
-  if (dxf.fill) target.fill = dxf.fill;
+  if (dxf.fill) target.fill = styleElementFill(dxf.fill);
   const font = dxf.font;
   if (font) {
     if (font.color) {
       target.fontColor = font.color;
       if (fromTable) target.fontColorFromTable = true;
       else delete target.fontColorFromTable;
+    } else if (dxf.fontToggles?.automaticColor) {
+      // An explicit automatic color clears an earlier element's color; the
+      // cell then draws its own (automatic) font color.
+      delete target.fontColor;
+      delete target.fontColorFromTable;
     }
     for (const key of DXF_FONT_TOGGLES) {
       const value = dxfFontToggle(dxf, key);
@@ -250,15 +264,15 @@ function visibleBands(
   return out;
 }
 
-/** The regions of every element kind for one Table (§18.18.77). Stripes
- *  alternate over the visible rows and columns of the body: Excel re-bands a
- *  table around hidden rows (a hidden first data row leaves the first stripe
- *  on the next visible row in the sample-5 Excel export). */
+/** The regions of every element kind for one Table (§18.18.77). Row stripes
+ *  alternate over the visible body rows: Excel re-bands a table around hidden
+ *  rows (a hidden first data row leaves the first stripe on the next visible
+ *  row in the sample-5 Excel export). Column stripes keep their positions;
+ *  no export has measured hidden columns. */
 function tableRegions(
   t: TableInfo,
   sizes: Map<string, number>,
   hiddenRow: (row: number) => boolean,
-  hiddenCol: (col: number) => boolean,
 ): Map<string, Rect[]> {
   const { top, bottom, left, right } = t.range;
   const header = Math.max(0, t.headerRowCount ?? 1);
@@ -274,7 +288,7 @@ function tableRegions(
   };
   add('wholeTable', { top, bottom, left, right });
   if (t.showColumnStripes) {
-    const cols = visibleBands(left, right, sizes.get('firstColumnStripe') ?? 1, sizes.get('secondColumnStripe') ?? 1, hiddenCol);
+    const cols = bands(left, right, sizes.get('firstColumnStripe') ?? 1, sizes.get('secondColumnStripe') ?? 1);
     for (const band of cols.first) add('firstColumnStripe', { top: bodyTop, bottom: bodyBottom, left: band.top, right: band.bottom });
     for (const band of cols.second) add('secondColumnStripe', { top: bodyTop, bottom: bodyBottom, left: band.top, right: band.bottom });
   }
@@ -327,8 +341,28 @@ function layer(
   }
 }
 
-/** Merged Table and PivotTable style formats by `row:col`. */
-export function buildStructuredStyleMap(worksheet: Worksheet): Map<string, StructuredCellFormat> {
+/** A model without `styleElements` (a producer predating them) names its
+ *  custom style's region elements by workbook dxf index; resolve those. A
+ *  style that could not be applied as authored (`styleError`) stays off. */
+function legacyTableElements(t: TableInfo, dxfs: readonly Dxf[] | undefined): PivotTableStyleElement[] {
+  if (!dxfs || t.styleError) return [];
+  const ids: Array<[string, number | undefined]> = [
+    ['wholeTable', t.wholeTableDxf], ['headerRow', t.headerRowDxf], ['totalRow', t.totalRowDxf],
+    ['firstColumn', t.firstColumnDxf], ['lastColumn', t.lastColumnDxf],
+    ['firstRowStripe', t.band1HorizontalDxf], ['secondRowStripe', t.band2HorizontalDxf],
+  ];
+  return ids.flatMap(([kind, id]) => {
+    const dxf = id === undefined ? undefined : dxfs[id];
+    return dxf ? [{ kind, size: 1, dxf }] : [];
+  });
+}
+
+/** Merged Table and PivotTable style formats by `row:col`. `dxfs` (the
+ *  workbook's) resolves tables from producers predating `styleElements`. */
+export function buildStructuredStyleMap(
+  worksheet: Worksheet,
+  dxfs?: readonly Dxf[],
+): Map<string, StructuredCellFormat> {
   const map = new Map<string, StructuredCellFormat>();
   const identity: CoordinateIndexIdentity = {
     resource: 'worksheet-structured-style-index',
@@ -336,15 +370,13 @@ export function buildStructuredStyleMap(worksheet: Worksheet): Map<string, Struc
     limit: getWorksheetPolicy(worksheet).maxCoordinateIndexEntries,
   };
   const hiddenRows = new Set((worksheet.rows ?? []).filter((row) => row.hidden).map((row) => row.index));
-  const hiddenCols = worksheet.colHidden ?? {};
   const hiddenRow = (row: number) => hiddenRows.has(row);
-  const hiddenCol = (col: number) => hiddenCols[col] === true;
   for (const table of worksheet.tables ?? []) {
-    const elements = table.styleElements ?? [];
+    const elements = table.styleElements ?? legacyTableElements(table, dxfs);
     if (elements.length === 0) continue;
     assertCoordinateRangeArea(table.range, identity);
     const sizes = new Map(elements.map((element) => [element.kind, element.size]));
-    layer(map, identity, TABLE_ORDER, elements, tableRegions(table, sizes, hiddenRow, hiddenCol), true);
+    layer(map, identity, TABLE_ORDER, elements, tableRegions(table, sizes, hiddenRow), true);
   }
   for (const pivot of worksheet.pivotTables ?? []) {
     const style = pivot.style;
