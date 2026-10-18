@@ -1266,6 +1266,9 @@ export class XlsxWorkbook {
     opts: RenderViewportOptions = {},
   ): Promise<void> {
     this.assertResourceHealthy();
+    // This invocation owns its viewport identity across resource awaits and
+    // caller callbacks; a later edit to the caller's object is another frame.
+    viewport = { row: viewport.row, col: viewport.col, rows: viewport.rows, cols: viewport.cols };
     if (this._mode === 'worker') {
       throw new Error(
         "renderViewport(canvas) is unavailable in mode: 'worker'; use renderViewportToBitmap() and paint it via an ImageBitmapRenderingContext",
@@ -1363,6 +1366,9 @@ export class XlsxWorkbook {
     opts: WireRenderViewportOptions & { width: number; height: number },
   ): Promise<ImageBitmap> {
     this.assertResourceHealthy();
+    // This invocation owns its viewport identity across resource awaits and
+    // caller callbacks; a later edit to the caller's object is another frame.
+    viewport = { row: viewport.row, col: viewport.col, rows: viewport.rows, cols: viewport.cols };
     const extracted = extractViewerRenderContext(opts);
     const wireOpts = { ...extracted.opts, dpr: opts.dpr ?? defaultDpr() };
     if (this._mode === 'worker') {
