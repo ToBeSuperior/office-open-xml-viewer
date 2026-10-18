@@ -105,6 +105,7 @@ mod chartex;
 mod classic;
 mod labels;
 mod model;
+mod related_parts;
 mod retained;
 mod style;
 
@@ -114,6 +115,7 @@ use chartex::*;
 use classic::*;
 pub use labels::*;
 pub use model::*;
+pub use related_parts::{load_chart_related_parts, load_chart_user_shapes_xml, ChartRelatedParts};
 pub use retained::RetainedBytes;
 use style::*;
 

@@ -1,4 +1,4 @@
-import { EMU_PER_PX, type FindHighlightColors, type FindMatch, type FindMatchesOptions, type HyperlinkTarget, type OoxmlResourceMetrics, type ViewerContextMenuEvent, type ZoomableViewer, openExternalHyperlink } from '@silurus/ooxml-core';
+import { EMU_PER_PX, type FindMatch, type FindMatchesOptions, type HyperlinkTarget, type OoxmlResourceMetrics, type ZoomableViewer, openExternalHyperlink } from '@silurus/ooxml-core';
 import {
   computeUniformVisibleWindow,
   type VisibleWindow,
@@ -24,7 +24,7 @@ import { CommentMarginController } from '@silurus/ooxml-core/internal/comment-ma
 import { ScrollZoomController } from '@silurus/ooxml-core/internal/scroll-zoom-controller';
 import { SelectionContextController } from '@silurus/ooxml-core/internal/selection-context-controller';
 import { CommentOverlayController } from '@silurus/ooxml-core/internal/comment-overlay-controller';
-import { PptxPresentation, type LoadOptions, type RenderSlideOptions } from './presentation';
+import { PptxPresentation, type LoadOptions } from './presentation';
 import type { PptxScrollSlot as SlideSlot } from './scroll-slot';
 import type { PptxTextRunInfo } from './renderer';
 import { buildPptxTextLayer } from './text-layer';
@@ -46,7 +46,6 @@ import {
 import type { PptxCommentsOptions } from './comment-margin';
 import type { PptxScrollViewerOptions } from './scroll-viewer-options';
 import { pptxCommentOccurrenceKey } from './comment-occurrence';
-import type { PptxComment } from './types';
 import { renderPptxFocusedSlide } from './focused-view-runtime';
 import { PptxScrollLayoutController } from './scroll-layout-controller';
 import { createPptxLoadingIndicator } from './loading-indicator';

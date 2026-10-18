@@ -12,7 +12,7 @@ import type { DocxTextRunInfo } from './renderer';
 import { buildDocxTextLayer } from './text-layer';
 import { buildDocxHighlightLayer, type DocxHighlightMatch } from './find-highlight-layer';
 import { DocxFindController, type DocxMatchLocation } from './find';
-import { openExternalHyperlink, PT_TO_PX, nextZoomStep, prevZoomStep, clampScale, fitScale } from '@silurus/ooxml-core';
+import { openExternalHyperlink, PT_TO_PX, nextZoomStep, prevZoomStep, clampScale, fitScale, defaultDpr } from '@silurus/ooxml-core';
 import type { FindHighlightColors, HyperlinkTarget, FindMatch, FindMatchesOptions, OoxmlResourceMetrics, ViewerContextMenuEvent, ZoomableViewer } from '@silurus/ooxml-core';
 import {
   CallerCanvasMount,
@@ -825,7 +825,7 @@ export class DocxViewer implements ZoomableViewer {
     // at the zoom-aware `renderWidth` (the geometry follows setScale).
     const runs: DocxTextRunInfo[] = [];
     const onTextRun = (r: DocxTextRunInfo) => runs.push(r);
-    const dpr = this._opts.dpr ?? (typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1);
+    const dpr = this._opts.dpr ?? defaultDpr();
     const renderOptions = {
       width: renderWidth,
       dpr: this._opts.dpr,

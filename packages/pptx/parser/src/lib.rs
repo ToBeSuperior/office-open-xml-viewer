@@ -1235,13 +1235,7 @@ struct ResolvedTableCellStyle {
 //  XML helpers (roxmltree)
 // ===========================
 
-pub(crate) fn child<'a, 'i>(
-    node: roxmltree::Node<'a, 'i>,
-    local: &str,
-) -> Option<roxmltree::Node<'a, 'i>> {
-    node.children()
-        .find(|n| n.is_element() && n.tag_name().name() == local)
-}
+pub(crate) use ooxml_common::xml_node::{attr, attr_f64, attr_i64, child};
 
 pub(crate) fn children_vec<'a, 'i>(
     node: roxmltree::Node<'a, 'i>,
@@ -1252,26 +1246,12 @@ pub(crate) fn children_vec<'a, 'i>(
         .collect()
 }
 
-pub(crate) fn attr(node: &roxmltree::Node<'_, '_>, local: &str) -> Option<String> {
-    node.attributes()
-        .find(|a| a.name() == local && a.namespace().is_none())
-        .map(|a| a.value().to_owned())
-}
-
 /// Attribute in the r: (relationships) namespace — e.g. r:id, r:embed. Accepts
 /// both the Transitional and Strict (ISO/IEC 29500) relationships URIs.
 pub(crate) fn attr_r(node: &roxmltree::Node<'_, '_>, local: &str) -> Option<String> {
     node.attributes()
         .find(|a| a.name() == local && is_r_ns(a.namespace()))
         .map(|a| a.value().to_owned())
-}
-
-pub(crate) fn attr_i64(node: &roxmltree::Node<'_, '_>, local: &str) -> Option<i64> {
-    attr(node, local)?.parse().ok()
-}
-
-pub(crate) fn attr_f64(node: &roxmltree::Node<'_, '_>, local: &str) -> Option<f64> {
-    attr(node, local)?.parse().ok()
 }
 
 // ===========================
@@ -1286,10 +1266,9 @@ pub(crate) fn parse_rels(xml: &str) -> HashMap<String, String> {
     let Ok(doc) = parse_preflighted_pptx_xml(xml) else {
         return HashMap::new();
     };
-    doc.root_element()
-        .children()
-        .filter(|node| node.is_element() && node.tag_name().name() == "Relationship")
-        .filter_map(|node| Some((attr(&node, "Id")?, attr(&node, "Target")?)))
+    ooxml_common::rels::parse_rels_document(&doc)
+        .into_iter()
+        .map(|(id, relationship)| (id, relationship.target))
         .collect()
 }
 
@@ -1432,15 +1411,7 @@ fn find_internal_rel_target_by_types(
     relationship_types: &[&str],
 ) -> Option<String> {
     let doc = parse_preflighted_pptx_xml(rels_xml).ok()?;
-    doc.root_element()
-        .children()
-        .filter(|node| node.is_element() && node.tag_name().name() == "Relationship")
-        .filter(|node| matches!(attr(node, "TargetMode").as_deref(), None | Some("Internal")))
-        .find_map(|node| {
-            attr(&node, "Type")
-                .filter(|rel_type| relationship_types.contains(&rel_type.as_str()))
-                .and_then(|_| attr(&node, "Target"))
-        })
+    ooxml_common::rels::find_internal_rel_target_by_types(&doc, relationship_types)
 }
 
 const FONT_RELATIONSHIP_TYPES: &[&str] = &[
@@ -4079,9 +4050,184 @@ mod tests {
         );
         assert!(markdown.contains(r"\<img src=x"), "{markdown}");
         assert!(
-            markdown.contains(r"\!\[p\](https://t.example/p.png)"),
+            markdown.contains(r"\!\[p\](https\://t.example/p.png)"),
             "{markdown}"
         );
+    }
+
+    /// Slide titles, body text, table cells, equations, speaker notes and
+    /// review comments carry document text into the Markdown projection. The
+    /// output, parsed as GFM (tables, strikethrough, extended autolinks), may
+    /// contain only the converter's own structure: the document text forms no
+    /// table, link, autolink, heading, list, strikethrough, code or HTML node,
+    /// and a lone CR cannot end a comment quote.
+    #[test]
+    fn markdown_document_text_forms_no_markdown_structure() {
+        use std::io::{Read, Write};
+        const INLINE: &str = "&lt;img src=x onerror=alert(1)&gt; [x](javascript:alert(1)) https://evil.example/ www.evil.example a@evil.example ~~del~~ &amp;copy; `c`";
+        const INLINE_TEXT: &str = "<img src=x onerror=alert(1)> [x](javascript:alert(1)) https://evil.example/ www.evil.example a@evil.example ~~del~~ &copy; `c`";
+        const LINES: &str = "alpha&#13;&#13;```&#13;| a | b |&#13;| :-- | --: |&#13;forged | row&#13;# h&#13;&#160;# nbsp&#13;&#xFEFF;# bom&#13;&gt; q&#13;- item&#13;1. item&#13;===&#13;    Cost: 50% &amp; tax&#13;&#9;Tabbed: 2&#13;&#160;&#160;Kept nbsp&#13;&#x3000;Kept ideographic&#13;&#x2003;# Kept em";
+        let text_shape = |id: u32, ph: &str, paragraphs: &str| {
+            format!(
+                r#"<p:sp><p:nvSpPr><p:cNvPr id="{id}" name="S{id}"/><p:cNvSpPr/><p:nvPr>{ph}</p:nvPr></p:nvSpPr><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1000000" cy="1000000"/></a:xfrm></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/>{paragraphs}</p:txBody></p:sp>"#
+            )
+        };
+        let para =
+            |text: &str| format!(r#"<a:p><a:r><a:t xml:space="preserve">{text}</a:t></a:r></a:p>"#);
+        let cell = |text: &str| {
+            format!(
+                r#"<a:tc><a:txBody><a:bodyPr/><a:p><a:r><a:t xml:space="preserve">{text}</a:t></a:r></a:p></a:txBody><a:tcPr/></a:tc>"#
+            )
+        };
+        let body = [
+            para(INLINE),
+            para("| a | b |"),
+            para("| :-- | --: |"),
+            para("forged | row"),
+            para("&#160;# forged nbsp"),
+            para("&#xFEFF;# forged bom"),
+            para("- forged item"),
+            para("```"),
+            r#"<a:p><a:r><a:t>intro</a:t></a:r><a:br/><a:r><a:t xml:space="preserve">    Body cost: 50% &amp; tax</a:t></a:r></a:p>"#.to_string(),
+            r#"<a:p><a:r><a:t>intro</a:t></a:r><a:br/><a:r><a:t xml:space="preserve">  </a:t></a:r><a:r><a:t xml:space="preserve">  Split indent: 1</a:t></a:r></a:p>"#.to_string(),
+            r#"<a:p><a:r><a:t>intro</a:t></a:r><a:br/><a:r><a:t xml:space="preserve">&#9;Body tab: 2</a:t></a:r></a:p>"#.to_string(),
+            r#"<a:p><a:pPr lvl="2"/><a:r><a:t>Deep plain: 3</a:t></a:r></a:p>"#.to_string(),
+            r#"<a:p><a:r><a:t>First</a:t></a:r><a:br/><a:r><a:t xml:space="preserve">&#160;&#160;Second nbsp</a:t></a:r></a:p>"#.to_string(),
+            r#"<a:p><a:r><a:t>First</a:t></a:r><a:br/><a:r><a:t xml:space="preserve">&#x3000;</a:t></a:r><a:r><a:t xml:space="preserve"># Second ideographic</a:t></a:r></a:p>"#.to_string(),
+            r#"<a:p><a:r><a:t>First</a:t></a:r><a:br/><a:r><a:t xml:space="preserve">  </a:t></a:r><a:r><a:t xml:space="preserve">&#x2003;Second em</a:t></a:r></a:p>"#.to_string(),
+            r#"<a:p><a:r><a:t>ww</a:t></a:r><a:r><a:t>w.split.example</a:t></a:r></a:p>"#.to_string(),
+            r#"<a:p><mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:a14="http://schemas.microsoft.com/office/drawing/2010/main" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"><mc:Choice Requires="a14"><a14:m><m:oMath><m:r><m:t>&lt;img src=x onerror=alert(2)&gt; https://evil.example/</m:t></m:r></m:oMath></a14:m></mc:Choice><mc:Fallback/></mc:AlternateContent></a:p>"#.to_string(),
+        ]
+        .concat();
+        let slide_sp = [
+            text_shape(
+                2,
+                r#"<p:ph type="title"/>"#,
+                &para(&format!("{INLINE} #")),
+            ),
+            format!(
+                r#"<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="3" name="T"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="0" y="0"/><a:ext cx="1000000" cy="1000000"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table"><a:tbl><a:tblGrid><a:gridCol w="500000"/><a:gridCol w="500000"/></a:tblGrid><a:tr h="100000">{}{}</a:tr></a:tbl></a:graphicData></a:graphic></p:graphicFrame>"#,
+                cell(INLINE),
+                cell("a|b&#13;# forged, 50% done"),
+            ),
+            text_shape(4, "", &body),
+        ]
+        .concat();
+        let rels = r#"<Relationship Id="rNotes" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesSlide" Target="../notesSlides/notesSlide1.xml"/><Relationship Id="rComments" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="../comments/comment1.xml"/>"#;
+        let base = build_align_pptx_with_rels(&slide_sp, "", "", rels, "", "");
+        let notes = format!(
+            r#"<p:notes xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:cSld><p:spTree><a:p><a:r><a:t xml:space="preserve">{INLINE}&#13;{LINES}</a:t></a:r></a:p></p:spTree></p:cSld></p:notes>"#
+        );
+        let comments = format!(
+            r#"<p:cmLst xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cm authorId="0"><p:text>{INLINE}&#13;{LINES}</p:text></p:cm></p:cmLst>"#
+        );
+        let mut source = zip::ZipArchive::new(Cursor::new(base)).unwrap();
+        let mut data = Vec::new();
+        {
+            let mut writer = zip::ZipWriter::new(Cursor::new(&mut data));
+            let options = zip::write::SimpleFileOptions::default();
+            for index in 0..source.len() {
+                let mut entry = source.by_index(index).unwrap();
+                let name = entry.name().to_owned();
+                let mut body = Vec::new();
+                entry.read_to_end(&mut body).unwrap();
+                writer.start_file(name, options).unwrap();
+                writer.write_all(&body).unwrap();
+            }
+            for (name, xml) in [
+                ("ppt/notesSlides/notesSlide1.xml", &notes),
+                ("ppt/comments/comment1.xml", &comments),
+            ] {
+                writer.start_file(name, options).unwrap();
+                writer.write_all(xml.as_bytes()).unwrap();
+            }
+            writer.finish().unwrap();
+        }
+
+        let markdown = to_markdown_native(&data).expect("markdown projects");
+        let gfm = ooxml_common::markdown::gfm_check::summarize(&markdown);
+
+        assert_eq!(
+            gfm.headings,
+            [
+                format!("{INLINE_TEXT} # (slide 1)"),
+                "Speaker notes".to_string(),
+                "Review comments".to_string(),
+                "Slide 1 — Comment 1".to_string(),
+            ],
+            "{markdown}"
+        );
+        assert_eq!(gfm.tables, 1, "{markdown}");
+        assert_eq!(
+            gfm.table_cells,
+            [INLINE_TEXT.to_string(), "a|b# forged, 50% done".to_string()],
+            "{markdown}"
+        );
+        assert_eq!(gfm.block_quotes, 1, "{markdown}");
+        assert_eq!(
+            (gfm.links, gfm.images, gfm.html, gfm.strikethrough, gfm.code),
+            (0, 0, 0, 0, 0),
+            "{markdown}"
+        );
+        assert_eq!((gfm.list_items, gfm.thematic_breaks), (0, 0), "{markdown}");
+        for literal in [
+            INLINE_TEXT,
+            "| a | b |",
+            "| :-- | --: |",
+            "forged | row",
+            "# forged nbsp",
+            "# forged bom",
+            "- forged item",
+            "```",
+            "www.split.example",
+            "<img src=x onerror=alert(2)> https://evil.example/",
+            "# h",
+            "> q",
+            "1. item",
+            "===",
+            "Cost: 50% & tax",
+            "Tabbed: 2",
+            "\u{a0}\u{a0}Kept nbsp",
+            "\u{3000}Kept ideographic",
+            "\u{2003}# Kept em",
+            "Body cost: 50% & tax",
+            "Split indent: 1",
+            "Body tab: 2",
+            "Deep plain: 3",
+            "\u{a0}\u{a0}Second nbsp",
+            "\u{3000}# Second ideographic",
+            "\u{2003}Second em",
+        ] {
+            assert!(gfm.text.contains(literal), "{literal:?} in {markdown}");
+        }
+        // The lone CRs in the comment keep every line inside the quote.
+        assert!(
+            markdown.contains("> alpha\n> \n> \\`\\`\\`\n"),
+            "{markdown}"
+        );
+    }
+
+    /// A BOM before indentation at the start of a slide's first paragraph is
+    /// dropped with that indentation: renderers strip the BOM, which would
+    /// otherwise expose an indented code block showing the escapes.
+    #[test]
+    fn markdown_line_start_bom_cannot_expose_an_indented_code_block() {
+        for runs in [
+            r#"<a:r><a:t xml:space="preserve">&#xFEFF;    Cost: 1</a:t></a:r>"#,
+            r#"<a:r><a:t xml:space="preserve">&#xFEFF;</a:t></a:r><a:r><a:t xml:space="preserve">&#9;Cost: 1</a:t></a:r>"#,
+        ] {
+            let slide_sp = format!(
+                r#"<p:sp><p:nvSpPr><p:cNvPr id="5" name="Body"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1000000" cy="1000000"/></a:xfrm></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p>{runs}</a:p></p:txBody></p:sp>"#
+            );
+            let data = build_align_pptx(&slide_sp, "", "");
+
+            let markdown = to_markdown_native(&data).expect("markdown projects");
+            let gfm = ooxml_common::markdown::gfm_check::summarize(&markdown);
+
+            assert_eq!(gfm.headings, ["Slide 1"], "{markdown:?}");
+            assert_eq!(gfm.code, 0, "{markdown:?}");
+            assert_eq!(gfm.text.trim(), "Slide 1\nCost: 1", "{markdown:?}");
+        }
     }
 
     fn build_align_pptx(slide_sp: &str, layout_extra_sp: &str, master_txstyles: &str) -> Vec<u8> {
@@ -5534,26 +5680,6 @@ mod tests {
         }
     }
 
-    /// ECMA-376 §20.1.8.21 — innerShdw shares the field shape of outerShdw
-    /// (blurRad, dist, dir, color child). parse_inner_shadow should round-trip
-    /// all of them, including the alphaModFix encoded as 8-char hex.
-    #[test]
-    fn test_parse_inner_shadow_extracts_fields() {
-        let xml = r#"<effectLst xmlns="http://schemas.openxmlformats.org/drawingml/2006/main">
-            <innerShdw blurRad="50800" dist="38100" dir="2700000">
-                <srgbClr val="000000"><alphaModFix amt="50000"/></srgbClr>
-            </innerShdw>
-        </effectLst>"#;
-        let doc = roxmltree::Document::parse(xml).unwrap();
-        let theme = HashMap::new();
-        let s = parse_inner_shadow(doc.root_element(), &theme).expect("innerShdw should resolve");
-        assert_eq!(s.blur, 50_800);
-        assert_eq!(s.dist, 38_100);
-        assert!((s.dir - 45.0).abs() < 0.001);
-        assert!((s.alpha - 0.5).abs() < 0.01);
-        assert_eq!(s.color.to_lowercase(), "000000");
-    }
-
     /// ECMA-376 §20.1.8.14 + §20.1.8.58 + §20.1.8.30 — a `bgPr > blipFill`
     /// with a `stretch > fillRect` (incl. negative overscan edges) parses into
     /// `Fill::Image` carrying the resolved zip path + mime, the fractional
@@ -6612,34 +6738,6 @@ mod tests {
         assert!(r.font_family_ea.is_none());
     }
 
-    /// ECMA-376 §20.1.8.17 — glow has a single rad attribute and a colour
-    /// child. parse_glow should preserve the radius and resolve alphaModFix.
-    #[test]
-    fn test_parse_glow_extracts_radius_and_color() {
-        let xml = r#"<effectLst xmlns="http://schemas.openxmlformats.org/drawingml/2006/main">
-            <glow rad="38100">
-                <srgbClr val="FF0000"><alphaModFix amt="80000"/></srgbClr>
-            </glow>
-        </effectLst>"#;
-        let doc = roxmltree::Document::parse(xml).unwrap();
-        let theme = HashMap::new();
-        let g = parse_glow(doc.root_element(), &theme).expect("glow should resolve");
-        assert_eq!(g.radius, 38_100);
-        assert_eq!(g.color.to_uppercase(), "FF0000");
-        assert!((g.alpha - 0.8).abs() < 0.01);
-    }
-
-    /// ECMA-376 §20.1.8.31 — softEdge has a single `rad` attribute in EMU.
-    #[test]
-    fn test_parse_soft_edge_extracts_radius() {
-        let xml = r#"<effectLst xmlns="http://schemas.openxmlformats.org/drawingml/2006/main">
-            <softEdge rad="63500"/>
-        </effectLst>"#;
-        let doc = roxmltree::Document::parse(xml).unwrap();
-        let s = parse_soft_edge(doc.root_element()).expect("softEdge should resolve");
-        assert_eq!(s.radius, 63_500);
-    }
-
     /// ECMA-376 §20.1.8.27 — reflection: blur, dist, dir, stA/stPos/endA/endPos
     /// (1000ths of percent), sx/sy (1000ths of percent, sy negative for mirror).
     #[test]
@@ -6674,7 +6772,7 @@ mod tests {
                     <srgbClr val="000000"><alpha val="40000"/></srgbClr>
                 </outerShdw>
                 <innerShdw blurRad="63500" dist="50800" dir="5400000"><srgbClr val="111111"/></innerShdw>
-                <glow rad="63500"><srgbClr val="FFCC00"/></glow>
+                <glow rad="63500"><srgbClr val="FFCC00"><alphaModFix amt="80000"/></srgbClr></glow>
                 <softEdge rad="25400"/>
                 <reflection blurRad="12700" stA="38000" endPos="28000" dist="5000" dir="5400000" sy="-100000" algn="bl" rotWithShape="0"/>
             </effectLst>
@@ -6697,10 +6795,13 @@ mod tests {
 
         let inner = eff.inner_shadow.expect("innerShdw should resolve");
         assert_eq!(inner.blur, 63_500);
+        assert_eq!(inner.dist, 50_800);
+        assert!((inner.dir - 90.0).abs() < 0.001);
 
         let glow = eff.glow.expect("glow should resolve");
         assert_eq!(glow.radius, 63_500);
         assert_eq!(glow.color, "FFCC00");
+        assert!((glow.alpha - 0.8).abs() < 0.01);
 
         let soft = eff.soft_edge.expect("softEdge should resolve");
         assert_eq!(soft.radius, 25_400);

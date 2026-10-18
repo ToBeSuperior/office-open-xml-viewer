@@ -1,11 +1,6 @@
 use super::*;
 
-/// Find a direct child of `parent` whose local name is `name`.
-pub(super) fn child<'a, 'i>(parent: Node<'a, 'i>, name: &str) -> Option<Node<'a, 'i>> {
-    parent
-        .children()
-        .find(|n| n.is_element() && n.tag_name().name() == name)
-}
+pub(super) use crate::xml_node::{attr, child};
 
 /// Retain one custom of-pie split atomically. The limit bounds the owned wire
 /// vector before allocation/serialization; an oversized list is unresolved,
@@ -33,18 +28,6 @@ pub(super) fn parse_of_pie_custom_split_with_limit(
         }
     }
     Some(indices)
-}
-
-/// Read a no-namespace attribute `local` off `node` as an owned `String`.
-///
-/// Mirrors the pptx/xlsx crate-local `attr` helper exactly (matches only
-/// attributes with no namespace, the shape every chart attribute uses), so the
-/// chart-structure parse moved into [`parse_chart_part`] stays byte-identical
-/// to the per-crate bodies it replaces.
-pub(super) fn attr(node: &Node, local: &str) -> Option<String> {
-    node.attributes()
-        .find(|a| a.name() == local && a.namespace().is_none())
-        .map(|a| a.value().to_owned())
 }
 
 pub(super) fn parse_chart_axis_id_value(value: &str) -> Option<String> {

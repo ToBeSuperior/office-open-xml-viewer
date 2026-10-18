@@ -65,7 +65,7 @@ const STEALTH_NOTCH: Readonly<Record<string, number>> = { sm: 1, med: 2, lg: 3 }
 const OPEN_ARM_ALONG: Readonly<Record<string, number>> = { sm: 2, med: 3, lg: 4.5 };
 const OPEN_ARM_ACROSS: Readonly<Record<string, number>> = { sm: 1.25, med: 1.75, lg: 2.5 };
 /** Line widths below this (in points) size their decorations as this width. */
-export const LINE_END_MIN_BASE_PT = 2;
+const LINE_END_MIN_BASE_PT = 2;
 
 const step = (value: string | undefined): string => (value === 'sm' || value === 'lg' ? value : 'med');
 

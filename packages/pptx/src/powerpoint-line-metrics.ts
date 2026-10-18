@@ -1,4 +1,4 @@
-import { findReferenceFontMetrics } from '@silurus/ooxml-core';
+import { findReferenceFontMetrics, SYNTHETIC_ASCENT_EM, SYNTHETIC_DESCENT_EM } from '@silurus/ooxml-core';
 import { ownValue } from '@silurus/ooxml-core/internal/own-key';
 import { excelDrawingMlLineRatios } from '@silurus/ooxml-core/internal/office-auto-line';
 
@@ -269,7 +269,7 @@ export function powerPointNaturalLine(runs: readonly PowerPointLineRun[]): { asc
     descent = Math.max(descent, 1.2 * run.sizePx * (1 - run.share));
   }
   const height = 1.2 * maxSize;
-  if (!(ascent + descent > 0)) return { ascent: height * 0.8, descent: height * 0.2 };
+  if (!(ascent + descent > 0)) return { ascent: height * SYNTHETIC_ASCENT_EM, descent: height * SYNTHETIC_DESCENT_EM };
   const a = height * ascent / (ascent + descent);
   return { ascent: a, descent: height - a };
 }

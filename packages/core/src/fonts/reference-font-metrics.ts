@@ -22,6 +22,9 @@ export interface ReferenceFontMetricProfile {
   /** GSUB vert single-substitution inputs within the generated stacked-sideways
    * domain; vrt2 is excluded. Omitted when no coverage is recorded. */
   readonly stackedVerticalGlyphs?: string;
+  /** GSUB vrt2 single-substitution inputs within the same domain that vert
+   * does not cover. Omitted when there are none. */
+  readonly stackedVrt2OnlyGlyphs?: string;
   /** Derived OS/2 code-page class. Null means this source did not provide the
    * code-page field needed to classify Word's auto-line allocation. */
   readonly farEastCodePage: boolean | null;

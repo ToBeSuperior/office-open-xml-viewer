@@ -214,6 +214,7 @@ export function resolveNumberingMarkerGeometry(
     )?.shape.advancePt ?? 0;
   } else if (suffix === 'tab') {
     bodyOffsetPt = 0;
+    // `word-numbering-marker-overflow-tab-advance`
     if (markerEndPt > 0) {
       const stop = numberingSuffixTabStop(
         input.physicalIndentLeftPt + markerEndPt,

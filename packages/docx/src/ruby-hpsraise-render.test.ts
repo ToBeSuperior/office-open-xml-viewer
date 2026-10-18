@@ -17,6 +17,7 @@ interface GlyphCall {
   x: number;
   y: number;
   font: string;
+  kerning: string;
 }
 
 function makeRecordingCanvas(): {
@@ -25,6 +26,7 @@ function makeRecordingCanvas(): {
 } {
   let font = '10px serif';
   let letterSpacing = '0px';
+  let fontKerning = 'auto';
   const glyphs: GlyphCall[] = [];
   const px = () => parseFloat(/(\d+(?:\.\d+)?)px/.exec(font)?.[1] ?? '10');
   const ctx = {
@@ -32,6 +34,8 @@ function makeRecordingCanvas(): {
     set font(value: string) { font = value; },
     get letterSpacing() { return letterSpacing; },
     set letterSpacing(value: string) { letterSpacing = value; },
+    get fontKerning() { return fontKerning; },
+    set fontKerning(value: string) { fontKerning = value; },
     measureText(text: string) {
       const size = px();
       return {
@@ -42,7 +46,7 @@ function makeRecordingCanvas(): {
         actualBoundingBoxDescent: size * 0.2,
       } as TextMetrics;
     },
-    fillText(text: string, x: number, y: number) { glyphs.push({ text, x, y, font }); },
+    fillText(text: string, x: number, y: number) { glyphs.push({ text, x, y, font, kerning: fontKerning }); },
     save() {}, restore() {}, beginPath() {}, closePath() {}, moveTo() {}, lineTo() {},
     stroke() {}, fill() {}, fillRect() {}, strokeRect() {}, clip() {}, rect() {},
     scale() {}, translate() {}, setLineDash() {}, drawImage() {}, clearRect() {},
@@ -63,13 +67,13 @@ function makeRecordingCanvas(): {
   return { canvas: canvas as unknown as HTMLCanvasElement, glyphs };
 }
 
-function textRun(hpsRaisePt?: number): DocxTextRun {
+function textRun(hpsRaisePt?: number, guide = 'かん'): DocxTextRun {
   return {
     text: '漢', bold: false, italic: false, underline: false, strikethrough: false,
     fontSize: 12, color: null, fontFamily: 'NotInMetrics', isLink: false,
     background: null, vertAlign: null, hyperlink: null,
     ruby: {
-      text: 'かん',
+      text: guide,
       fontSizePt: 8,
       ...(hpsRaisePt != null ? { hpsRaisePt } : {}),
     },
@@ -79,12 +83,14 @@ function textRun(hpsRaisePt?: number): DocxTextRun {
 function documentWithRuby(
   hpsRaisePt?: number,
   lineSpacing: DocParagraph['lineSpacing'] = null,
+  fontFamily = 'NotInMetrics',
+  guide?: string,
 ): DocxDocumentModel {
   const paragraph: DocParagraph = {
     alignment: 'left', indentLeft: 0, indentRight: 0, indentFirst: 0,
     spaceBefore: 0, spaceAfter: 0, lineSpacing, numbering: null, tabStops: [],
-    runs: [{ type: 'text', ...textRun(hpsRaisePt) }],
-    defaultFontSize: 12, defaultFontFamily: 'NotInMetrics', widowControl: false,
+    runs: [{ type: 'text', ...textRun(hpsRaisePt, guide), fontFamily }],
+    defaultFontSize: 12, defaultFontFamily: fontFamily, widowControl: false,
   };
   const section: SectionProps = {
     pageWidth: 200, pageHeight: 200,
@@ -142,6 +148,26 @@ describe('ruby line ascent (WORD_RUBY_LINE_ASCENT, #1885)', () => {
     // The values main produced before the hpsRaise class was measured.
     expect(line.advancePt).toBeCloseTo(34.8, 6);
     expect(line.baselinePt - line.bounds.yPt).toBeCloseTo(26.6, 6);
+  });
+
+  it('keeps measured sides for absent-hpsRaise ruby over a catalogued face', () => {
+    const model = documentWithRuby(undefined, null, 'MS Mincho');
+    const { canvas } = makeRecordingCanvas();
+    const layout = layoutDocument(model, createLayoutServices(model, { measureContext: canvas.getContext('2d') }));
+    const retained = layout.pages[0].layers.body[0];
+    if (retained.kind !== 'paragraph') throw new Error('expected ruby test paragraph');
+    const line = retained.lines[0];
+    // The values main produced before the hpsRaise class was measured.
+    expect(line.advancePt).toBeCloseTo(23.2, 6);
+    expect(line.baselinePt - line.bounds.yPt).toBeCloseTo(20.8, 6);
+  });
+
+  it('paints a pair-kerned Arabic guide as one kerned contextual span', async () => {
+    const { canvas, glyphs } = makeRecordingCanvas();
+    await renderDocumentToCanvas(documentWithRuby(9, null, 'NotInMetrics', 'سلام'), canvas, 0, { dpr: 1, width: 400 });
+    const guide = glyphs.filter((glyph) => /\p{Script=Arabic}/u.test(glyph.text));
+    expect(guide.map((glyph) => [glyph.text, glyph.kerning])).toEqual([['سلام', 'normal']]);
+    expect(glyphs.find((glyph) => glyph.text === '漢')?.kerning).not.toBe('normal');
   });
 });
 

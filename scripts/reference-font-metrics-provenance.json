@@ -12131,6 +12131,7 @@
     },
     {
       "stackedVerticalGlyphs": "…‥、。ー～＝＿￣（）〔〕［］｛｝〈〉《》「」『』【】〖〗",
+      "stackedVrt2OnlyGlyphs": "()<>[]{}",
       "profileId": "macos-system:hiraginosansgb-w3:33ac4a926947",
       "source": "macos-system",
       "file": "Primary/Hiragino Sans GB.ttc",
@@ -12153,6 +12154,7 @@
     },
     {
       "stackedVerticalGlyphs": "…‥、。ー～＝＿￣（）〔〕［］｛｝〈〉《》「」『』【】〖〗",
+      "stackedVrt2OnlyGlyphs": "()<>[]{}",
       "profileId": "macos-system:hiraginosansgbinterface-w3:b0a934d7b1e9",
       "source": "macos-system",
       "file": "Primary/Hiragino Sans GB.ttc",
@@ -12175,6 +12177,7 @@
     },
     {
       "stackedVerticalGlyphs": "…‥、。ー～＝＿￣（）〔〕［］｛｝〈〉《》「」『』【】〖〗",
+      "stackedVrt2OnlyGlyphs": "()<>[]{}",
       "profileId": "macos-system:hiraginosansgb-w6:53be6dac1874",
       "source": "macos-system",
       "file": "Primary/Hiragino Sans GB.ttc",
@@ -12197,6 +12200,7 @@
     },
     {
       "stackedVerticalGlyphs": "…‥、。ー～＝＿￣（）〔〕［］｛｝〈〉《》「」『』【】〖〗",
+      "stackedVrt2OnlyGlyphs": "()<>[]{}",
       "profileId": "macos-system:hiraginosansgbinterface-w6:16ad3d2e4208",
       "source": "macos-system",
       "file": "Primary/Hiragino Sans GB.ttc",
@@ -14560,6 +14564,7 @@
     },
     {
       "stackedVerticalGlyphs": "…‥←→↑↓―、。ー～＝＿￣｜（）〔〕［］｛｝〈〉《》「」『』【】〖〗",
+      "stackedVrt2OnlyGlyphs": "()<>[]{}‐∥",
       "profileId": "macos-system:hiramarupro-w4:ca818b0dcaa7",
       "source": "macos-system",
       "file": "Primary/ヒラギノ丸ゴ ProN W4.ttc",
@@ -14582,6 +14587,7 @@
     },
     {
       "stackedVerticalGlyphs": "…‥←→↑↓―、。ー～＝＿￣｜（）〔〕［］｛｝〈〉《》「」『』【】〖〗",
+      "stackedVrt2OnlyGlyphs": "()<>[]{}‐∥",
       "profileId": "macos-system:hiramarupron-w4:242473889b17",
       "source": "macos-system",
       "file": "Primary/ヒラギノ丸ゴ ProN W4.ttc",
@@ -14604,6 +14610,7 @@
     },
     {
       "stackedVerticalGlyphs": "…‥←→↑↓―、。ー～＝＿￣｜（）〔〕［］｛｝〈〉《》「」『』【】〖〗",
+      "stackedVrt2OnlyGlyphs": "()<>[]{}‐∥",
       "profileId": "macos-system:hiraminpron-w3:3467ee080f79",
       "source": "macos-system",
       "file": "Primary/ヒラギノ明朝 ProN.ttc",
@@ -14626,6 +14633,7 @@
     },
     {
       "stackedVerticalGlyphs": "…‥←→↑↓―、。ー～＝＿￣｜（）〔〕［］｛｝〈〉《》「」『』【】〖〗",
+      "stackedVrt2OnlyGlyphs": "()<>[]{}‐∥",
       "profileId": "macos-system:hiraminpro-w3:740181eb8117",
       "source": "macos-system",
       "file": "Primary/ヒラギノ明朝 ProN.ttc",
@@ -14648,6 +14656,7 @@
     },
     {
       "stackedVerticalGlyphs": "…‥←→↑↓―、。ー～＝＿￣｜（）〔〕［］｛｝〈〉《》「」『』【】〖〗",
+      "stackedVrt2OnlyGlyphs": "()<>[]{}‐∥",
       "profileId": "macos-system:hiraminpron-w6:43671c82968f",
       "source": "macos-system",
       "file": "Primary/ヒラギノ明朝 ProN.ttc",
@@ -14670,6 +14679,7 @@
     },
     {
       "stackedVerticalGlyphs": "…‥←→↑↓―、。ー～＝＿￣｜（）〔〕［］｛｝〈〉《》「」『』【】〖〗",
+      "stackedVrt2OnlyGlyphs": "()<>[]{}‐∥",
       "profileId": "macos-system:hiraminpro-w6:8eec534a1a19",
       "source": "macos-system",
       "file": "Primary/ヒラギノ明朝 ProN.ttc",
@@ -14692,6 +14702,7 @@
     },
     {
       "stackedVerticalGlyphs": "…‥‐←→↑↓―、。ー～＝＿￣｜（）〔〕［］｛｝〈〉《》「」『』【】",
+      "stackedVrt2OnlyGlyphs": "()<>[]{}",
       "profileId": "macos-system:hiraginosans-w0:90be730fa510",
       "source": "macos-system",
       "file": "Primary/ヒラギノ角ゴシック W0.ttc",
@@ -14714,6 +14725,7 @@
     },
     {
       "stackedVerticalGlyphs": "…‥‐←→↑↓―、。ー～＝＿￣｜（）〔〕［］｛｝〈〉《》「」『』【】",
+      "stackedVrt2OnlyGlyphs": "()<>[]{}",
       "profileId": "macos-system:hirakakuinterface-w0:d21bc46dfb81",
       "source": "macos-system",
       "file": "Primary/ヒラギノ角ゴシック W0.ttc",
@@ -14736,6 +14748,7 @@
     },
     {
       "stackedVerticalGlyphs": "…‥←→↑↓―、。ー～＝＿￣｜（）〔〕［］｛｝〈〉《》「」『』【】〖〗",
+      "stackedVrt2OnlyGlyphs": "()<>[]{}‐∥",
       "profileId": "macos-system:hiraginosans-w1:d3cf737cae77",
       "source": "macos-system",
       "file": "Primary/ヒラギノ角ゴシック W1.ttc",
@@ -14758,6 +14771,7 @@
     },
     {
       "stackedVerticalGlyphs": "…‥←→↑↓―、。ー～＝＿￣｜（）〔〕［］｛｝〈〉《》「」『』【】〖〗",
+      "stackedVrt2OnlyGlyphs": "()<>[]{}‐∥",
       "profileId": "macos-system:hirakakuinterface-w1:3634cec789f7",
       "source": "macos-system",
       "file": "Primary/ヒラギノ角ゴシック W1.ttc",
@@ -14780,6 +14794,7 @@
     },
     {
       "stackedVerticalGlyphs": "…‥←→↑↓―、。ー～＝＿￣｜（）〔〕［］｛｝〈〉《》「」『』【】〖〗",
+      "stackedVrt2OnlyGlyphs": "()<>[]{}‐∥",
       "profileId": "macos-system:hiraginosans-w2:d9dd92a5bc0e",
       "source": "macos-system",
       "file": "Primary/ヒラギノ角ゴシック W2.ttc",
@@ -14802,6 +14817,7 @@
     },
     {
       "stackedVerticalGlyphs": "…‥←→↑↓―、。ー～＝＿￣｜（）〔〕［］｛｝〈〉《》「」『』【】〖〗",
+      "stackedVrt2OnlyGlyphs": "()<>[]{}‐∥",
       "profileId": "macos-system:hirakakuinterface-w2:3601948112aa",
       "source": "macos-system",
       "file": "Primary/ヒラギノ角ゴシック W2.ttc",
@@ -14824,6 +14840,7 @@
     },
     {
       "stackedVerticalGlyphs": "…‥←→↑↓―、。ー～＝＿￣｜（）〔〕［］｛｝〈〉《》「」『』【】〖〗",
+      "stackedVrt2OnlyGlyphs": "()<>[]{}‐∥",
       "profileId": "macos-system:hiraginosans-w3:7050af9566a7",
       "source": "macos-system",
       "file": "Primary/ヒラギノ角ゴシック W3.ttc",
@@ -14846,6 +14863,7 @@
     },
     {
       "stackedVerticalGlyphs": "…‥←→↑↓―、。ー～＝＿￣｜（）〔〕［］｛｝〈〉《》「」『』【】〖〗",
+      "stackedVrt2OnlyGlyphs": "()<>[]{}‐∥",
       "profileId": "macos-system:hirakakuinterface-w3:7c3b0b981c04",
       "source": "macos-system",
       "file": "Primary/ヒラギノ角ゴシック W3.ttc",
@@ -14868,6 +14886,7 @@
     },
     {
       "stackedVerticalGlyphs": "…‥←→↑↓―、。ー～＝＿￣｜（）〔〕［］｛｝〈〉《》「」『』【】〖〗",
+      "stackedVrt2OnlyGlyphs": "()<>[]{}‐∥",
       "profileId": "macos-system:hirakakupron-w3:dd1fc008564b",
       "source": "macos-system",
       "file": "Primary/ヒラギノ角ゴシック W3.ttc",
@@ -14890,6 +14909,7 @@
     },
     {
       "stackedVerticalGlyphs": "…‥←→↑↓―、。ー～＝＿￣｜（）〔〕［］｛｝〈〉《》「」『』【】〖〗",
+      "stackedVrt2OnlyGlyphs": "()<>[]{}‐∥",
       "profileId": "macos-system:hirakakupro-w3:f80380aba187",
       "source": "macos-system",
       "file": "Primary/ヒラギノ角ゴシック W3.ttc",
@@ -14912,6 +14932,7 @@
     },
     {
       "stackedVerticalGlyphs": "…‥←→↑↓―、。ー～＝＿￣｜（）〔〕［］｛｝〈〉《》「」『』【】〖〗",
+      "stackedVrt2OnlyGlyphs": "()<>[]{}‐∥",
       "profileId": "macos-system:hiraginosans-w4:9713b111bc01",
       "source": "macos-system",
       "file": "Primary/ヒラギノ角ゴシック W4.ttc",
@@ -14934,6 +14955,7 @@
     },
     {
       "stackedVerticalGlyphs": "…‥←→↑↓―、。ー～＝＿￣｜（）〔〕［］｛｝〈〉《》「」『』【】〖〗",
+      "stackedVrt2OnlyGlyphs": "()<>[]{}‐∥",
       "profileId": "macos-system:hirakakuinterface-w4:54c92f67c708",
       "source": "macos-system",
       "file": "Primary/ヒラギノ角ゴシック W4.ttc",
@@ -14956,6 +14978,7 @@
     },
     {
       "stackedVerticalGlyphs": "…‥←→↑↓―、。ー～＝＿￣｜（）〔〕［］｛｝〈〉《》「」『』【】〖〗",
+      "stackedVrt2OnlyGlyphs": "()<>[]{}‐∥",
       "profileId": "macos-system:hiraginosans-w5:546d51135716",
       "source": "macos-system",
       "file": "Primary/ヒラギノ角ゴシック W5.ttc",
@@ -14978,6 +15001,7 @@
     },
     {
       "stackedVerticalGlyphs": "…‥←→↑↓―、。ー～＝＿￣｜（）〔〕［］｛｝〈〉《》「」『』【】〖〗",
+      "stackedVrt2OnlyGlyphs": "()<>[]{}‐∥",
       "profileId": "macos-system:hirakakuinterface-w5:a8a664650154",
       "source": "macos-system",
       "file": "Primary/ヒラギノ角ゴシック W5.ttc",
@@ -15000,6 +15024,7 @@
     },
     {
       "stackedVerticalGlyphs": "…‥←→↑↓―、。ー～＝＿￣｜（）〔〕［］｛｝〈〉《》「」『』【】〖〗",
+      "stackedVrt2OnlyGlyphs": "()<>[]{}‐∥",
       "profileId": "macos-system:hiraginosans-w6:e1a4bbcf6bb7",
       "source": "macos-system",
       "file": "Primary/ヒラギノ角ゴシック W6.ttc",
@@ -15022,6 +15047,7 @@
     },
     {
       "stackedVerticalGlyphs": "…‥←→↑↓―、。ー～＝＿￣｜（）〔〕［］｛｝〈〉《》「」『』【】〖〗",
+      "stackedVrt2OnlyGlyphs": "()<>[]{}‐∥",
       "profileId": "macos-system:hirakakuinterface-w6:4a48626aa80b",
       "source": "macos-system",
       "file": "Primary/ヒラギノ角ゴシック W6.ttc",
@@ -15044,6 +15070,7 @@
     },
     {
       "stackedVerticalGlyphs": "…‥←→↑↓―、。ー～＝＿￣｜（）〔〕［］｛｝〈〉《》「」『』【】〖〗",
+      "stackedVrt2OnlyGlyphs": "()<>[]{}‐∥",
       "profileId": "macos-system:hirakakupron-w6:375e91bc2038",
       "source": "macos-system",
       "file": "Primary/ヒラギノ角ゴシック W6.ttc",
@@ -15066,6 +15093,7 @@
     },
     {
       "stackedVerticalGlyphs": "…‥←→↑↓―、。ー～＝＿￣｜（）〔〕［］｛｝〈〉《》「」『』【】〖〗",
+      "stackedVrt2OnlyGlyphs": "()<>[]{}‐∥",
       "profileId": "macos-system:hirakakupro-w6:8779ed48fe3a",
       "source": "macos-system",
       "file": "Primary/ヒラギノ角ゴシック W6.ttc",
@@ -15088,6 +15116,7 @@
     },
     {
       "stackedVerticalGlyphs": "…‥‐←→↑↓―、。ー～＝＿￣｜（）〔〕［］｛｝〈〉《》「」『』【】",
+      "stackedVrt2OnlyGlyphs": "()<>[]{}",
       "profileId": "macos-system:hiraginosans-w7:29c18775d889",
       "source": "macos-system",
       "file": "Primary/ヒラギノ角ゴシック W7.ttc",
@@ -15110,6 +15139,7 @@
     },
     {
       "stackedVerticalGlyphs": "…‥‐←→↑↓―、。ー～＝＿￣｜（）〔〕［］｛｝〈〉《》「」『』【】",
+      "stackedVrt2OnlyGlyphs": "()<>[]{}",
       "profileId": "macos-system:hirakakuinterface-w7:f6880dc6c7a7",
       "source": "macos-system",
       "file": "Primary/ヒラギノ角ゴシック W7.ttc",
@@ -15132,6 +15162,7 @@
     },
     {
       "stackedVerticalGlyphs": "…‥‐←→↑↓―、。ー～＝＿￣｜（）〔〕［］｛｝〈〉《》「」『』【】",
+      "stackedVrt2OnlyGlyphs": "()<>[]{}",
       "profileId": "macos-system:hiraginosans-w8:a969bb6bc9f6",
       "source": "macos-system",
       "file": "Primary/ヒラギノ角ゴシック W8.ttc",
@@ -15154,6 +15185,7 @@
     },
     {
       "stackedVerticalGlyphs": "…‥‐←→↑↓―、。ー～＝＿￣｜（）〔〕［］｛｝〈〉《》「」『』【】",
+      "stackedVrt2OnlyGlyphs": "()<>[]{}",
       "profileId": "macos-system:hirakakuinterface-w8:86b19f4306d0",
       "source": "macos-system",
       "file": "Primary/ヒラギノ角ゴシック W8.ttc",
@@ -15176,6 +15208,7 @@
     },
     {
       "stackedVerticalGlyphs": "…‥←→↑↓―、。ー～＝＿￣｜（）〔〕［］｛｝〈〉《》「」『』【】",
+      "stackedVrt2OnlyGlyphs": "()<>[]{}‐",
       "profileId": "macos-system:hirakakustd-w8:a1420a20a44d",
       "source": "macos-system",
       "file": "Primary/ヒラギノ角ゴシック W8.ttc",
@@ -15198,6 +15231,7 @@
     },
     {
       "stackedVerticalGlyphs": "…‥‐←→↑↓―、。ー～＝＿￣｜（）〔〕［］｛｝〈〉《》「」『』【】",
+      "stackedVrt2OnlyGlyphs": "()<>[]{}",
       "profileId": "macos-system:hirakakustdn-w8:7bca097329c0",
       "source": "macos-system",
       "file": "Primary/ヒラギノ角ゴシック W8.ttc",
@@ -15220,6 +15254,7 @@
     },
     {
       "stackedVerticalGlyphs": "…‥‐←→↑↓―、。ー～＝＿￣｜（）〔〕［］｛｝〈〉《》「」『』【】",
+      "stackedVrt2OnlyGlyphs": "()<>[]{}",
       "profileId": "macos-system:hiraginosans-w9:c6b0ad845be4",
       "source": "macos-system",
       "file": "Primary/ヒラギノ角ゴシック W9.ttc",
@@ -15242,6 +15277,7 @@
     },
     {
       "stackedVerticalGlyphs": "…‥‐←→↑↓―、。ー～＝＿￣｜（）〔〕［］｛｝〈〉《》「」『』【】",
+      "stackedVrt2OnlyGlyphs": "()<>[]{}",
       "profileId": "macos-system:hirakakuinterface-w9:555e87a48980",
       "source": "macos-system",
       "file": "Primary/ヒラギノ角ゴシック W9.ttc",
@@ -19512,6 +19548,7 @@
     },
     {
       "stackedVerticalGlyphs": "…‥‐←→↑↓―、。ー～＝＿￣｜（）〔〕［］｛｝〈〉《》「」『』【】〖〗",
+      "stackedVrt2OnlyGlyphs": "()<>[]{}∥",
       "profileId": "office-mac:meiryo:466336af7c52",
       "source": "office-mac",
       "file": "DFonts/meiryo.ttc",
@@ -19534,6 +19571,7 @@
     },
     {
       "stackedVerticalGlyphs": "…‥‐←→↑↓―、。ー～＝＿￣｜（）〔〕［］｛｝〈〉《》「」『』【】〖〗",
+      "stackedVrt2OnlyGlyphs": "()<>[]{}∥",
       "profileId": "office-mac:meiryo-italic:3aca4fe54473",
       "source": "office-mac",
       "file": "DFonts/meiryo.ttc",
@@ -19556,6 +19594,7 @@
     },
     {
       "stackedVerticalGlyphs": "…‥‐←→↑↓―、。ー～＝＿￣｜（）〔〕［］｛｝〈〉《》「」『』【】〖〗",
+      "stackedVrt2OnlyGlyphs": "()<>[]{}∥",
       "profileId": "office-mac:meiryoui:b509567612db",
       "source": "office-mac",
       "file": "DFonts/meiryo.ttc",
@@ -19578,6 +19617,7 @@
     },
     {
       "stackedVerticalGlyphs": "…‥‐←→↑↓―、。ー～＝＿￣｜（）〔〕［］｛｝〈〉《》「」『』【】〖〗",
+      "stackedVrt2OnlyGlyphs": "()<>[]{}∥",
       "profileId": "office-mac:meiryoui-italic:40a5bb9f7a83",
       "source": "office-mac",
       "file": "DFonts/meiryo.ttc",
@@ -19600,6 +19640,7 @@
     },
     {
       "stackedVerticalGlyphs": "…‥‐←→↑↓―、。ー～＝＿￣｜（）〔〕［］｛｝〈〉《》「」『』【】〖〗",
+      "stackedVrt2OnlyGlyphs": "()<>[]{}∥",
       "profileId": "office-mac:meiryo-bold:a0b8e6a126e6",
       "source": "office-mac",
       "file": "DFonts/meiryob.ttc",
@@ -19622,6 +19663,7 @@
     },
     {
       "stackedVerticalGlyphs": "…‥‐←→↑↓―、。ー～＝＿￣｜（）〔〕［］｛｝〈〉《》「」『』【】〖〗",
+      "stackedVrt2OnlyGlyphs": "()<>[]{}∥",
       "profileId": "office-mac:meiryo-bolditalic:b5b4b696b0a8",
       "source": "office-mac",
       "file": "DFonts/meiryob.ttc",
@@ -19644,6 +19686,7 @@
     },
     {
       "stackedVerticalGlyphs": "…‥‐←→↑↓―、。ー～＝＿￣｜（）〔〕［］｛｝〈〉《》「」『』【】〖〗",
+      "stackedVrt2OnlyGlyphs": "()<>[]{}∥",
       "profileId": "office-mac:meiryoui-bold:ad383ea5c839",
       "source": "office-mac",
       "file": "DFonts/meiryob.ttc",
@@ -19666,6 +19709,7 @@
     },
     {
       "stackedVerticalGlyphs": "…‥‐←→↑↓―、。ー～＝＿￣｜（）〔〕［］｛｝〈〉《》「」『』【】〖〗",
+      "stackedVrt2OnlyGlyphs": "()<>[]{}∥",
       "profileId": "office-mac:meiryoui-bolditalic:9b1ab6904a12",
       "source": "office-mac",
       "file": "DFonts/meiryob.ttc",
@@ -21835,6 +21879,7 @@
     },
     {
       "stackedVerticalGlyphs": "…‥‐←→↑↓―、。ー～＝＿￣｜（）〔〕［］｛｝〈〉《》「」『』【】〖〗",
+      "stackedVrt2OnlyGlyphs": "()<>[]{}∥",
       "profileId": "office-mac:yugothic-bold:c07c6173790f",
       "source": "office-mac",
       "file": "DFonts/YuGothB.ttc",
@@ -21857,6 +21902,7 @@
     },
     {
       "stackedVerticalGlyphs": "…‥‐←→↑↓―、。ー～＝＿￣｜（）〔〕［］｛｝〈〉《》「」『』【】〖〗",
+      "stackedVrt2OnlyGlyphs": "∥",
       "profileId": "office-mac:yugothicui-bold:e9731c2a0cc0",
       "source": "office-mac",
       "file": "DFonts/YuGothB.ttc",
@@ -21879,6 +21925,7 @@
     },
     {
       "stackedVerticalGlyphs": "…‥‐←→↑↓―、。ー～＝＿￣｜（）〔〕［］｛｝〈〉《》「」『』【】〖〗",
+      "stackedVrt2OnlyGlyphs": "∥",
       "profileId": "office-mac:yugothicui-semibold:4ccd2d9832af",
       "source": "office-mac",
       "file": "DFonts/YuGothB.ttc",
@@ -21901,6 +21948,7 @@
     },
     {
       "stackedVerticalGlyphs": "…‥‐←→↑↓―、。ー～＝＿￣｜（）〔〕［］｛｝〈〉《》「」『』【】〖〗",
+      "stackedVrt2OnlyGlyphs": "()<>[]{}∥",
       "profileId": "office-mac:yugothic-light:1e4c58012e1a",
       "source": "office-mac",
       "file": "DFonts/YuGothL.ttc",
@@ -21923,6 +21971,7 @@
     },
     {
       "stackedVerticalGlyphs": "…‥‐←→↑↓―、。ー～＝＿￣｜（）〔〕［］｛｝〈〉《》「」『』【】〖〗",
+      "stackedVrt2OnlyGlyphs": "()<>[]{}∥",
       "profileId": "office-mac:yugothicui-light:d7c5089633c6",
       "source": "office-mac",
       "file": "DFonts/YuGothL.ttc",
@@ -21945,6 +21994,7 @@
     },
     {
       "stackedVerticalGlyphs": "…‥‐←→↑↓―、。ー～＝＿￣｜（）〔〕［］｛｝《》「」『』【】〖〗",
+      "stackedVrt2OnlyGlyphs": "()<>[]{}∥",
       "profileId": "office-mac:yugothic-medium:8bed6e07dddf",
       "source": "office-mac",
       "file": "DFonts/YuGothM.ttc",
@@ -21967,6 +22017,7 @@
     },
     {
       "stackedVerticalGlyphs": "…‥‐←→↑↓―、。ー～＝＿￣｜（）〔〕［］｛｝〈〉《》「」『』【】〖〗",
+      "stackedVrt2OnlyGlyphs": "()<>[]{}∥",
       "profileId": "office-mac:yugothicui-regular:0783ceca0ee1",
       "source": "office-mac",
       "file": "DFonts/YuGothM.ttc",
@@ -21989,6 +22040,7 @@
     },
     {
       "stackedVerticalGlyphs": "…‥‐←→↑↓―、。ー～＝＿￣｜（）〔〕［］｛｝〈〉《》「」『』【】〖〗",
+      "stackedVrt2OnlyGlyphs": "()<>[]{}∥",
       "profileId": "office-mac:yugothic-regular:86e453cd1378",
       "source": "office-mac",
       "file": "DFonts/YuGothR.ttc",
@@ -22011,6 +22063,7 @@
     },
     {
       "stackedVerticalGlyphs": "…‥‐←→↑↓―、。ー～＝＿￣｜（）〔〕［］｛｝〈〉《》「」『』【】〖〗",
+      "stackedVrt2OnlyGlyphs": "()<>[]{}∥",
       "profileId": "office-mac:yugothicui-semilight:29637e9b7449",
       "source": "office-mac",
       "file": "DFonts/YuGothR.ttc",
@@ -22033,6 +22086,7 @@
     },
     {
       "stackedVerticalGlyphs": "…‥‐←→↑↓―、。ー～＝＿￣｜（）〔〕［］｛｝〈〉《》「」『』【】〖〗",
+      "stackedVrt2OnlyGlyphs": "()<>[]{}∥",
       "profileId": "office-mac:yumincho-regular:cf5d7cc8b8b9",
       "source": "office-mac",
       "file": "DFonts/yumin.ttf",
@@ -22055,6 +22109,7 @@
     },
     {
       "stackedVerticalGlyphs": "…‥‐←→↑↓―、。ー～＝＿￣｜（）〔〕［］｛｝〈〉《》「」『』【】〖〗",
+      "stackedVrt2OnlyGlyphs": "()<>[]{}∥",
       "profileId": "office-mac:yumincho-demibold:5bf664752249",
       "source": "office-mac",
       "file": "DFonts/yumindb.ttf",
@@ -22077,6 +22132,7 @@
     },
     {
       "stackedVerticalGlyphs": "…‥‐←→↑↓―、。ー～＝＿￣｜（）〔〕［］｛｝〈〉《》「」『』【】〖〗",
+      "stackedVrt2OnlyGlyphs": "()<>[]{}∥",
       "profileId": "office-mac:yumincho-light:2826a20da4cb",
       "source": "office-mac",
       "file": "DFonts/yuminl.ttf",

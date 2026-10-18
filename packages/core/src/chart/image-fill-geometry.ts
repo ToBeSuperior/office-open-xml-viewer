@@ -5,7 +5,7 @@ import { MAX_CHART_IMAGE_FILL_TILES } from './resource-limits.js';
  * Reject a grid whose phase cannot be represented instead of stalling on it or
  * painting it misregistered. Use a safe-integer overflow sentinel so the typed
  * error survives worker transport. */
-export function rejectChartImageGeometry(): never {
+function rejectChartImageGeometry(): never {
   throw new OoxmlDecodedImageLimitError('image-effect-work', MAX_CHART_IMAGE_FILL_TILES, Number.MAX_SAFE_INTEGER);
 }
 

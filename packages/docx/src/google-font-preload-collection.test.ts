@@ -350,7 +350,10 @@ describe('script-scoped Arabic visual substitutes', () => {
       }),
     });
     expect(calls.some((entry) => entry.text === 'ما' && entry.face === 'Noto Naskh Arabic')).toBe(true);
-    expect(calls.filter((entry) => /[١٢]/u.test(entry.text)).map((entry) => entry.face)).toEqual(['serif', 'serif']);
+    // The Arabic-script guide is pair-kerned, so it paints as one contextual
+    // span (WORD_ARABIC_PAIR_KERNING).
+    expect(calls.filter((entry) => /[١٢]/u.test(entry.text)).map((entry) => [entry.text, entry.face]))
+      .toEqual([['١٢', 'serif']]);
     const guideMeasurements = measurements.filter((entry) => /[١٢]/u.test(entry.text));
     expect(guideMeasurements.length).toBeGreaterThan(0);
     expect(guideMeasurements.every((entry) => entry.face === 'serif')).toBe(true);

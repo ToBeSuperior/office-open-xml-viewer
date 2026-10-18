@@ -3,7 +3,6 @@ import type { FontPreloadEntry } from '@silurus/ooxml-core';
 import {
   PPTX_GOOGLE_FONTS,
   PptxFontPreloadAccumulator,
-  pptxFontPreloadNames,
   pptxSlideCjkFallback,
   pptxSlideOfficeFontRequests,
 } from './google-fonts';
@@ -211,7 +210,6 @@ describe('PptxFontPreloadAccumulator', () => {
     };
     const incremental = new PptxFontPreloadAccumulator(pres.majorFont, pres.minorFont);
     incremental.addSlide(slide);
-    expect(incremental.names()).toEqual(pptxFontPreloadNames(pres));
     expect(incremental.names()).toEqual([
       'Yu Gothic', 'Aptos',
       'Noto Sans JP', 'Noto Serif JP',

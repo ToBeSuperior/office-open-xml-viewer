@@ -956,6 +956,7 @@ export function performAddToLine(
   }
   if ('text' in s) {
     const kind = snapToCharsClass(s, characterGrid);
+    // `word-snap-to-chars-script-block-allocation`
     const naturalWidth = s.snapGridNaturalWidthPx ?? w;
     if (kind && snapPitchPx != null) {
       s.snapGridClass = kind;
@@ -1658,9 +1659,11 @@ export function performTextSegmentBox(
   // height; native reference sides are policy geometry only. Ruby and an
   // authored baseline position compose additional boxes outside either
   // simple OpenType projection, so retain measured sides for those inputs.
-  // A ruby base keeps its own design sides: the guide only raises the ascent
-  // (WORD_RUBY_LINE_ASCENT below).
+  // A ruby base with an authored hpsRaise keeps its own design sides: the
+  // guide only raises the ascent (WORD_RUBY_LINE_ASCENT below). Ruby without
+  // hpsRaise is outside that measured class and keeps measured sides.
   const designOwnsSides =
+    (!s.ruby || s.ruby.hpsRaisePt != null) &&
     (s.resolvedResourceVerticalMetric || s.referenceFontVerticalMetric) &&
     (s.position ?? 0) === 0 &&
     s.resolvedDesignAscentRatio != null &&
@@ -1771,6 +1774,7 @@ export function performTabFollowWidth(operationState: PassOperationState, q: Lay
   return segAdvance(q);
 }
 
+// `word-decimal-tab-separator-resolution`
 export function performDecimalAlignmentPoint(
   segments: readonly LayoutSeg[],
 ): Readonly<{ segmentIndex: number; charOffset: number }> | null {

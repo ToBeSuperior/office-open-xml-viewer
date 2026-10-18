@@ -723,8 +723,9 @@ pub fn rgb_to_hls(r: f64, g: f64, b: f64) -> (f64, f64, f64) {
     (h / 6.0, l, s)
 }
 
-/// HLS → RGB conversion. (h, l, s) are each in [0, 1]; returns linear-RGB
-/// triple in [0, 1].
+/// HLS → RGB conversion. (h, l, s) are each in [0, 1]; returns an RGB triple
+/// in [0, 1], in the same space (encoded sRGB or linear light) that the HLS
+/// triple was decomposed from. Callers choose that space explicitly.
 pub fn hls_to_rgb(h: f64, l: f64, s: f64) -> (f64, f64, f64) {
     if s < 1e-10 {
         return (l, l, l);

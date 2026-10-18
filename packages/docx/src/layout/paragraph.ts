@@ -51,7 +51,7 @@ import {
 } from './text.js';
 import { eastAsianUprightPaintOps } from './vertical-glyph-orientation.js';
 import { wordTrackChangeDecoration } from './paint-compatibility.js';
-import type { DocParagraph, DocRun, ShapeRun } from '../types.js';
+import type { DocRun, ShapeRun } from '../types.js';
 import {
   computeLineVisualOrder,
   jcIsFullyJustified,
@@ -170,7 +170,7 @@ export {
   prepareBodyFrameMetadata,
 } from './frame.js';
 export type { BodyFrameGroup } from './frame.js';
-import type { ParagraphAcquisitionInput, ParagraphAcquisitionRun, ParagraphLayoutSource } from './text.js';
+import type { ParagraphAcquisitionInput, ParagraphLayoutSource } from './text.js';
 import type { VerticalGlyphMeasurementService } from './measurement-capabilities.js';
 import type {
   DrawingLayout,
@@ -695,7 +695,8 @@ function trimTerminalUnderline(
  * clearance below every glyph in the contiguous span; acquiring each run in
  * isolation instead creates stepped solid rules and restarts dash/wave phase
  * at source seams. Normalize the span before paint while keeping authored
- * style, color, and thickness boundaries intact. */
+ * style, color, and thickness boundaries intact.
+ * `word-contiguous-underline-geometry` */
 function coalesceAdjacentDecorations(placements: ParagraphPlacement[]): void {
   type ActiveDecoration = Readonly<{
     placementIndex: number;
@@ -856,6 +857,7 @@ export function planLine(input: PlanLineInput): LineLayout {
     }
   }
   const lastDrawnIndex = visual.order.at(-1) ?? -1;
+  // `word-justification-leading-indent-exclusion`
   let firstContentIndex = 0;
   if (!bidi) {
     const found = segments.findIndex((segment) => segment.kind !== 'text' || /\S/.test(segment.text));
@@ -1047,6 +1049,7 @@ export function planLine(input: PlanLineInput): LineLayout {
             .filter((cluster) => cluster.range.start >= segment.range.start + trailingWhitespaceStart)
             .reduce((sum, cluster) => sum + cluster.advancePt, 0)
         : 0;
+      // `word-run-decoration-justified-advance`
       const ownedTrailingSlackPt = stretch?.trailingGap ? stretch.trailingDelta ?? perGapPt : 0;
       const origin = { xPt: xPt + rtlLeadingGapPt, yPt: line.baselinePt };
       const baselineOffsetPt = textGeometry.paintOps[0]?.offset.yPt ?? 0;
@@ -1134,6 +1137,7 @@ export function planLine(input: PlanLineInput): LineLayout {
           },
         } : {}),
       };
+      // `word-snap-to-chars-terminal-underline`
       const terminalDecorationTrimPt = decorationTerminalAdvancePt === undefined
         ? 0
         : Math.max(
@@ -1582,26 +1586,35 @@ function textPlacement(
         measure: true,
       })
     : undefined;
-  // Each guide grapheme is painted alone at its contextual prefix offset.
-  // Those offsets already carry the shaping decision (including
-  // WORD_ARABIC_PAIR_KERNING), and a single grapheme has no pair to kern, so
-  // the paint operations need no kerning state of their own.
+  // Guide graphemes paint alone at their contextual prefix offsets. A
+  // pair-kerned span (WORD_ARABIC_PAIR_KERNING) paints whole instead: a prefix
+  // excludes the pair adjustment with its following glyph, and Arabic joins
+  // across graphemes, so only the contextual span reproduces its acquisition.
   const rubySpans = segment.ruby && rubyShape
-    ? (rubyShape.clusters ?? []).map((cluster) => {
-        const span = rubyShape.spans.find((candidate) =>
-          candidate.start <= cluster.range.start && candidate.end >= cluster.range.end)
-          ?? rubyShape.spans[0];
-        if (!span) throw new Error('Ruby shaping produced no selected-face span');
-        return {
-          text: segment.ruby!.text.slice(cluster.range.start, cluster.range.end),
-          offsetPt: cluster.offsetPt,
-          fontRoute: span.fontRoute,
-          fontSizePt: segment.ruby!.fontSizePt,
-          fontWeight: span.font.weight,
-          fontStyle: span.font.style,
-          color,
-        };
-      })
+    ? (() => {
+        const ruby = segment.ruby!;
+        const contextual = new Set<object>();
+        return (rubyShape.clusters ?? []).flatMap((cluster) => {
+          const span = rubyShape.spans.find((candidate) =>
+            candidate.start <= cluster.range.start && candidate.end >= cluster.range.end)
+            ?? rubyShape.spans[0];
+          if (!span) throw new Error('Ruby shaping produced no selected-face span');
+          const kerned = wordArabicTextKerned(span.text);
+          if (kerned && contextual.has(span)) return [];
+          if (kerned) contextual.add(span);
+          return [{
+            text: kerned ? ruby.text.slice(span.start, span.end)
+              : ruby.text.slice(cluster.range.start, cluster.range.end),
+            offsetPt: cluster.offsetPt,
+            fontRoute: span.fontRoute,
+            fontSizePt: ruby.fontSizePt,
+            fontWeight: span.font.weight,
+            fontStyle: span.font.style,
+            color,
+            ...(kerned ? { kerning: 'normal' as const } : {}),
+          }];
+        });
+      })()
     : [];
   const rubyRaisePt = typography?.ruby?.raisePt.status === 'valid'
     ? typography.ruby.raisePt.value ?? undefined
@@ -1753,6 +1766,7 @@ function plannedBaselinePt(
   context: ParagraphLayoutContext,
 ): number {
   const raw = measuredLine.layout;
+  // `word-mixed-anchor-visible-line-metrics`
   const visibleAscentPt = raw.visibleAscent ?? raw.ascent;
   const visibleDescentPt = raw.visibleDescent ?? raw.descent;
   const visibleNaturalPt = visibleAscentPt + visibleDescentPt;
@@ -1949,6 +1963,7 @@ function retainEffectiveTextBackground(
     let changed = false;
     const placements = line.placements.map((placement) => {
       if (placement.kind !== 'text') return placement;
+      // `word-auto-text-contrast-effective-background`
       const effectiveBackground = placement.background
         ?? paragraphBackground
         ?? containerBackground;
@@ -1997,6 +2012,7 @@ function paragraphDecorationBox(
   const borders = paragraph.borders;
   const topEdge = borderEdges.top === 'none' ? null : borders?.[borderEdges.top] ?? null;
   const bottomEdge = borderEdges.bottom === 'none' ? null : borders?.bottom ?? null;
+  // `word-paragraph-shading-border-box`
   const leftSpacePt = visibleParagraphBorder(borders?.left ?? null) ? borders!.left!.space ?? 0 : 0;
   const rightSpacePt = visibleParagraphBorder(borders?.right ?? null) ? borders!.right!.space ?? 0 : 0;
   const topSpacePt = visibleParagraphBorder(topEdge) ? topEdge.space ?? 0 : 0;
@@ -2271,10 +2287,6 @@ function textPlanSegment(
     const cellPitchPt = segment.snapGridCellPitchPx;
     let precedingCells = 0;
     clusters = clusters.map((cluster, index) => {
-      const text = segment.text.slice(
-        cluster.range.start - sourceOffset,
-        cluster.range.end - sourceOffset,
-      );
       const cells = wordSnapToCharsEastAsianCellCount(
         cluster.advancePt,
         cellPitchPt,
@@ -2646,6 +2658,7 @@ function planMeasuredLines(
   );
   const visibleText = measured.lines.flatMap((line) => line.layout.segments.flatMap((segment) =>
     'text' in segment && !segment.metricOnly ? [segment.text] : [])).join('').trim();
+  // `word-numeric-decimal-tab-inference`
   const decimalAutoTabPt = !hasExplicitTab
     && earliestTab?.alignment === 'decimal'
     && visibleText !== ''
@@ -3560,6 +3573,7 @@ function acquireAnchorOccurrence(
         : null,
       paragraph: {
         xPt: options.placement.paragraphXPt,
+        // `word-paragraph-anchor-pre-spacing-origin`
         yPt: options.placement.startYPt + (
           outer.run.anchorAcquisitionInput.vertical.relativeFrom === 'paragraph'
           && outer.run.anchorAcquisitionInput.wrap.kind === 'none'
@@ -3740,6 +3754,7 @@ function acquireAnchorOccurrence(
         layoutInCell && options.anchorCellBounds !== undefined,
       );
       const sameParagraphBlockers = sameParagraphCollisions.filter((entry) =>
+        // `word-lower-layer-same-paragraph-anchor-composition`
         !wordPreservesLowerLayerSameParagraphComposition(
           movingVerticalOwnership,
           behavior.relativeHeight!,
@@ -5772,7 +5787,7 @@ function projectAcquiredParagraph(
 ): ParagraphLayout {
   const linePlan = projectAcquiredParagraphLines(paragraph, options, measured);
   let { lines } = linePlan;
-  const { planningContext, paragraphXPt, availableWidthPt, occurrences, numberingPlan } = linePlan;
+  const { paragraphXPt, availableWidthPt, occurrences, numberingPlan } = linePlan;
   const resources: InlineResourceLayout[] = [];
   const drawings: DrawingLayout[] = [];
   const textBoxes: TextBoxLayout[] = [];

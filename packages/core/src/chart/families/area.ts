@@ -196,7 +196,7 @@ export function renderAreaChart(
   const titleH = titleBand.bandH;
   const catAxFontPx = axisLabelPx(chart.catAxisFontSizeHpt, h, ptToPx);
   const valAxFontPx = axisLabelPx(chart.valAxisFontSizeHpt, h, ptToPx);
-  const leg = measuredLegendReserve(ctx, chart, w, h, 0.22, ptToPx);
+  const leg = measuredLegendReserve(ctx, chart, w, h, ptToPx);
   const { legRightW, legLeftW, legTopH, legBottomH } = chartLegendBands(
     leg, chart.legendOverlay === true,
   );
@@ -357,6 +357,7 @@ export function renderAreaChart(
     secondaryBandW: secLabelBandW + secTitleBandW,
   });
 
+  // Fixed gutter fractions: library policy, see ChartPad in layout.ts.
   const pad = {
     t: padT,
     r: legRightW + w * 0.05 + secLabelBandW + secTitleBandW,
@@ -368,7 +369,6 @@ export function renderAreaChart(
 
   const areaFrame = computeChartFrame(chart, x, y, w, h, ptToPx, {
     titleBand,
-    legendSideReserveFrac: 0.22,
     legendReserve: leg,
     pad,
     honorPlotAreaManualLayout: true,

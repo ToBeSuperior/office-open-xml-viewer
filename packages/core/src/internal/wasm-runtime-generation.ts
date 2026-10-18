@@ -101,6 +101,28 @@ export class WasmRuntimeGenerationHost<TArchive extends object> {
   }
 }
 
+/**
+ * The realm's single runtime host for one format's WASM glue. The first
+ * `WebAssembly.Module` initializes it; a later, different module is rejected
+ * because the glue's instance is realm-global.
+ */
+export function wasmRuntimeSingleton<TArchive extends object>(
+  runtime: WasmModuleRuntime,
+  label: string,
+): (wasmModule: WebAssembly.Module) => WasmRuntimeGenerationHost<TArchive> {
+  let runtimeModule: WebAssembly.Module | undefined;
+  let runtimeHost: WasmRuntimeGenerationHost<TArchive> | undefined;
+  return (wasmModule) => {
+    if (!runtimeHost) {
+      runtimeModule = wasmModule;
+      runtimeHost = new WasmRuntimeGenerationHost(runtime, wasmModule);
+    } else if (runtimeModule !== wasmModule) {
+      throw new Error(`${label} runtime was already initialized with another WebAssembly.Module`);
+    }
+    return runtimeHost;
+  };
+}
+
 export class WasmArchiveHandle<TArchive extends object> {
   private archive: TArchive | undefined;
   private failure: WasmTrapError | undefined;

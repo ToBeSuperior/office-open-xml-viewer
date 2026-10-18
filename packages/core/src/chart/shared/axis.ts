@@ -388,7 +388,7 @@ export function formatAxisTickWithUnits(
 }
 
 
-export function automaticDisplayUnitLabel(units: ChartDisplayUnits): string {
+function automaticDisplayUnitLabel(units: ChartDisplayUnits): string {
   const names: Record<string, string> = {
     hundreds: 'Hundreds',
     thousands: 'Thousands',
@@ -413,6 +413,9 @@ export function drawChartDisplayUnitLabels(
   rect: ChartRect,
   ptToPx: number,
 ): void {
+  // Fallback anchors (fractions of the chart rect) for a label without an
+  // authored manual layout: library policy. §21.2.2.46 dispUnitsLbl defines no
+  // default position and no Office measurement is recorded (#1259).
   const entries = [
     { units: chart.valAxisDisplayUnits, vertical: true, fallbackX: rect.x + rect.w * 0.08, fallbackY: rect.y + rect.h * 0.12, axis: { size: chart.valAxisFontSizeHpt, bold: chart.valAxisFontBold, italic: chart.valAxisFontItalic, color: chart.valAxisFontColor, paintAuthored: chart.valAxisFontPaintAuthored, face: chart.valAxisFontFace } },
     { units: chart.catAxisDisplayUnits, vertical: false, fallbackX: rect.x + rect.w * 0.82, fallbackY: rect.y + rect.h * 0.82, axis: { size: chart.catAxisFontSizeHpt, bold: chart.catAxisFontBold, italic: chart.catAxisFontItalic, color: chart.catAxisFontColor, paintAuthored: chart.catAxisFontPaintAuthored, face: chart.catAxisFontFace } },
@@ -627,7 +630,7 @@ export function catLabelsVisible(chart: ChartModel): boolean {
  *  Format-Axis "Custom angle" control accepts -90°…+90° INCLUSIVE, so the code
  *  below deliberately uses a closed boundary (`> LIMIT` rejects, `== LIMIT`
  *  honors) to keep genuine ±90° (vertical) axis labels working. */
-export const FIXED_ANGLE_LIMIT_60K = 5_400_000;
+const FIXED_ANGLE_LIMIT_60K = 5_400_000;
 
 
 /** Category-axis label rotation in RADIANS (canvas convention), from
@@ -757,7 +760,7 @@ export function drawAxisTitle(
 
 /** Resolve the per-axis title color string for `drawAxisTitle`. Returns
  *  '#rrggbb' when the XML supplied a srgb color, else the legacy '#555'. */
-export function axisTitleColor(hex: string | null | undefined): string {
+function axisTitleColor(hex: string | null | undefined): string {
   return hex ? `#${hex}` : '#555';
 }
 

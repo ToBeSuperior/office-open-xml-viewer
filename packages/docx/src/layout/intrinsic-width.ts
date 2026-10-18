@@ -78,6 +78,7 @@ export function measureTableCellIntrinsicWidths(
     // boundary: indentation positions no content when the cell paragraph has
     // neither runs nor numbering. Cell margins remain applied below.
     const emptyParagraph = element.type === 'paragraph'
+      // `word-autofit-empty-paragraph-content-width`
       && wordAutofitEmptyParagraphHasNoIntrinsicContent(element);
     const intrinsic = element.type === 'paragraph'
       ? emptyParagraph ? { minWidthPt: 0, maxWidthPt: 0 } : dependencies.paragraph(element)

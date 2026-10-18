@@ -4,7 +4,7 @@ import {
   withVertFeature,
 } from '@silurus/ooxml-core';
 import type { ParagraphLayout, TextBoxLayout } from '../layout/types.js';
-import type { CanvasPaintContext, PaintCanvas2D } from './types.js';
+import type { CanvasPaintContext } from './types.js';
 import { paintDrawingLayout } from './canvas-drawing.js';
 import { paintRetainedResource } from './canvas-resource.js';
 import { paintTableLayout } from './canvas-table.js';
@@ -109,6 +109,8 @@ function paintRetainedGlyph(
     operation.fontWeight,
     operation.fontStyle,
   );
+  const previousKerning = ctx.fontKerning;
+  if (operation.kerning) ctx.fontKerning = operation.kerning;
   if (upright) {
     ctx.save();
     ctx.translate(operation.origin.xPt, operation.origin.yPt);
@@ -118,6 +120,7 @@ function paintRetainedGlyph(
   } else {
     ctx.fillText(operation.text, operation.origin.xPt, operation.origin.yPt);
   }
+  if (operation.kerning) ctx.fontKerning = previousKerning;
 }
 
 function paintRetainedMarkPath(
@@ -194,7 +197,7 @@ export function paintDrawingWithOwnedTextBoxes(
   }
 }
 
-export function paintParagraphDrawingLayout(
+function paintParagraphDrawingLayout(
   node: ParagraphLayout,
   drawing: import('../layout/types.js').DrawingLayout,
   context: CanvasPaintContext,

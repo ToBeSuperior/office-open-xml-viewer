@@ -204,9 +204,9 @@ describe('§17.4.50 tblInd — table indent from the leading margin', () => {
     '%s: keeps an absolute-width AutoFit grid past the page edge after a partial negative leading indent',
     (_direction, bidiVisual, expected) => {
       // The text band is [20, 180]. A -10pt leading indent moves the resolved
-      // leading edge halfway into its 20pt page margin. AutoFit may therefore
-      // use 190pt, but not the full 200pt page width: the latter would cross the
-      // opposite physical page edge by 10pt in either visual direction.
+      // leading edge halfway into its 20pt page margin. The available width is
+      // 190pt, but a top-level AutoFit table with an absolute 220pt tblW keeps
+      // its saved 220pt grid, crossing the opposite physical page edge.
       const recording = makeRecordingCanvas();
       const doc = tableDoc(220, -10, bidiVisual);
       const services = createLayoutServices(doc, {

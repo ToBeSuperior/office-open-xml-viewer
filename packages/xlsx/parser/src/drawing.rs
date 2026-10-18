@@ -1200,62 +1200,6 @@ pub(crate) fn parse_tx_body(
     }
 }
 
-/// Parse the adjust handles from a `<a:prstGeom>`'s `<a:avLst>` into an
-/// `adj1..adj8`-ordered vector. ECMA-376 §19.5.31.3 / §20.1.9.5: each
-/// `<a:gd name="adjN" fmla="val X"/>` supplies one handle. Matching is by name
-/// (`adj`/`adj1`, `adj2`, …) with a positional fallback, mirroring the pptx
-/// parser so the shared `renderPresetShape` engine receives an identical shape.
-/// Trailing `None`s are trimmed so a plain rect/ellipse yields an empty vec.
-fn parse_preset_adj(prst_geom: &roxmltree::Node) -> Vec<Option<f64>> {
-    let av = prst_geom
-        .children()
-        .find(|n| n.is_element() && n.tag_name().name() == "avLst");
-    let Some(av) = av else {
-        return Vec::new();
-    };
-    let gd_nodes: Vec<roxmltree::Node> = av
-        .children()
-        .filter(|n| n.is_element() && n.tag_name().name() == "gd")
-        .collect();
-    if gd_nodes.is_empty() {
-        return Vec::new();
-    }
-
-    let parse_val = |gd: &roxmltree::Node| -> Option<f64> {
-        gd.attribute("fmla")
-            .and_then(|f| f.strip_prefix("val "))
-            .and_then(|s| s.trim().parse::<f64>().ok())
-    };
-
-    // When the handles carry `name` attributes, match strictly by name so a
-    // missing adjN leaves a `None` gap (its index still aligns with the engine's
-    // adj1..adj8 expectations). Positional fallback is used only for legacy
-    // unnamed `<a:gd>` lists.
-    let named = gd_nodes.iter().any(|n| n.attribute("name").is_some());
-    let mut out: Vec<Option<f64>> = (1..=8)
-        .map(|i| {
-            let by_name = gd_nodes.iter().find(|n| {
-                let name = n.attribute("name");
-                if i == 1 {
-                    matches!(name, Some("adj") | Some("adj1"))
-                } else {
-                    name == Some(&format!("adj{i}")[..])
-                }
-            });
-            if named {
-                by_name.and_then(parse_val)
-            } else {
-                gd_nodes.get(i - 1).and_then(parse_val)
-            }
-        })
-        .collect();
-
-    while matches!(out.last(), Some(None)) {
-        out.pop();
-    }
-    out
-}
-
 pub(crate) fn parse_sp_geom(
     sp_pr: &roxmltree::Node,
     shape_width: f64,
@@ -1266,7 +1210,7 @@ pub(crate) fn parse_sp_geom(
             "prstGeom" => {
                 return Some(ShapeGeom::Preset {
                     name: c.attribute("prst").unwrap_or("rect").to_string(),
-                    adj: parse_preset_adj(&c),
+                    adj: ooxml_common::preset_geometry::parse_preset_adj(c),
                 });
             }
             "custGeom" => {
@@ -3816,22 +3760,6 @@ mod geom_tests {
         parse_sp_geom(&doc.root_element(), 100.0, 100.0).expect("sp_pr has geometry")
     }
 
-    /// A preset with no `<a:avLst>` yields an empty adjust vector — the engine
-    /// then falls back to each shape's declared defaults.
-    #[test]
-    fn preset_without_avlst_has_empty_adj() {
-        let geom = geom_of(&format!(
-            r#"<a:spPr {NS}><a:prstGeom prst="parallelogram"/></a:spPr>"#
-        ));
-        match geom {
-            ShapeGeom::Preset { name, adj } => {
-                assert_eq!(name, "parallelogram");
-                assert!(adj.is_empty(), "no avLst → empty adj, got {adj:?}");
-            }
-            other => panic!("expected Preset, got {other:?}"),
-        }
-    }
-
     #[test]
     fn custom_geometry_resolves_guides_and_preserves_quadratic_bezier() {
         let geom = geom_of(&format!(
@@ -3889,41 +3817,6 @@ mod geom_tests {
                 assert_eq!(name, "parallelogram");
                 assert_eq!(adj, vec![Some(41667.0)]);
             }
-            other => panic!("expected Preset, got {other:?}"),
-        }
-    }
-
-    /// Multiple named handles (`adj1`/`adj2`) land in declaration order; a gap
-    /// produces a `None` placeholder so later indices stay aligned.
-    #[test]
-    fn preset_reads_named_adj1_adj2_and_fills_gaps() {
-        let geom = geom_of(&format!(
-            r#"<a:spPr {NS}><a:prstGeom prst="wedgeRectCallout">
-                 <a:avLst>
-                   <a:gd name="adj1" fmla="val -20000"/>
-                   <a:gd name="adj3" fmla="val 55000"/>
-                 </a:avLst>
-               </a:prstGeom></a:spPr>"#
-        ));
-        match geom {
-            ShapeGeom::Preset { adj, .. } => {
-                // adj1 set, adj2 missing → None, adj3 set, rest trimmed.
-                assert_eq!(adj, vec![Some(-20000.0), None, Some(55000.0)]);
-            }
-            other => panic!("expected Preset, got {other:?}"),
-        }
-    }
-
-    /// Unnamed `<a:gd>` handles fall back to declaration position.
-    #[test]
-    fn preset_positional_fallback_for_unnamed_gd() {
-        let geom = geom_of(&format!(
-            r#"<a:spPr {NS}><a:prstGeom prst="roundRect">
-                 <a:avLst><a:gd fmla="val 16667"/></a:avLst>
-               </a:prstGeom></a:spPr>"#
-        ));
-        match geom {
-            ShapeGeom::Preset { adj, .. } => assert_eq!(adj, vec![Some(16667.0)]),
             other => panic!("expected Preset, got {other:?}"),
         }
     }

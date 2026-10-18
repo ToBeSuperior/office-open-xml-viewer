@@ -2318,9 +2318,6 @@ class XlsxViewerEngine implements ZoomableViewer {
 
   private updateSpacerSize(ws: Worksheet): void {
     const cs = this.viewport.scale;
-    const freezeRows = ws.freezeRows ?? 0;
-    const freezeCols = ws.freezeCols ?? 0;
-
     // Find actual scrollable data extent
     let { maxRow, maxCol } = worksheetContentBounds(ws, this.gridExtent);
     maxRow += this.gridExtent.marginRows;

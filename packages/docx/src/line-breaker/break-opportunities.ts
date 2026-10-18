@@ -6,6 +6,8 @@ import {
   isDictionarySeaText,
   fitSeaWordPrefix,
   graphemeClusterOffsets,
+  SYNTHETIC_ASCENT_EM,
+  SYNTHETIC_DESCENT_EM,
 } from '@silurus/ooxml-core';
 import { EAST_ASIAN_RE } from '../layout/text.js';
 import {
@@ -236,15 +238,12 @@ function processTextSegment(context: BreakOpportunityIteratorContext, seg: Layou
     breakerState,
     flush,
     addToLine,
-    maxWidth,
     characterGrid,
     availW,
     textSegmentBox,
     prospectiveSnapAdvance,
     segAdvance,
     strAdvance,
-    isJustified,
-    stretchLastLine,
     overflowPunct,
     sameLatinSpaceFace,
   } = context;
@@ -380,7 +379,6 @@ function processTextSegment(context: BreakOpportunityIteratorContext, seg: Layou
       mixedLineHasVisibleText(breakerState));
   s.mixedNaturalTrailingSpacePx = mixedSpaces ? trailingSpaceW : undefined;
   s.mixedNaturalTrailingSpaceCount = mixedSpaces ? s.text.length - trimmed.length : undefined;
-  const interwordCompression = justifiedCompressionApplies(context);
   // Library containment policy: an RTL line is anchored at its right edge,
   // so even an invisible trailing-space advance shifts visible LTR cells left.
   // Count that advance during fitting instead of admitting glyphs past the band.
@@ -449,6 +447,7 @@ function processTextSegment(context: BreakOpportunityIteratorContext, seg: Layou
     breakerState.gapTransaction?.endsAtExclusion !== true &&
     trailingOverflowCharacter !== undefined &&
     (breakerState.currentLine.length > 0 || textBeforeTrailingOverflow.length > 0) &&
+    // `word-overflow-punctuation-latin-parent-run`: classify by the parent run.
     wordIsOverflowPunctuation(
       trailingOverflowCharacter,
       s.eastAsiaLanguage,
@@ -516,8 +515,8 @@ function processMathSegment(context: BreakOpportunityIteratorContext, seg: Layou
     setMeasureFont(buildFont(false, false, emPx, null, fontFamilyClasses));
     const m = measurement.measureCurrentText(seg.fallbackText);
     const w = m.width;
-    const asc = m.fontBoundingBoxAscent ?? m.actualBoundingBoxAscent ?? emPx * 0.8;
-    const desc = m.fontBoundingBoxDescent ?? m.actualBoundingBoxDescent ?? emPx * 0.2;
+    const asc = m.fontBoundingBoxAscent ?? m.actualBoundingBoxAscent ?? emPx * SYNTHETIC_ASCENT_EM;
+    const desc = m.fontBoundingBoxDescent ?? m.actualBoundingBoxDescent ?? emPx * SYNTHETIC_DESCENT_EM;
     seg.measuredWidth = w;
     seg.mathAscent = asc;
     seg.mathDescent = desc;
@@ -525,7 +524,7 @@ function processMathSegment(context: BreakOpportunityIteratorContext, seg: Layou
       flush(undefined, false, seg.src);
     }
     if (breakerState.currentLine.length === 0 && w > availW()) context.forcedPlacement(w);
-    addToLine(seg, w, seg.fontSize, Math.max(asc, emPx * 0.8), Math.max(desc, emPx * 0.2));
+    addToLine(seg, w, seg.fontSize, Math.max(asc, emPx * SYNTHETIC_ASCENT_EM), Math.max(desc, emPx * SYNTHETIC_DESCENT_EM));
     return;
   }
   const emPx = seg.fontSize * scale;
@@ -543,8 +542,8 @@ function processMathSegment(context: BreakOpportunityIteratorContext, seg: Layou
   // table row) and pin the glyph to the very top of the cell. Floor to the
   // font's natural ascent/descent so math occupies a full line like text
   // does (tall math — fractions, big operators — keeps its larger ink box).
-  const lineAsc = Math.max(asc, emPx * 0.8);
-  const lineDesc = Math.max(desc, emPx * 0.2);
+  const lineAsc = Math.max(asc, emPx * SYNTHETIC_ASCENT_EM);
+  const lineDesc = Math.max(desc, emPx * SYNTHETIC_DESCENT_EM);
   if (breakerState.currentLine.length > 0 && breakerState.currentWidth + w > availW()) {
     flush(undefined, false, seg.src);
   }
@@ -600,9 +599,9 @@ function commitAlignedTabCell(context: BreakOpportunityIteratorContext): void {
         + leadingAutoSpacePx(context, q);
       q.measuredWidth = w;
       const asc =
-        m.fontBoundingBoxAscent ?? m.actualBoundingBoxAscent ?? q.fontSize * scale * 0.8;
+        m.fontBoundingBoxAscent ?? m.actualBoundingBoxAscent ?? q.fontSize * scale * SYNTHETIC_ASCENT_EM;
       const desc =
-        m.fontBoundingBoxDescent ?? m.actualBoundingBoxDescent ?? q.fontSize * scale * 0.2;
+        m.fontBoundingBoxDescent ?? m.actualBoundingBoxDescent ?? q.fontSize * scale * SYNTHETIC_DESCENT_EM;
       addToLine(q, w, q.fontSize, asc, desc);
     }
   }
@@ -714,7 +713,7 @@ function processTabSegment(
         seg.readingGap = gap;
         seg.measuredWidth = gap;
         seg.leader = stop?.leader;
-        addToLine(seg, gap, seg.fontSize, seg.fontSize * scale * 0.8, seg.fontSize * scale * 0.2);
+        addToLine(seg, gap, seg.fontSize, seg.fontSize * scale * SYNTHETIC_ASCENT_EM, seg.fontSize * scale * SYNTHETIC_DESCENT_EM);
         return;
       }
     } else if (!seg.ptab) {
@@ -724,7 +723,7 @@ function processTabSegment(
       breakerState.currentWidth += resolveCompletedTabCells(input);
     }
     seg.measuredWidth = 0;
-    addToLine(seg, 0, seg.fontSize, seg.fontSize * scale * 0.8, seg.fontSize * scale * 0.2);
+    addToLine(seg, 0, seg.fontSize, seg.fontSize * scale * SYNTHETIC_ASCENT_EM, seg.fontSize * scale * SYNTHETIC_DESCENT_EM);
     return;
   }
 
@@ -783,7 +782,7 @@ function processTabSegment(
       tabW = 0;
     }
     seg.measuredWidth = tabW;
-    addToLine(seg, tabW, seg.fontSize, seg.fontSize * scale * 0.8, seg.fontSize * scale * 0.2);
+    addToLine(seg, tabW, seg.fontSize, seg.fontSize * scale * SYNTHETIC_ASCENT_EM, seg.fontSize * scale * SYNTHETIC_DESCENT_EM);
     // §17.3.3.23 selects the reference target independently of paragraph
     // indents. Library policy limits allocation to the actual paragraph/float
     // band: a fitting cell stays aligned, and all other cells use normal breaks.
@@ -845,7 +844,7 @@ function processTabSegment(
       tabW = 0;
     }
     seg.measuredWidth = tabW;
-    addToLine(seg, tabW, seg.fontSize, seg.fontSize * scale * 0.8, seg.fontSize * scale * 0.2);
+    addToLine(seg, tabW, seg.fontSize, seg.fontSize * scale * SYNTHETIC_ASCENT_EM, seg.fontSize * scale * SYNTHETIC_DESCENT_EM);
     // Keep an aligned cell atomic only when it fits its band. Oversized cells
     // return to the iterator at their ordinary break sites.
     if (breakerState.currentWidth + following.totalWidth <= cellLimit) {
@@ -873,7 +872,7 @@ function processTabSegment(
   }
   tabWidth = Math.max(0, tabWidth);
   seg.measuredWidth = tabWidth;
-  addToLine(seg, tabWidth, seg.fontSize, seg.fontSize * scale * 0.8, seg.fontSize * scale * 0.2);
+  addToLine(seg, tabWidth, seg.fontSize, seg.fontSize * scale * SYNTHETIC_ASCENT_EM, seg.fontSize * scale * SYNTHETIC_DESCENT_EM);
   return;
 }
 
@@ -1009,7 +1008,6 @@ function placeOrSplitText(context: BreakOpportunityIteratorContext, inputFrame: 
     asc,
     desc,
     wForFit,
-    paragraphFinalIdeographicSpaceTail,
     admitsTrailingOverflowPunctuation,
   } = frame;
   if (
@@ -1279,13 +1277,10 @@ function splitCjkOverflow(context: BreakOpportunityIteratorContext, frame: TextF
   } = context;
   const {
     s,
-    w,
     h,
     asc,
     desc,
-    wForFit,
     paragraphFinalIdeographicSpaceTail,
-    admitsTrailingOverflowPunctuation,
   } = frame;
 
   // CJK overflow: split at the maximum prefix that fits, re-queue the tail.
@@ -1649,13 +1644,9 @@ function splitSeaOverflow(context: BreakOpportunityIteratorContext, frame: TextF
   } = context;
   const {
     s: segment,
-    w,
     h,
     asc,
     desc,
-    wForFit,
-    paragraphFinalIdeographicSpaceTail,
-    admitsTrailingOverflowPunctuation,
   } = frame;
   const s = segment as LayoutTextSeg & { seaBreaks: readonly number[] };
 

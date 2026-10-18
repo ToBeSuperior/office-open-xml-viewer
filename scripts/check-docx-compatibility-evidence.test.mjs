@@ -8,7 +8,29 @@ import test from 'node:test';
 const repositoryRoot = resolve(import.meta.dirname, '..');
 const checker = resolve(import.meta.dirname, 'check-docx-compatibility-evidence.mjs');
 
-function fixture() {
+const realCatalog = JSON.parse(readFileSync(
+  resolve(repositoryRoot, 'scripts/docx-compatibility-microsoft-evidence.json'),
+  'utf8',
+));
+
+// A catalog holding only the named Microsoft sections; every catalog section
+// must be cited by a rule, so fixtures carry exactly what their rules cite.
+function catalog(sections) {
+  return {
+    version: 1,
+    documents: realCatalog.documents.flatMap((document) => {
+      const cited = document.sections.filter((section) =>
+        sections.includes(`${document.id} ${section.id}`));
+      return cited.length > 0 ? [{ ...document, sections: cited }] : [];
+    }),
+  };
+}
+
+function cite(root, ids, path = 'packages/docx/src/layout/fixture-consumer.ts') {
+  write(root, path, ids.map((id) => `// \`${id}\``).join('\n') + '\nexport {};\n');
+}
+
+function fixture({ microsoftSections = [] } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'docx-compatibility-evidence-'));
   cpSync(
     resolve(repositoryRoot, 'packages/docx/src/layout/compatibility.ts'),
@@ -33,11 +55,13 @@ function fixture() {
   write(
     root,
     'scripts/docx-compatibility-microsoft-evidence.json',
-    readFileSync(
-      resolve(repositoryRoot, 'scripts/docx-compatibility-microsoft-evidence.json'),
-      'utf8',
-    ),
+    JSON.stringify(catalog(microsoftSections)),
   );
+  const owner = readFileSync(
+    resolve(root, 'packages/docx/src/layout/compatibility.ts'),
+    'utf8',
+  );
+  cite(root, [...owner.matchAll(/\bid: '([a-z0-9-]+)'/g)].map((match) => match[1]));
   return root;
 }
 
@@ -87,7 +111,7 @@ test('rejects a rule declaration outside the closed authority set', () => {
 });
 
 test('rejects duplicate rule ids across compatibility modules', () => {
-  const root = fixture();
+  const root = fixture({ microsoftSections: ['MS-OI29500 2.1.120'] });
   write(root, 'packages/docx/src/layout/table-compatibility.ts', `
     import { defineCompatibilityRule } from './compatibility.js';
     export const WORD_DUPLICATE = defineCompatibilityRule({
@@ -362,7 +386,8 @@ test('rejects evidence entries that can override validated literal fields', () =
 });
 
 test('accepts quoted literal keys and extra static metadata', () => {
-  const root = fixture();
+  const root = fixture({ microsoftSections: ['MS-OI29500 2.1.120'] });
+  cite(root, ['word-quoted-literal'], 'packages/docx/src/layout/table.ts');
   write(root, 'packages/docx/src/layout/table-compatibility.ts', `
     import { defineCompatibilityRule } from './compatibility.js';
     export const WORD_QUOTED = defineCompatibilityRule({
@@ -379,4 +404,84 @@ test('accepts quoted literal keys and extra static metadata', () => {
   const result = run(root);
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /verified \(6 rules\)/);
+});
+
+test('rejects a rule that no production source cites', () => {
+  const root = fixture();
+  cite(root, []);
+  const result = run(root);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /COMPATIBILITY_RULE_UNCITED/);
+});
+
+test('does not count test, test-support or prefix citations', () => {
+  const root = fixture();
+  const owner = readFileSync(
+    resolve(root, 'packages/docx/src/layout/compatibility.ts'),
+    'utf8',
+  );
+  const [first, ...rest] = [...owner.matchAll(/\bid: '([a-z0-9-]+)'/g)]
+    .map((match) => match[1]);
+  cite(root, [...rest, `${first}-extended`]);
+  cite(root, [first], 'packages/docx/src/layout/consumer.test.ts');
+  cite(root, [first], 'packages/docx/src/test-support/consumer.ts');
+  const result = run(root);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, new RegExp(`COMPATIBILITY_RULE_UNCITED: .*${first}`));
+});
+
+test('rejects a Microsoft catalog section that no rule cites', () => {
+  const result = run(fixture({ microsoftSections: ['MS-OI29500 2.1.120'] }));
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /COMPATIBILITY_MICROSOFT_CATALOG_UNUSED: no rule cites MS-OI29500 2\.1\.120/);
+});
+
+test('counts Rust parser citations only outside test items', () => {
+  const root = fixture();
+  const owner = readFileSync(
+    resolve(root, 'packages/docx/src/layout/compatibility.ts'),
+    'utf8',
+  );
+  const [first, ...rest] = [...owner.matchAll(/\bid: '([a-z0-9-]+)'/g)]
+    .map((match) => match[1]);
+  cite(root, rest);
+  const testOnly = `
+fn production() { let brace = '{'; let text = "}"; }
+
+#[cfg(test)]
+mod tests {
+    // \`${first}\`
+    #[test]
+    fn cites() { let fixture = r#"{ } }"#; }
+}
+
+#[test]
+fn stray() {
+    // \`${first}\`
+}
+
+/// Helper for \`${first}\` fixtures.
+#[cfg(any(test))]
+fn helper() {}
+
+/// Documents \`${first}\` above a test-only module.
+#[cfg(all(test, feature = "x"))]
+mod more_tests {}
+
+/** Block docs for \`${first}\`. */
+#[cfg(any(test))]
+fn block_doc_helper() {}
+
+#[cfg(any(all(test, feature = "x")))]
+fn nested() { let id = "${first}"; }
+`;
+  const rustPath = 'packages/docx/parser/src/chart_compatibility.rs';
+  write(root, rustPath, testOnly);
+  const rejected = run(root);
+  assert.equal(rejected.status, 1);
+  assert.match(rejected.stderr, new RegExp(`COMPATIBILITY_RULE_UNCITED: .*${first}`));
+
+  write(root, rustPath, `${testOnly}\n/// \`${first}\`\npub(crate) fn implementation() {}\n`);
+  const accepted = run(root);
+  assert.equal(accepted.status, 0, accepted.stderr);
 });

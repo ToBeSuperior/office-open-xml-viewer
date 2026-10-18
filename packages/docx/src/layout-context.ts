@@ -248,11 +248,11 @@ function normalizeGridKind(type: string | null | undefined): SectionGridContext[
   }
 }
 
-export function isSectionLineGrid(kind: SectionGridContext['kind']): boolean {
+function isSectionLineGrid(kind: SectionGridContext['kind']): boolean {
   return kind === 'lines' || kind === 'linesAndChars' || kind === 'snapToChars';
 }
 
-export function isSectionCharacterGrid(kind: SectionGridContext['kind']): boolean {
+function isSectionCharacterGrid(kind: SectionGridContext['kind']): boolean {
   return kind === 'linesAndChars' || kind === 'snapToChars';
 }
 
