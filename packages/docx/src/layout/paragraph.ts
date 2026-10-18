@@ -877,8 +877,14 @@ export function planLine(input: PlanLineInput): LineLayout {
       // width reconstruction may change its accepted line in retained planning.
       const autoSpace = applyJustify ? justifiedAutoSpaceExpansion(segments, lineSlackPt) : undefined;
       const autoSpaceTakenPt = autoSpace?.takenPt ?? 0;
+      // A compressed line shrinks by its accepted overflow only; content
+      // forced onto it afterwards overflows the band.
+      const compressionSlackPt = line.justifiedCompressionPt > 0
+        && lineSlackPt < -line.justifiedCompressionPt - 1e-6
+        ? -line.justifiedCompressionPt
+        : lineSlackPt;
       const distribution = keepGraphemeSafeCuts(distributeProportionalSlack(
-        [], lineSlackPt - autoSpaceTakenPt, {
+        [], compressionSlackPt - autoSpaceTakenPt, {
           gapModel: { gaps: model.gaps, state: model.scan },
           proportional: true,
           unweightedExpansion: {

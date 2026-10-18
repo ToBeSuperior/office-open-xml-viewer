@@ -595,7 +595,9 @@ function commitAlignedTabCell(context: BreakOpportunityIteratorContext): void {
     } else {
       const m = measureText(q);
       // #1014 — fold the vo=Tr ink deficit into the committed advance too.
-      const w = segAdvanceWidth(q, m.width + verticalInkExtra(q, q.text), characterGrid, scale);
+      // The same-line WORD_EAST_ASIAN_AUTO_SPACE gap is part of the cell.
+      const w = segAdvanceWidth(q, m.width + verticalInkExtra(q, q.text), characterGrid, scale)
+        + leadingAutoSpacePx(context, q);
       q.measuredWidth = w;
       const asc =
         m.fontBoundingBoxAscent ?? m.actualBoundingBoxAscent ?? q.fontSize * scale * 0.8;

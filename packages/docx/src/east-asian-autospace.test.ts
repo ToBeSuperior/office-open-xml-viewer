@@ -162,7 +162,31 @@ describe('WORD_EAST_ASIAN_AUTO_SPACE', () => {
     const node = retainStubParagraph({
       runs: [run('甲A甲 ）')], environment: MODE_15, bandPt: 24.5, justification: 'both',
     });
-    expect(node.lines.length).toBeGreaterThan(0);
+    // Gaps shrink by the accepted amount only, never below zero.
+    for (const line of node.lines) {
+      const placements = placementsOf(node, node.lines.indexOf(line));
+      for (const [index, placement] of placements.entries()) {
+        for (const cluster of placement.clusters) expect(cluster.advancePt).toBeGreaterThan(0);
+        const next = placements[index + 1];
+        // Visible glyphs never overlap (a space cluster keeps its natural
+        // advance; the pen carries its justified delta).
+        const end = placement.clusters[[...placement.text.trimEnd()].length - 1];
+        if (next && end) {
+          expect(next.bounds.xPt + next.clusters[0]!.offset.xPt)
+            .toBeGreaterThanOrEqual(placement.bounds.xPt + end.offset.xPt + end.advancePt - 1e-9);
+        }
+      }
+    }
+  });
+
+  it('counts the gap inside an aligned tab cell', () => {
+    const node = retainStubParagraph({
+      runs: [run('\t甲A甲')], environment: MODE_15, bandPt: 200, justification: 'left',
+      tabStops: [{ pos: 80, alignment: 'right', leader: 'none' }],
+    });
+    const last = placementsOf(node, 0).at(-1)!;
+    expect(last.bounds.xPt + last.advancePt).toBeCloseTo(80, 6);
+    expect(last.clusters.at(-1)!.offset.xPt + last.clusters.at(-1)!.advancePt).toBeCloseTo(last.advancePt, 6);
   });
 
   it('reads adjacency between grapheme-cluster bases, across and inside segments', () => {
@@ -179,6 +203,8 @@ describe('WORD_EAST_ASIAN_AUTO_SPACE', () => {
     // An extender authored in its own run still belongs to the base before it.
     expect(gaps(segments('葛', '\u{E0100}', 'A'))).toEqual([['葛', undefined], ['\u{E0100}', undefined], ['A', 2.5]]);
     expect(gaps(segments('か', '\u3099', 'A'))).toEqual([['か', undefined], ['\u3099', undefined], ['A', 2.5]]);
+    // A run that starts with its predecessor's mark splits after the mark.
+    expect(gaps(segments('甲', '\u0301é'))).toEqual([['甲', undefined], ['\u0301', undefined], ['é', 2.5]]);
     expect(gaps(segments('ﾃﾞ', 'A'))).toEqual([['ﾃﾞ', undefined], ['A', 2.5]]);
     expect(gaps(segments('e\u0301', '漢'))).toEqual([['e\u0301', undefined], ['漢', 2.5]]);
     // A boundary inside one segment (a Latin letter on the East Asian face)

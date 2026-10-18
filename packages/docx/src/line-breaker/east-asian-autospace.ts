@@ -111,16 +111,22 @@ export function assignEastAsianAutoSpace(
       environment.autoSpaceDE, environment.autoSpaceDN,
     );
   // One linear pass; the array is rewritten once only when a seam was added.
+  // A cluster that is only an extender (a mark authored apart from its base,
+  // possibly in the previous run) is transparent: adjacency continues from
+  // the preceding base, across runs.
   let split: LayoutSeg[] | undefined;
+  let before: string | undefined;
   for (let index = 0; index < segs.length; index += 1) {
     const segment = segs[index]!;
     const splits: number[] = [];
-    if ('text' in segment && participates(segment) && segment.seaBreaks === undefined
-      && segment.text.length > 0) {
-      let before: string | undefined;
+    if (!('text' in segment) || !participates(segment)) {
+      before = undefined;
+    } else if (segment.text.length > 0) {
+      const sea = segment.seaBreaks !== undefined;
       for (const cursor of [0, ...graphemeClusterOffsets(segment.text)]) {
         const base = String.fromCodePoint(segment.text.codePointAt(cursor)!);
-        if (cursor > 0 && applies(before, base)) splits.push(cursor);
+        if (GRAPHEME_EXTENDERS.test(base)) continue;
+        if (!sea && cursor > 0 && applies(before, base)) splits.push(cursor);
         before = base;
       }
     }
@@ -150,7 +156,8 @@ export function assignEastAsianAutoSpace(
     // An empty metric host (an anchor character) has no glyph and no
     // advance; it neither forms nor interrupts the visible adjacency. A run
     // holding only grapheme extenders (a variation selector or combining
-    // mark authored apart from its base) belongs to the preceding base.
+    // mark authored apart from its base) belongs to the preceding base; a
+    // leading extender prefix was split off above.
     if (segment.text.length === 0 || GRAPHEME_EXTENDERS.test(segment.text)) continue;
     const left = previous ? lastClusterBase(previous.text) : undefined;
     const right = firstScalar(segment.text);

@@ -819,9 +819,14 @@ export function performFlush(
           // A unit forced onto a compressed line afterwards (a kinsoku
           // leader or glued follower) lengthens it; the retained overflow is
           // that of the line actually closed, which paint distributes.
-          justifiedCompressionPx: breakerState.justifiedCompressionPx > 0
-            ? Math.max(0, justifiedGapPlan.visibleWidthPx - operationState.availW())
-            : 0,
+          // The accepted compression, never more than the closed line's own
+          // overflow (a retraction may shorten it). A unit forced onto the
+          // line afterwards (a kinsoku leader or glued follower) overflows
+          // beyond it instead of shrinking gaps past the accepted amount.
+          justifiedCompressionPx: Math.min(
+            breakerState.justifiedCompressionPx,
+            Math.max(0, justifiedGapPlan.visibleWidthPx - operationState.availW()),
+          ),
           gapPlan: {
             ...justifiedGapPlan,
             // CJK/ideographic/SEA expansion has no proportional measurement.
