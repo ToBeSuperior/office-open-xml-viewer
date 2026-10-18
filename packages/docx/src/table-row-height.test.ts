@@ -110,9 +110,9 @@ describe('canonical retained table row height — ST_HeightRule (§17.4.80 / §1
     expect(retainedAdvance(rowWith(600, 'atLeast'))).toBe(600);
   });
 
-  // `word-authored-auto-row-height-floor`: an authored auto height remains a
-  // lower bound in the retained model.
-  it('auto with @val — @val is honored as a lower bound', () => {
+  // A public-only model cannot tell an omitted hRule from an explicit auto;
+  // its "auto" row with a height is the omitted case, a lower bound.
+  it('public-only auto with @val — taken as an omitted hRule (lower bound)', () => {
     expect(retainedAdvance(rowWith(600, 'auto'))).toBe(600);
   });
 

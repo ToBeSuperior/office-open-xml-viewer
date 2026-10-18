@@ -12,15 +12,6 @@ import type {
   WritingMode,
 } from './types.js';
 
-export const WORD_TERMINAL_COLUMN_BREAK = defineCompatibilityRule({
-  id: 'word-terminal-column-break',
-  evidence: {
-    kind: 'library-policy',
-    reference: 'packages/docx/src/pagination.test.ts#ignores a terminal last-column break before a hard page boundary',
-  },
-  description: 'The established pagination regression contract does not materialize a column transition when no body flow content occurs before the next forced page or non-continuous section boundary. Library policy, no Office measurement: avoids an empty column transition before a forced page or section boundary (PR #1050); it departs from the literal ECMA-376 §17.18.4 column break and needs a Word control.',
-});
-
 export const WORD_PRE_BREAK_ANCHOR_PARAGRAPH = defineCompatibilityRule({
   id: 'word-pre-break-anchor-paragraph',
   evidence: {
@@ -458,44 +449,6 @@ export function wordFlowNeutralPreBreakAnchorParagraph(
     flowBounds: Object.freeze({ ...layout.flowBounds, heightPt: 0 }),
   });
 }
-
-/**
- * Plans which authored column breaks have body flow content before the next
- * forced boundary. ECMA-376 §§17.3.3.1 and 17.18.4 define the column advance;
- * suppressing a terminal transition is Word compatibility behavior recorded by
- * {@link WORD_TERMINAL_COLUMN_BREAK}.
- */
-export function wordActiveColumnBreakIndexes(
-  sequence: BodyLayoutInput['sequence'],
-): ReadonlySet<number> {
-  const active = new Set<number>();
-  let hasFlowContentBeforeBoundary = false;
-  for (let index = sequence.length - 1; index >= 0; index -= 1) {
-    const entry = sequence[index]!;
-    if (entry.kind === 'body-block') {
-      hasFlowContentBeforeBoundary = entry.block.kind !== 'paragraph'
-        || !entry.block.pageBreakBefore;
-      continue;
-    }
-    if (entry.kind === 'adjacent-table-group') {
-      hasFlowContentBeforeBoundary = true;
-      continue;
-    }
-    if (entry.kind === 'authored-break') {
-      if (entry.break === 'column') {
-        if (hasFlowContentBeforeBoundary) active.add(index);
-      } else {
-        hasFlowContentBeforeBoundary = false;
-      }
-      continue;
-    }
-    if (entry.kind === 'begin-section' && entry.section.startType !== 'continuous') {
-      hasFlowContentBeforeBoundary = false;
-    }
-  }
-  return active;
-}
-
 
 export const WORD_PARAGRAPH_FOOTNOTE_CONTINUATION = defineCompatibilityRule({
   id: 'word-paragraph-footnote-continuation',

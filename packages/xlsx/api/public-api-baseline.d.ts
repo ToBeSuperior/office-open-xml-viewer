@@ -1298,6 +1298,7 @@ export interface DxfFontToggles {
     italic?: boolean;
     underline?: boolean;
     strike?: boolean;
+    automaticColor?: boolean;
 }
 type ExtensibleLiteral<Known extends string> = Known | (string & Record<never, never>);
 type Fill = SolidFill | NoFill | GradientFill | PatternFill | ImageFill;
@@ -2259,6 +2260,8 @@ export interface TableInfo {
     lastColumnDxf?: number;
     band1HorizontalDxf?: number;
     band2HorizontalDxf?: number;
+    styleElements?: PivotTableStyleElement[];
+    styleError?: string;
     columns: TableColumnInfo[];
 }
 export class TiffDecodeError extends Error {

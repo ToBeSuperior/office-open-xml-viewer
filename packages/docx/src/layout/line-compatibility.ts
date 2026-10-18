@@ -5,10 +5,13 @@ import type { LineSpacing, TabStop } from '../types.js';
 export const WORD_TAB_DISPLACED_READING_FRAME = defineCompatibilityRule({
   id: 'word-float-tab-reading-frame',
   evidence: {
-    kind: 'regression-test',
-    reference: 'packages/docx/src/layout/first-line-float-indent.test.ts#$kind $alignment ($count), rtl=$rtl, float=$float matches Word geometry',
+    kind: 'office-observation',
+    syntheticFixtureId: 'tabs-floats-round3',
+    application: 'Microsoft Word',
+    version: '16.0.20430',
+    platform: 'Windows',
   },
-  description: 'Issue #1672 controlled Word exports cover ordinary left/right/center/decimal tabs, one/two tabs, both paragraph directions and either float edge, with no-float counterexamples. Eligibility stays margin-relative (ECMA-376 §17.3.1.37), but an authored target moves with a float-displaced leading line edge. Library policy retains this observation only where text fits the available float band. Word also overflows some tab cells into floats or past the margin; that unspecified fallback is intentionally unsupported. Out-of-band targets break the line and following text uses ordinary legal-break and emergency fitting, without an overflow allowance or a fabricated wide reference band. Evidence (observed Office behaviour): issue #1672 Word 16 controls, PR #1698; application build and platform not recorded.',
+  description: 'Issue #1672 controlled Word exports cover ordinary left/right/center/decimal tabs, one/two tabs, both paragraph directions and either float edge, with no-float counterexamples. Eligibility stays margin-relative (ECMA-376 §17.3.1.37), but an authored target moves with a float-displaced leading line edge. Library policy retains this observation only where text fits the available float band. Word also overflows some tab cells into floats or past the margin; that unspecified fallback is intentionally unsupported. Out-of-band targets break the line and following text uses ordinary legal-break and emergency fitting, without an overflow allowance or a fabricated wide reference band. Evidence: issue #1672 controls (PR #1698), re-exported in Windows Word 16.0.20430 for #1896 with every in-band line identical to the earlier export; only the four unsupported overflow cells differ.',
 });
 
 /** Projection of {@link WORD_TAB_DISPLACED_READING_FRAME}. The caller has already
@@ -24,10 +27,13 @@ export function wordFloatTabStopPosition(
 export const WORD_POSITIONAL_TAB_AVAILABLE_BAND = defineCompatibilityRule({
   id: 'word-positional-tab-available-band',
   evidence: {
-    kind: 'regression-test',
-    reference: 'packages/docx/src/layout/first-line-float-indent.test.ts#$kind $alignment ($count), rtl=$rtl, float=$float matches Word geometry',
+    kind: 'office-observation',
+    syntheticFixtureId: 'tabs-floats-round3',
+    application: 'Microsoft Word',
+    version: '16.0.20430',
+    platform: 'Windows',
   },
-  description: 'Issue #1672 Word exports cover all 36 positional-tab combinations of left/center/right alignment, margin/indent reference, LTR/RTL paragraph direction and no/left/right float. Word intersects the normative reference box (ECMA-376 §§17.3.3.23, 17.18.71, 17.18.73) with the available float band and aligns the following cell in reading order; no-float references remain unchanged. A target at the current pen is reachable without a line break; only a target behind it requires the next line. RTL must retain the positional descriptor through the bidi post-pass rather than resolving it as an ordinary tab. Evidence (observed Office behaviour): issue #1672 controls (36 combinations), PR #1698; application build and platform not recorded.',
+  description: 'Issue #1672 Word exports cover all 36 positional-tab combinations of left/center/right alignment, margin/indent reference, LTR/RTL paragraph direction and no/left/right float. Word intersects the normative reference box (ECMA-376 §§17.3.3.23, 17.18.71, 17.18.73) with the available float band and aligns the following cell in reading order; no-float references remain unchanged. A target at the current pen is reachable without a line break; only a target behind it requires the next line. RTL must retain the positional descriptor through the bidi post-pass rather than resolving it as an ordinary tab. Evidence: issue #1672 controls (36 combinations, PR #1698), re-exported in Windows Word 16.0.20430 for #1896 with every in-band line identical to the earlier export.',
 });
 
 /** Reference-box projection of {@link WORD_POSITIONAL_TAB_AVAILABLE_BAND}. */
@@ -414,10 +420,13 @@ export const WORD_JUSTIFICATION_LEADING_INDENT_EXCLUSION = defineCompatibilityRu
 export const WORD_COLLAPSIBLE_LINE_EDGE_VISIBLE_FIT = defineCompatibilityRule({
   id: 'word-collapsible-line-edge-visible-fit',
   evidence: {
-    kind: 'regression-test',
-    reference: 'packages/docx/src/run-split-invariance.test.ts#fits the visible justified prefix across a real formatting boundary in mode 14',
+    kind: 'office-observation',
+    syntheticFixtureId: 'visible-prefix-fit-sweep',
+    application: 'Microsoft Word',
+    version: '16.0.20430',
+    platform: 'Windows',
   },
-  description: 'Library fitting uses the visible prefix, excluding a collapsible U+0020 edge separator. ST_Jc (§17.18.44) defines inter-word justification, not an edge-space admission charge. Word mode-14 mixed-format Latin output retains a naturally fitting prefix when only its edge separator exceeds the band; mode-15 compression controls use the same visible prefix. Canonical joining must not turn formatting-only source seams into different admission decisions. This replaces an unsupported separator-charge policy, without adding compression to older modes. RTL separately retains the complete advance because its right-edge origin can otherwise move visible LTR cells outside the band. Other glyphs and authored fixed-width/atomic units retain their existing fit contracts. Evidence (observed Office behaviour): Word compatibility-mode 14 output in PR #1703; application version not recorded.',
+  description: 'Library fitting uses the visible prefix, excluding a collapsible U+0020 edge separator. ST_Jc (§17.18.44) defines inter-word justification, not an edge-space admission charge. Word mode-14 mixed-format Latin output retains a naturally fitting prefix when only its edge separator exceeds the band; mode-15 compression controls use the same visible prefix. Canonical joining must not turn formatting-only source seams into different admission decisions. This replaces an unsupported separator-charge policy, without adding compression to older modes. RTL separately retains the complete advance because its right-edge origin can otherwise move visible LTR cells outside the band. Other glyphs and authored fixed-width/atomic units retain their existing fit contracts. Evidence: Word compatibility-mode 14 output in PR #1703, and the #1896 Windows sweep (Arial 10pt, a bold run before the line-end space): a line keeps its last word at 110.25pt and not at 110.0pt, the 110.06pt visible prefix, in mode 14 and in a mode-15 left-aligned line.',
 });
 
 /** Visible-prefix projection of {@link WORD_COLLAPSIBLE_LINE_EDGE_VISIBLE_FIT}. */
@@ -803,6 +812,15 @@ export const WORD_FIT_TEXT_INTER_CHARACTER_EXPANSION = defineCompatibilityRule({
     reference: 'packages/docx/src/fit-text.test.ts#distributes (val − Σnatural)/(n−1) as the inter-character gap, no trailing gap',
   },
   description: 'Expand a multi-character fitText region to its authored width by distributing the residual evenly across interior character gaps. Evidence (observed Office behaviour): Word PDF of a corpus document in PR #918; [MS-OI29500] §2.1.78(d) supports ignoring authored spacing, not the even-gap formula.',
+});
+
+export const WORD_FIT_TEXT_OMITTED_ID_LINKING = defineCompatibilityRule({
+  id: 'word-fit-text-omitted-id-linking',
+  evidence: {
+    kind: 'microsoft-note',
+    reference: '[MS-OI29500] §2.1.78(b)',
+  },
+  description: 'A fitText run without w:id takes id 0 and shares one fit region with contiguous fitText runs whose id is omitted or 0, where ECMA-376 §17.3.2.14 leaves an id-less run unlinked.',
 });
 
 export const WORD_CJK_BOTH_INTER_CHARACTER_EXPANSION = defineCompatibilityRule({

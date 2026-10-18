@@ -1346,7 +1346,8 @@ export interface DocxTextRun {
    *  (`w:val`, 1/20 pt) plus the optional `w:id` that links consecutive runs
    *  into one region. The arbitrary-precision XSD integer id is serialized as a
    *  string; numeric synthetic inputs remain supported for layout tests and
-   *  direct model construction. An id-less run is always standalone. */
+   *  direct model construction. An id-less run has id 0
+   *  (WORD_FIT_TEXT_OMITTED_ID_LINKING). */
   fitTextVal?: number;
   fitTextId?: string | number;
   /** ECMA-376 §17.3.2.43 `<w:w w:val>` — horizontal text scale as a FRACTION of
@@ -1652,7 +1653,9 @@ export interface DocTableRow {
    *  after this row's last real cell. Omitted/zero means none. */
   gridAfter?: number;
   rowHeight: number | null;  // pt
-  /** ECMA-376 §17.4.80 hRule. "auto" (default) = informational; "atLeast" =
+  /** ECMA-376 §17.4.80 hRule, "auto" when omitted. Without the parser's
+   *  acquisition facts an "auto" row with a height is taken as an omitted
+   *  hRule, a lower bound (word-omitted-row-height-rule-at-least); "atLeast" =
    *  lower bound; "exact" = fixed clip. */
   rowHeightRule: 'auto' | 'atLeast' | 'exact' | string;
   isHeader: boolean;

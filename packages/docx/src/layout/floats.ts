@@ -1,7 +1,4 @@
-import {
-  WORD_FLOAT_DIFFERENT_PARAGRAPH_DISPLACEMENT,
-  WORD_PAGE_ANCHORED_TABLE_COLLISION_DEFERRAL,
-} from './compatibility.js';
+import { WORD_PAGE_ANCHORED_TABLE_COLLISION_DEFERRAL } from './compatibility.js';
 import {
   axisAlignedRectsOverlap,
   resolveAxisAlignedOverlap,
@@ -45,16 +42,14 @@ export type FloatPlacementParticipant =
 
 export type FloatAvoidance =
   | Readonly<{ kind: 'drawingml-normative' }>
-  | Readonly<{ kind: 'word-different-paragraph'; paragraphId: number }>
   | Readonly<{ kind: 'none' }>;
 
-export function floatingTableAvoidance(
-  tableOverlap: 'never' | 'overlap',
-  paragraphId: number,
-): FloatAvoidance {
-  return tableOverlap === 'overlap'
-    ? Object.freeze({ kind: 'word-different-paragraph', paragraphId })
-    : Object.freeze({ kind: 'none' });
+/** ECMA-376 §17.4.56: a floating table avoids another floating table only
+ * when either one sets tblOverlap="never" (resolved in
+ * `resolveFloatPlacement`); an overlap-permitted table keeps its position
+ * beside floats of other paragraphs (Windows Word 16.0.20430, #1896). */
+export function floatingTableAvoidance(): FloatAvoidance {
+  return Object.freeze({ kind: 'none' });
 }
 
 /** ECMA-376 §20.4.2.3: an allowOverlap=true DrawingML object keeps its
@@ -66,10 +61,11 @@ export function drawingMLAvoidance(allowOverlap: boolean): FloatAvoidance {
     : Object.freeze({ kind: 'drawingml-normative' });
 }
 
-/** Legacy `w:framePr` frames keep the established different-paragraph
- * displacement; no Word control has measured frame overlap. */
-export function frameAvoidance(paragraphId: number): FloatAvoidance {
-  return Object.freeze({ kind: 'word-different-paragraph', paragraphId });
+/** A `w:framePr` frame keeps its resolved position over other floats
+ * (Windows Word 16.0.20430 #1896 controls: frames overlapping a frame or a
+ * floating table of another paragraph are not displaced). */
+export function frameAvoidance(): FloatAvoidance {
+  return Object.freeze({ kind: 'none' });
 }
 
 export function floatRegistryParticipant(
@@ -266,42 +262,13 @@ export function resolveFloatPlacement(
     }
     return [];
   });
-  const compatibilityBlockers = avoidance.kind === 'word-different-paragraph'
-    ? input.blockers.flatMap((blocker): AxisAlignedRect[] =>
-        blocker.paragraphId === avoidance.paragraphId
-          ? []
-          : [compatibilityBlockerInObjectSpace(moving, blocker)])
-    : [];
-  const movingRightPaddingPt = moving.exclusionBounds.xPt
-    + moving.exclusionBounds.widthPt
-    - moving.bounds.xPt
-    - moving.bounds.widthPt;
-  // Compatibility displacement historically resolved the moving exclusion
-  // rectangle. Its right edge, not only the object edge, must fit within the
-  // caller's boundary and slack after converting the collision into object
-  // space.
-  const rightBoundaryPt = avoidance.kind === 'word-different-paragraph'
-    ? input.rightBoundaryPt - movingRightPaddingPt
-    : input.rightBoundaryPt;
-  const normative = resolveObjectPosition(
-    input,
-    normativeBlockers,
-    rightBoundaryPt,
+  const resolved = resolveObjectPosition(input, normativeBlockers);
+  return placement(
+    moving,
+    resolved.left - moving.bounds.xPt,
+    resolved.top - moving.bounds.yPt,
+    [],
   );
-  const resolved = compatibilityBlockers.length === 0
-    ? normative
-    : resolveObjectPosition(
-        input,
-        [...normativeBlockers, ...compatibilityBlockers],
-        rightBoundaryPt,
-      );
-  const xPt = resolved.left - moving.bounds.xPt;
-  const yPt = resolved.top - moving.bounds.yPt;
-  const compatibilityChangedPlacement = resolved.left !== normative.left
-    || resolved.top !== normative.top;
-  return placement(moving, xPt, yPt, compatibilityChangedPlacement
-    ? [WORD_FLOAT_DIFFERENT_PARAGRAPH_DISPLACEMENT.id]
-    : []);
 }
 
 export interface ResolveBlockFlowAdmissionInput {

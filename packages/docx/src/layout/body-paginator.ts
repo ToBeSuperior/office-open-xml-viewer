@@ -105,7 +105,6 @@ import {
   sectionContentFirstAppearancePageIndices,
 } from './section-page-identity.js';
 import {
-  wordActiveColumnBreakIndexes,
   wordFinalParagraphAdmissionExtentPt,
   wordGridLineAdmissionExtentPt,
   wordParagraphFootnoteMayContinue,
@@ -1895,7 +1894,6 @@ function* paginateBodyPassSteps(
     });
   };
   let previousParagraph: BodyParagraphSourceInput | null = null;
-  const activeColumnBreakIndexes = wordActiveColumnBreakIndexes(input.sequence);
   let terminalDiagnostic: LayoutDiagnostic | null = null;
 
   bodyEntries: for (let entryIndex = 0; entryIndex < input.sequence.length; entryIndex += 1) {
@@ -1924,9 +1922,6 @@ function* paginateBodyPassSteps(
     }
     if (entry.kind === 'authored-break') {
       previousParagraph = null;
-      if (entry.break === 'column' && !activeColumnBreakIndexes.has(entryIndex)) {
-        continue;
-      }
       const pageIndexBeforeBreak = state.flow.pageIndex;
       yield* commitTransition(
         applyAuthoredBreak(state.flow, entry.break, entry.parity),

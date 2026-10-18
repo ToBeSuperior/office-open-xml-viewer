@@ -397,32 +397,37 @@ export interface TableInfo {
   showColumnStripes: boolean;
   showFirstColumn: boolean;
   showLastColumn: boolean;
-  /** Accent color resolved by the parser from the built-in style name against
-   *  the file's theme accents (e.g. `TableStyleLight18` → accent3). */
+  /** Accent color of a built-in style name under the file's theme
+   *  (e.g. `TableStyleLight18` → accent3). Informational: rendering uses
+   *  `styleElements`. */
   accentColor: string;
   /** `true` when `styleName` is defined in the file's `<tableStyles>` block,
-   *  i.e. a *custom* style (ECMA-376 §18.5.1.2). The renderer draws such tables
-   *  strictly from their declared element dxfs and must NOT apply the accent
-   *  approximation (banding / synthesized rules / header) reserved for built-in
-   *  style names whose definitions are absent from the file. */
+   *  i.e. a *custom* style (ECMA-376 §18.5.1.2). Informational. */
   isCustom?: boolean;
-  /** Dxf index for the `wholeTable` element of a custom `<tableStyle>`
-   *  (ECMA-376 §18.8.83). When set, its border/fill apply to every cell of
-   *  the table as a base layer. Undefined for built-in style names. */
+  /** Workbook dxf index of the custom style's `wholeTable` element. The
+   *  `*Dxf` indices below are informational: `styleElements` carries every
+   *  element with its format inline. */
   wholeTableDxf?: number;
-  /** Dxf index for the `headerRow` element of a custom `<tableStyle>` —
-   *  provides header background, font color/weight, and vertical separators. */
+  /** Workbook dxf index of the custom style's `headerRow` element. */
   headerRowDxf?: number;
-  /** Dxf index for the `totalRow` element (ECMA-376 §18.18.93). */
+  /** Workbook dxf index of the `totalRow` element. */
   totalRowDxf?: number;
-  /** Dxf index for the `firstColumn` element. */
+  /** Workbook dxf index of the `firstColumn` element. */
   firstColumnDxf?: number;
-  /** Dxf index for the `lastColumn` element. */
+  /** Workbook dxf index of the `lastColumn` element. */
   lastColumnDxf?: number;
-  /** Dxf index for `firstRowStripe` (band1 horizontal) — odd banded-row stripe. */
+  /** Workbook dxf index of `firstRowStripe`. */
   band1HorizontalDxf?: number;
-  /** Dxf index for `secondRowStripe` (band2 horizontal) — even banded-row stripe. */
+  /** Workbook dxf index of `secondRowStripe`. */
   band2HorizontalDxf?: number;
+  /** The table style's elements (ECMA-376 §18.8.41) with their formats
+   *  inline: a workbook `<tableStyle>` (§18.8.40), else the built-in Annex G
+   *  style of that name. Absent when the table has no style, names no known
+   *  style, or its style cannot be applied as authored (`styleError`). */
+  styleElements?: PivotTableStyleElement[];
+  /** The field that kept a workbook table style from being applied as
+   *  authored; the table is then drawn without its style. */
+  styleError?: string;
   /** Per-column DXF references (ECMA-376 §18.5.1.3 `tableColumn`). Index by
    *  `cellCol - range.left`. The renderer can use these to apply column-level
    *  overlays for named-style tables; for files where Excel pre-bakes the
@@ -1127,6 +1132,10 @@ export interface DxfFontToggles {
   italic?: boolean;
   underline?: boolean;
   strike?: boolean;
+  /** `true` when the differential font names the automatic color
+   *  (`<color auto="1"/>`), which a later layered format applies over an
+   *  earlier color. */
+  automaticColor?: boolean;
 }
 
 export interface CellFont {

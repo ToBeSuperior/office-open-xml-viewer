@@ -49,22 +49,13 @@ export const WORD_SECTION_BTLR_TBRL_PAGE_FRAME = defineCompatibilityRule({
   description: 'Issue #988 comment 4950296007 records that, unlike the normative ECMA-376 Part 4 §14.11.7 equivalence to lr, Word uses the tbRl page frame for section-level btLr; this rule covers only the page frame, while glyph orientation is paint-owned. Evidence (observed Office behaviour): Word output adjudicated in issue #988 and PR #996; [MS-OI29500] §2.1.558(b) states that Word ignores section-level btLr but not the tbRl mapping.',
 });
 
-export const WORD_FLOAT_DIFFERENT_PARAGRAPH_DISPLACEMENT = defineCompatibilityRule({
-  id: 'word-float-different-paragraph-displacement',
-  evidence: {
-    kind: 'library-policy',
-    reference: 'packages/docx/src/layout/floats.test.ts#keeps observed different-paragraph displacement on exclusion bounds',
-  },
-  description: 'Preserve the established Word-compatible policy that an overlap-permitted floating table or frame is displaced by exclusion geometry from floats anchored in other paragraphs, while same-paragraph floats may overlap. It does not apply to DrawingML objects: issue #1623 Word controls keep allowOverlap=true pictures from different paragraphs at their resolved positions in compatibility modes 14 and 15. Library policy, no Office measurement: displaces overlap-permitted floating tables and frames by floats of other paragraphs (PR #447); issue #1623 disproved it for DrawingML and no table or frame control exists.',
-});
-
 export const WORD_PAGE_ANCHORED_TABLE_COLLISION_DEFERRAL = defineCompatibilityRule({
   id: 'word-page-anchored-table-collision-deferral',
   evidence: {
     kind: 'regression-test',
     reference: 'packages/docx/src/float-table-page-fit.test.ts#(g) DEFERS a page-anchored floating table when its raw band intersects an existing table float',
   },
-  description: 'Preserve the established Word-compatible pagination behavior that defers an absolute page- or margin-anchored floating table when its authored object band intersects an existing floating-table text-exclusion band on the page. Evidence (observed Office behaviour): Word PDF of a corpus document in PR #867; no synthetic control yet.',
+  description: 'Preserve the established Word-compatible pagination behavior that defers an absolute page- or margin-anchored floating table when its authored object band intersects an existing floating-table text-exclusion band on the page. Evidence (observed Office behaviour): Word PDF of a corpus document in PR #867, and a corpus document whose two full-width page-anchored tables Windows Word 16.0.20430 places on separate pages. The #1896 Windows controls show Word keeping smaller overlapping page-anchored tables on their page, so this deferral stands in for anchor flow past full-width floats; issue #1902 tracks replacing it.',
 });
 
 export const WORD_EMPTY_MARK_FLOAT_SIDE_GAP = defineCompatibilityRule({

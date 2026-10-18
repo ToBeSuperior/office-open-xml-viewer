@@ -82,34 +82,34 @@ fn component<T: Copy>(table: &[T], index: impl Into<usize>) -> Option<T> {
 }
 
 fn preset_color(index: u8) -> Option<PresetColor> {
-    let [theme, tint] = component(&PIVOT_COLORS, index)?;
+    let [theme, tint] = component(&PRESET_COLORS, index)?;
     Some(PresetColor {
         theme: u32::from(theme),
-        tint: component(&PIVOT_TINTS, tint),
+        tint: component(&PRESET_TINTS, tint),
     })
 }
 
 fn preset_edge(index: u8) -> Option<PresetEdge> {
-    let [style, color] = component(&PIVOT_EDGES, index)?;
+    let [style, color] = component(&PRESET_EDGES, index)?;
     Some(PresetEdge {
-        style: component(&PIVOT_EDGE_STYLES, style),
+        style: component(&PRESET_EDGE_STYLES, style),
         color: preset_color(color),
     })
 }
 
 fn decode_dxf(index: u16) -> PresetDxf {
-    let [font, fill, border_lo, border_hi] = PIVOT_DXFS[usize::from(index)];
+    let [font, fill, border_lo, border_hi] = PRESET_DXFS[usize::from(index)];
     PresetDxf {
-        font: component(&PIVOT_FONTS, font).map(|[bold, color]| PresetFont {
+        font: component(&PRESET_FONTS, font).map(|[bold, color]| PresetFont {
             bold: bold != 0,
             color: preset_color(color),
         }),
-        fill: component(&PIVOT_FILLS, fill).map(|[pattern, fg, bg]| PresetFill {
-            pattern_type: PIVOT_PATTERNS[usize::from(pattern) - 1],
+        fill: component(&PRESET_FILLS, fill).map(|[pattern, fg, bg]| PresetFill {
+            pattern_type: PRESET_PATTERNS[usize::from(pattern) - 1],
             fg: preset_color(fg),
             bg: preset_color(bg),
         }),
-        border: component(&PIVOT_BORDERS, u16::from_le_bytes([border_lo, border_hi])).map(
+        border: component(&PRESET_BORDERS, u16::from_le_bytes([border_lo, border_hi])).map(
             |[left, right, top, bottom, horizontal, vertical]| PresetBorder {
                 left: preset_edge(left),
                 right: preset_edge(right),
@@ -122,20 +122,34 @@ fn decode_dxf(index: u16) -> PresetDxf {
     }
 }
 
+fn style_elements(
+    styles: &'static [PresetStyleEntry],
+    name: &str,
+) -> Option<impl ExactSizeIterator<Item = PresetElement>> {
+    let &(_, start, end) = styles.iter().find(|(preset, _, _)| *preset == name)?;
+    Some(
+        PRESET_ELEMENTS[usize::from(start)..usize::from(end)]
+            .iter()
+            .map(|&[kind, size, dxf_lo, dxf_hi]| PresetElement {
+                kind: PRESET_KINDS[usize::from(kind) - 1],
+                size: PRESET_SIZES[usize::from(size) - 1],
+                dxf: decode_dxf(u16::from_le_bytes([dxf_lo, dxf_hi])),
+            }),
+    )
+}
+
 /// The elements of the built-in PivotTable style `name` (e.g.
 /// `PivotStyleLight16`), or `None` when `name` is not a built-in style.
 /// Elements retain Annex G order and band sizes (§18.18.82 / §18.8.41).
 pub fn pivot_style(name: &str) -> Option<impl ExactSizeIterator<Item = PresetElement>> {
-    let &(_, start, end) = PIVOT_STYLES.iter().find(|(preset, _, _)| *preset == name)?;
-    Some(
-        PIVOT_ELEMENTS[usize::from(start)..usize::from(end)]
-            .iter()
-            .map(|&[kind, size, dxf_lo, dxf_hi]| PresetElement {
-                kind: PIVOT_KINDS[usize::from(kind) - 1],
-                size: PIVOT_SIZES[usize::from(size) - 1],
-                dxf: decode_dxf(u16::from_le_bytes([dxf_lo, dxf_hi])),
-            }),
-    )
+    style_elements(&PIVOT_STYLES, name)
+}
+
+/// The elements of the built-in Table style `name` (e.g.
+/// `TableStyleMedium2`), or `None` when `name` is not a built-in style.
+/// Elements retain Annex G order and band sizes (§18.18.82 / §18.8.41).
+pub fn table_style(name: &str) -> Option<impl ExactSizeIterator<Item = PresetElement>> {
+    style_elements(&TABLE_STYLES, name)
 }
 
 #[cfg(test)]

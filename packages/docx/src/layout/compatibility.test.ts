@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   defineCompatibilityRule,
-  WORD_FLOAT_DIFFERENT_PARAGRAPH_DISPLACEMENT,
   WORD_EMPTY_MARK_FLOAT_SIDE_GAP,
   WORD_PAGE_ANCHORED_TABLE_COLLISION_DEFERRAL,
   WORD_SECTION_BTLR_TBRL_PAGE_FRAME,
@@ -14,7 +13,6 @@ import {
   WORD_CONTEXTUAL_SPACING_PER_SIDE,
   WORD_TRAILING_SPACE_AFTER_FIT_ADMISSION,
   WORD_VERTICAL_RL_FINAL_LINE_BASELINE_ADMISSION,
-  WORD_TERMINAL_COLUMN_BREAK,
   wordFramePositionExtendsLineBox,
   wordFinalParagraphAdmissionExtentPt,
 } from './body-pagination-compatibility.js';
@@ -122,7 +120,6 @@ import {
   WORD_CELL_VERTICAL_ALIGNMENT_INK_BLOCK,
   WORD_EXACT_ROW_HEIGHT_BOTTOM_PADDING,
   WORD_EXACT_ROW_VERTICAL_CLIP_ONLY,
-  WORD_AUTHORED_AUTO_ROW_HEIGHT_FLOOR,
   WORD_EFFECTIVE_FLOATING_TABLE_POSITIONING,
   WORD_FIRST_ROW_TABLE_EXCEPTION_SCOPE,
   WORD_OMITTED_ROW_HEIGHT_RULE_AT_LEAST,
@@ -238,7 +235,6 @@ describe('defineCompatibilityRule', () => {
   it('pins every regression-test reference to a concrete repository test', () => {
     const rules = [
       WORD_SECTION_BTLR_TBRL_PAGE_FRAME,
-      WORD_TERMINAL_COLUMN_BREAK,
       WORD_PRE_BREAK_ANCHOR_PARAGRAPH,
       WORD_PRE_BREAK_INLINE_DRAWING_GROUP,
       WORD_CONTINUOUS_SECTION_MARK_SPACING,
@@ -249,8 +245,7 @@ describe('defineCompatibilityRule', () => {
       'reference' in rule.evidence ? rule.evidence.reference : null
     ))).toEqual([
       'packages/docx/src/layout/coordinate-space.test.ts#maps Transitional text direction %s to %s',
-      'packages/docx/src/pagination.test.ts#ignores a terminal last-column break before a hard page boundary',
-      'packages/docx/src/pagination.test.ts#does not push an anchor-only pre-break paragraph to a new page just for its empty mark',
+        'packages/docx/src/pagination.test.ts#does not push an anchor-only pre-break paragraph to a new page just for its empty mark',
       'packages/docx/src/pagination.test.ts#moves a preceding image with its pre-break callout when the pair only fits fresh',
       'packages/docx/src/body-layout-input.test.ts#projects mutually exclusive collapsed-mark and drop-previous-after roles',
       'packages/docx/src/contextual-spacing-body-paint.test.ts#paints the adjudicated six-case gap table',
@@ -310,13 +305,6 @@ describe('Word table row-cut observations', () => {
 });
 
 describe('float compatibility evidence', () => {
-  it('names the established different-paragraph displacement policy', () => {
-    expect(WORD_FLOAT_DIFFERENT_PARAGRAPH_DISPLACEMENT).toMatchObject({
-      id: 'word-float-different-paragraph-displacement',
-      evidence: { kind: 'library-policy' },
-    });
-  });
-
   it('names absolute floating-table collision deferral as compatibility behavior', () => {
     expect(WORD_PAGE_ANCHORED_TABLE_COLLISION_DEFERRAL).toMatchObject({
       id: 'word-page-anchored-table-collision-deferral',
@@ -398,7 +386,6 @@ describe('layout compatibility inventory', () => {
       WORD_LOWER_LAYER_SAME_PARAGRAPH_ANCHOR_COMPOSITION,
       WORD_TABLE_BORDER_WEIGHT_PRECEDENCE,
       WORD_OMITTED_ROW_HEIGHT_RULE_AT_LEAST,
-      WORD_AUTHORED_AUTO_ROW_HEIGHT_FLOOR,
       WORD_EFFECTIVE_FLOATING_TABLE_POSITIONING,
       WORD_TABLE_CELL_SPACING_SCOPE_SHADOW,
       WORD_TABLE_MARGIN_SCOPE_SHADOW,

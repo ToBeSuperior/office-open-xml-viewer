@@ -42,7 +42,6 @@ function fixture({ microsoftSections = [] } = {}) {
     ['packages/docx/src/float-line-start-one-inch.test.ts', [
       'keeps an anchor-host metric-only line on the paragraph-mark threshold',
     ]],
-    ['packages/docx/src/layout/floats.test.ts', ['keeps observed different-paragraph displacement on exclusion bounds']],
     ['packages/docx/src/float-table-page-fit.test.ts', ['(g) DEFERS a page-anchored floating table when its raw band intersects an existing table float']],
   ];
   for (const [path, titles] of references) {
@@ -81,12 +80,14 @@ function run(root, ...args) {
 test('accepts literal rules with live regression evidence', () => {
   const result = run(fixture());
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /verified \(5 rules\)/);
+  // compatibility.ts declares four rules since #1896 retired
+  // word-float-different-paragraph-displacement (Windows Word controls).
+  assert.match(result.stdout, /verified \(4 rules\)/);
 });
 
 test('rejects a stale regression test title', () => {
   const root = fixture();
-  write(root, 'packages/docx/src/layout/floats.test.ts', 'it("renamed", () => {});\n');
+  write(root, 'packages/docx/src/layout/coordinate-space.test.ts', 'it("renamed", () => {});\n');
   const result = run(root);
   assert.equal(result.status, 1);
   assert.match(result.stderr, /COMPATIBILITY_EVIDENCE_STALE/);
@@ -100,7 +101,7 @@ test('rejects a rule declaration outside the closed authority set', () => {
       id: 'word-inline',
       evidence: {
         kind: 'regression-test',
-        reference: 'packages/docx/src/layout/floats.test.ts#keeps observed different-paragraph displacement on exclusion bounds',
+        reference: 'packages/docx/src/layout/coordinate-space.test.ts#maps Transitional text direction %s to %s',
       },
       description: 'Inline rule',
     });
@@ -403,7 +404,7 @@ test('accepts quoted literal keys and extra static metadata', () => {
   `);
   const result = run(root);
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /verified \(6 rules\)/);
+  assert.match(result.stdout, /verified \(5 rules\)/);
 });
 
 test('rejects a rule that no production source cites', () => {

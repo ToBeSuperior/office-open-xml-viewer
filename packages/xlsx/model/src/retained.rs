@@ -194,7 +194,8 @@ retained_struct!(DxfFontToggles {
     bold,
     italic,
     underline,
-    strike
+    strike,
+    automatic_color
 });
 
 retained_struct!(Fill {
@@ -669,6 +670,8 @@ retained_struct!(TableInfo {
     last_column_dxf,
     band1_horizontal_dxf,
     band2_horizontal_dxf,
+    style_elements,
+    style_error,
     columns
 });
 

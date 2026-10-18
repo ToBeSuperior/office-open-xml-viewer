@@ -13,9 +13,8 @@
 //! Feat11FieldDataItem) describe how Excel formats cells it adds to a table;
 //! the cells already carry their formats in their XFs, and neither the XLSX
 //! model nor its parser carries those formats, so they are not projected.
-//! Style elements the model cannot carry reject the table when they would
-//! apply (column stripes when shown, header and total corner cells, stripes
-//! wider than one row).
+//! Every style element is carried inline (`style_elements`) with its band
+//! size, as the XLSX parser carries a workbook or Annex G table style.
 
 use super::{f64_at, styles, theme, u16_at, u32_at, unsupported, Record, EOF};
 use std::collections::BTreeMap;
@@ -333,25 +332,37 @@ fn table_info(
         last_column_dxf: None,
         band1_horizontal_dxf: None,
         band2_horizontal_dxf: None,
+        style_elements: Vec::new(),
+        style_error: None,
         columns: Vec::new(),
     };
     let Some(elements) = table_styles.styles.get(&style_name).cloned() else {
+        if style_name.is_empty() {
+            return Ok(info);
+        }
+        // A built-in style (2.5.176 names it without a TableStyle record):
+        // the Annex G definition under the workbook theme. A theme-less
+        // workbook has no colors for its theme references.
+        if let Some(presets) = ooxml_common::spreadsheet_style_presets::table_style(&style_name) {
+            // A theme-less workbook has no colors for the preset's theme
+            // references (no Office default theme is assumed): the table is
+            // drawn without its style and the reason is retained.
+            let Some(theme) = context.theme.scheme() else {
+                info.style_error = Some("theme".into());
+                return Ok(info);
+            };
+            info.style_elements = presets
+                .map(|preset| xlsx_model::PivotTableStyleElement {
+                    kind: preset.kind.to_string(),
+                    size: preset.size,
+                    dxf: xlsx_model::style_presets::preset_dxf(&preset.dxf, &theme),
+                })
+                .collect();
+        }
         return Ok(info);
     };
     info.is_custom = true;
-    for (&kind, &(size, index)) in &elements.by_type {
-        let applies = match kind {
-            7 | 8 => column_stripes,
-            9 | 10 => table.header,
-            11 | 12 => table.totals,
-            _ => false,
-        };
-        if applies {
-            return Err(unsupported("XLS table style element is not representable"));
-        }
-        if matches!(kind, 5 | 6) && row_stripes && size != 1 {
-            return Err(unsupported("XLS table stripe wider than one row"));
-        }
+    for (&kind, &(_, index)) in &elements.by_type {
         let slot = match kind {
             0 => &mut info.whole_table_dxf,
             1 => &mut info.header_row_dxf,
@@ -364,7 +375,42 @@ fn table_info(
         };
         *slot = Some(table_styles.dxf(index, context, dxfs)?);
     }
+    info.style_elements = table_styles
+        .pivot_elements(&style_name, context)?
+        .unwrap_or_default()
+        .into_iter()
+        // A style shared with PivotTables may carry PivotTable-only regions
+        // (2.4.321 tseType 0x0D-0x1B), which a Table does not have.
+        .filter_map(|(tse, size, dxf)| {
+            table_element_kind(tse).map(|kind| xlsx_model::PivotTableStyleElement {
+                kind: kind.to_string(),
+                size,
+                dxf,
+            })
+        })
+        .collect();
     Ok(info)
+}
+
+/// ST_TableStyleType (18.18.77) of a TableStyleElement tseType (2.4.321)
+/// that names a Table region (0x00-0x0C); the rest are PivotTable regions.
+fn table_element_kind(tse: u32) -> Option<&'static str> {
+    Some(match tse {
+        0x00 => "wholeTable",
+        0x01 => "headerRow",
+        0x02 => "totalRow",
+        0x03 => "firstColumn",
+        0x04 => "lastColumn",
+        0x05 => "firstRowStripe",
+        0x06 => "secondRowStripe",
+        0x07 => "firstColumnStripe",
+        0x08 => "secondColumnStripe",
+        0x09 => "firstHeaderCell",
+        0x0a => "lastHeaderCell",
+        0x0b => "firstTotalCell",
+        0x0c => "lastTotalCell",
+        _ => return None,
+    })
 }
 
 impl Styles {
@@ -478,6 +524,9 @@ fn xfprops(
     let mut at = offset + 4;
     let mut dxf = xlsx_model::Dxf::default();
     let mut font: Option<xlsx_model::Font> = None;
+    // Which font properties the DXF states (ECMA-376 18.8.14-15 layering
+    // distinguishes an explicit off or automatic color from an omission).
+    let mut toggles = xlsx_model::DxfFontToggles::default();
     let mut fill: Option<xlsx_model::Fill> = None;
     let mut border: Option<xlsx_model::Border> = None;
     let mut format_code = None;
@@ -519,6 +568,9 @@ fn xfprops(
             5 => {
                 let target = font_entry(&mut font);
                 target.color = color(value, 0)?;
+                if target.color.is_none() {
+                    toggles.automatic_color = Some(true);
+                }
             }
             6..=12 => {
                 let style = u16_at(value, 8)?;
@@ -569,6 +621,7 @@ fn xfprops(
             0x19 => {
                 let weight = u16_at(value, 0)?;
                 font_entry(&mut font).bold = weight >= 0x02bc;
+                toggles.bold = Some(weight >= 0x02bc);
             }
             0x1a => {
                 let (underline, style) = match byte()? {
@@ -582,6 +635,7 @@ fn xfprops(
                 let target = font_entry(&mut font);
                 target.underline = underline;
                 target.underline_style = style.map(str::to_string);
+                toggles.underline = Some(underline);
             }
             0x1b => {
                 let target = font_entry(&mut font);
@@ -597,8 +651,10 @@ fn xfprops(
                 let target = font_entry(&mut font);
                 if kind == 0x1c {
                     target.italic = on;
+                    toggles.italic = Some(on);
                 } else {
                     target.strike = on;
+                    toggles.strike = Some(on);
                 }
             }
             0x24 => {
@@ -685,6 +741,9 @@ fn xfprops(
         if fill.fg_color.is_none() {
             fill.fg_color = fill.bg_color.clone();
         }
+    }
+    if font.is_some() {
+        dxf.font_toggles = Some(toggles);
     }
     dxf.font = font;
     dxf.fill = fill;
@@ -806,7 +865,15 @@ mod tests {
             dxfs[0].fill.as_ref().unwrap().fg_color.as_deref(),
             Some("#F2F2F2")
         );
-        // Column stripes shown by a custom style that defines them reject.
+        assert_eq!(
+            table
+                .style_elements
+                .iter()
+                .map(|e| (e.kind.as_str(), e.size))
+                .collect::<Vec<_>>(),
+            vec![("firstRowStripe", 1)]
+        );
+        // Column stripes are carried inline with their band size.
         let mut element = frt(0x0890);
         for value in [7u32, 1, 0] {
             element.extend(value.to_le_bytes());
@@ -829,13 +896,36 @@ mod tests {
             },
         ];
         let mut table_styles = Styles::parse(&globals).unwrap();
-        assert!(project(
+        let striped = project(
             &records(&[feature(1, (8, 35), (1, 6)), style_info(1, 0x08, "S")]),
             &mut table_styles,
             &context,
             &mut Vec::new(),
         )
-        .is_err());
+        .unwrap();
+        let element = &striped[0].style_elements[0];
+        assert_eq!(
+            (element.kind.as_str(), element.size),
+            ("firstColumnStripe", 1)
+        );
+        assert_eq!(
+            element.dxf.fill.as_ref().unwrap().fg_color.as_deref(),
+            Some("#F2F2F2")
+        );
+        // A built-in style in a theme-less workbook keeps the table and
+        // reports why it is drawn without its style.
+        let plain = project(
+            &records(&[
+                feature(1, (8, 35), (1, 6)),
+                style_info(1, 0x05, "TableStyleMedium2"),
+            ]),
+            &mut Styles::default(),
+            &context,
+            &mut Vec::new(),
+        )
+        .unwrap();
+        assert!(plain[0].style_elements.is_empty());
+        assert_eq!(plain[0].style_error.as_deref(), Some("theme"));
         // A List12 for another table is rejected.
         assert!(project(
             &records(&[feature(1, (8, 35), (1, 6)), style_info(2, 0, "S")]),

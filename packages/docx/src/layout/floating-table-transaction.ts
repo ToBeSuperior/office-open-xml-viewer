@@ -240,10 +240,7 @@ export function resolveFloatingTablePlacementInTransaction(
     blockers: registry
       .filter((entry) => entry.kind !== 'shape' || entry.wrap !== undefined)
       .map(floatRegistryParticipant),
-    avoidance: floatingTableAvoidance(
-      placement.overlap,
-      transaction.nextParagraphId,
-    ),
+    avoidance: floatingTableAvoidance(),
     rightBoundaryPt: endX(frames.page),
     // Preserve the numeric policy used by the former scalar adapter. This is
     // especially important at an authored page edge, where sub-twip rounding

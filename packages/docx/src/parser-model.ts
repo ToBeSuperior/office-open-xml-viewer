@@ -711,11 +711,13 @@ function privateTableRowHeight(height: TableRowHeightAcquisitionWire): TableRowH
 
 function publicTableRowHeight(row: TableLayoutSource['rows'][number]): TableRowHeightInput | null {
   if (row.rowHeight === null || !Number.isFinite(row.rowHeight)) return null;
-  // The stable public model predates authored-presence retention. Keep its
-  // compatibility fallback at the model boundary, never in the layout solver.
+  // The public model writes an omitted hRule as its "auto" default and keeps
+  // no authored-presence fact, so a public-only "auto" row with a height is
+  // the omitted case (`word-omitted-row-height-rule-at-least`). Documents
+  // parsed here carry the acquisition wire, where an explicit auto has no
+  // minimum (ECMA-376 §17.4.80).
   const normalized = normalizedTableHeightRule(row.rowHeightRule);
   return {
-    // `word-authored-auto-row-height-floor`: an authored auto height is a floor.
     rule: normalized === 'auto' ? 'atLeast' : normalized,
     valuePt: row.rowHeight,
   };

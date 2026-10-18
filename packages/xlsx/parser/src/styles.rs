@@ -223,6 +223,9 @@ pub(crate) fn parse_dxf(dxf_node: roxmltree::Node, theme_colors: &[String]) -> D
                         }
                         "color" => {
                             f.color = parse_color(&fc, theme_colors);
+                            if matches!(fc.attribute("auto"), Some("1" | "true")) {
+                                toggles.automatic_color = Some(true);
+                            }
                         }
                         _ => {}
                     }

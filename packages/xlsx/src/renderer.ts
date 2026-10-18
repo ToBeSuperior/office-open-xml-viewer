@@ -15,7 +15,7 @@ import {
 } from '@silurus/ooxml-core/internal/drawingml-text';
 import { containsHanScript } from '@silurus/ooxml-core/internal/script-preload-accumulator';
 import { activeFontSet, findReferenceFontMetrics, isHTMLCanvas, loadedGoogleRegularAliases } from '@silurus/ooxml-core';
-import { buildPivotStyleMap, type PivotCellFormat } from './pivot-style.js';
+import { buildStructuredStyleMap, type StructuredCellFormat } from './pivot-style.js';
 import type {
   Worksheet, Styles, Cell, CellValue, CellFont, CellFill, Border, BorderEdge, CellXf,
   ViewportRange, RenderViewportOptions, XlsxTextRunInfo,
@@ -848,7 +848,7 @@ function hatchPattern(
  * the prior gate required a non-null fgColor.
  *
  * Returns true when the cell was painted so the caller can short-circuit
- * its tableStyle / banded fallbacks.
+ * the Table / PivotTable style fill beneath it.
  */
 function paintCellPatternFill(
   ctx: CanvasRenderingContext2D,
@@ -1773,8 +1773,7 @@ interface RenderContext {
    *  red triangle in the top-right corner (ECMA-376 §18.7.3 commentList). */
   commentCells: Set<string>;
   /** row:col → table-style overlay (bold header, banded rows, borders). */
-  tableStyleMap: Map<string, TableCellStyle>;
-  pivotStyleMap: Map<string, PivotCellFormat>;
+  structuredStyleMap: Map<string, StructuredCellFormat>;
   /** row:col → render-ready SparklineModel for cells that host an
    *  `x14:sparkline`. Built once at viewport start by flattening the
    *  parser's SparklineGroup + per-cell Sparkline pair. */
@@ -1880,171 +1879,6 @@ function drawAutoFilterArrow(ctx: CanvasRenderingContext2D, cx: number, cy: numb
   ctx.restore();
 }
 
-// ────────────────────────────────────────────────────────────────
-// Excel Table style overlays (ECMA-376 §18.5 / §18.8.83)
-// ────────────────────────────────────────────────────────────────
-// Two distinct paths:
-//
-// 1. CUSTOM styles (defined in the file's `<tableStyles>` block, §18.5.1.2):
-//    rendered strictly from the dxfs of their declared `<tableStyleElement>`s.
-//    A custom style contributes ONLY what its elements define — if none carry
-//    a border, Excel draws no table-level border (the visible structure comes
-//    from theme borders baked into each cell `xf`, which we render separately).
-//    `isCustom` cells therefore never get accent synthesis.
-//
-// 2. BUILT-IN style names (`TableStyleLight18`, …) whose definitions are NOT
-//    in the file. We don't yet ship the preset catalog, so we approximate them
-//    from a single "accent" color: bold header + banded fills + horizontal
-//    rules, so those files render with visible structure rather than blank
-//    ranges. This is an approximation, kept until a real catalog ships
-//    (post-1.0).
-export interface TableCellStyle {
-  accent: string;
-  /** `true` for a custom `<tableStyle>` — disables all accent approximation. */
-  isCustom: boolean;
-  isHeader: boolean;
-  isTotals: boolean;
-  /** `true` when this is a banded data row that should get the stripe fill. */
-  isBanded: boolean;
-  isFirstCol: boolean;
-  isLastCol: boolean;
-  isTopEdge: boolean;
-  isBottomEdge: boolean;
-  /** Dxf for the whole-table element of a custom `<tableStyle>`
-   *  (ECMA-376 §18.8.83). Border/fill apply to every cell as a base layer. */
-  wholeTableDxf?: number;
-  /** Dxf for the header-row element of a custom `<tableStyle>`. Provides
-   *  header fill, font color/weight, and vertical separators. */
-  headerRowDxf?: number;
-  /** Dxf for the total-row element. */
-  totalRowDxf?: number;
-  /** Dxf for the first-column element (when `showFirstColumn`). */
-  firstColumnDxf?: number;
-  /** Dxf for the last-column element (when `showLastColumn`). */
-  lastColumnDxf?: number;
-  /** Dxf for the stripe (band1=odd, band2=even) that applies to this row when
-   *  `showRowStripes` is set; undefined when this row is not a stripe. */
-  stripeDxf?: number;
-}
-
-export function buildTableStyleMap(worksheet: Worksheet): Map<string, TableCellStyle> {
-  const map = new Map<string, TableCellStyle>();
-  const identity = coordinateIndexIdentity(
-    worksheet,
-    'worksheet-table-style-index',
-    'expand-styled-table-coordinates',
-  );
-  for (const t of worksheet.tables ?? []) {
-    // ECMA-376 §18.5.1.4: empty styleName means the table has "None" style —
-    // no visual table formatting overlay should be applied. Cell xf borders
-    // and fills are still rendered as defined (per §18.8.45); only the
-    // table-style overlay (banded fills, separator rules, etc.) is skipped.
-    if (!t.styleName) continue;
-    const { top, bottom, left, right } = t.range;
-    assertCoordinateRangeArea(t.range, identity);
-    const accent = t.accentColor || '#808080';
-    const isCustom = !!t.isCustom;
-    const hdr = Math.max(0, t.headerRowCount ?? 1);
-    const tot = Math.max(0, t.totalsRowCount ?? 0);
-    const headerEnd = top + hdr - 1;
-    const totalsStart = bottom - tot + 1;
-    for (let r = top; r <= bottom; r++) {
-      const isHeader = hdr > 0 && r <= headerEnd;
-      const isTotals = tot > 0 && r >= totalsStart;
-      const dataIdx = (!isHeader && !isTotals) ? (r - headerEnd - 1) : -1;
-      // Row banding stripes alternate band1 (odd) / band2 (even) over the data
-      // region (§18.18.93). For built-in approximation we only paint the odd
-      // stripe via `isBanded`; for custom styles we pick the matching dxf.
-      const isStripeRow = t.showRowStripes && dataIdx >= 0;
-      const stripeDxf = isStripeRow
-        ? (dataIdx % 2 === 1 ? t.band1HorizontalDxf : t.band2HorizontalDxf)
-        : undefined;
-      for (let c = left; c <= right; c++) {
-        setCoordinateIndexValue(map, `${r}:${c}`, {
-          accent,
-          isCustom,
-          isHeader,
-          isTotals,
-          isBanded: t.showRowStripes && dataIdx >= 0 && dataIdx % 2 === 1,
-          isFirstCol: t.showFirstColumn && c === left,
-          isLastCol: t.showLastColumn && c === right,
-          isTopEdge: r === top,
-          isBottomEdge: r === bottom,
-          wholeTableDxf: t.wholeTableDxf,
-          headerRowDxf: t.headerRowDxf,
-          totalRowDxf: t.totalRowDxf,
-          firstColumnDxf: t.firstColumnDxf,
-          lastColumnDxf: t.lastColumnDxf,
-          stripeDxf,
-        }, identity);
-      }
-    }
-  }
-  return map;
-}
-
-/**
- * Result of resolving a table cell's overlay *border* (ECMA-376 §18.8.83).
- *  - `none`   — draw nothing extra (custom style with no border dxf, or a
- *               built-in cell that has no rule on this edge).
- *  - `dxf`    — draw `border` exactly as the resolved dxf defines it.
- *  - `accent` — built-in approximation only: a synthesized accent-colored rule
- *               under the cell (plus the table top edge when `topEdge`).
- */
-export type TableOverlayBorder =
-  | { kind: 'none' }
-  | { kind: 'dxf'; border: Border }
-  | { kind: 'accent'; color: string; lineWidth: number; topEdge: boolean };
-
-/**
- * Decide the table-style overlay border for one cell.
- *
- * `dxfWhole` / `dxfHeader` are the already-resolved dxfs for the cell's
- * wholeTable / headerRow elements (undefined when the element is absent).
- * `colIndex` is the cell's column index *within the table* (0 = first column),
- * used to draw the table's outer-left edge only on the leftmost column.
- *
- * Custom styles (`ts.isCustom`) draw only from these dxfs and never synthesize
- * accent rules: when no border dxf is present they contribute nothing. Built-in
- * style names keep the accent approximation.
- */
-export function tableOverlayBorder(
-  ts: TableCellStyle,
-  dxfWhole: Dxf | undefined,
-  dxfHeader: Dxf | undefined,
-  colIndex: number,
-): TableOverlayBorder {
-  const horiz = dxfWhole?.border?.horizontal;
-  const wtTop = dxfWhole?.border?.top;
-  const wtBot = dxfWhole?.border?.bottom;
-  const wtLeft = dxfWhole?.border?.left;
-  const wtRight = dxfWhole?.border?.right;
-  const hdrBot = dxfHeader?.border?.bottom;
-  const hdrTop = dxfHeader?.border?.top;
-  const hasDxfBorder = !!(horiz || wtTop || wtBot || wtLeft || wtRight || hdrBot || hdrTop);
-
-  if (hasDxfBorder) {
-    // Compose per-edge from the table-style hierarchy
-    // (wholeTable < headerRow), §18.8.83. The inner `horizontal` rule fills
-    // top/bottom for interior rows; outer edges come from the table extents.
-    const overlay: Border = { left: null, right: null, top: null, bottom: null };
-    if (ts.isTopEdge) overlay.top = wtTop ?? null;
-    else if (horiz) overlay.top = horiz;
-    if (ts.isHeader && hdrBot) overlay.bottom = hdrBot;
-    else if (ts.isBottomEdge) overlay.bottom = wtBot ?? null;
-    else if (horiz) overlay.bottom = horiz;
-    if (ts.isFirstCol || colIndex === 0) overlay.left = wtLeft ?? null;
-    if (ts.isLastCol) overlay.right = wtRight ?? null;
-    return { kind: 'dxf', border: overlay };
-  }
-
-  // No border dxf. A custom style contributes nothing here (§18.5.1.2):
-  // Excel draws no table-level border, only the theme borders baked into the
-  // cell xf. Built-in names fall through to the accent approximation.
-  if (ts.isCustom) return { kind: 'none' };
-  return { kind: 'accent', color: ts.accent, lineWidth: ts.isHeader ? 1.5 : 1, topEdge: ts.isTopEdge };
-}
-
 /** Flatten the worksheet's parsed `sparklineGroups` into a per-cell render
  *  model. Each Sparkline inherits its group's formatting; min/max are
  *  computed from the values when the group's `*AxisType` is `individual`,
@@ -2112,24 +1946,6 @@ function buildSparklineMap(worksheet: Worksheet): Map<string, SparklineModel> {
     }
   }
   return map;
-}
-
-function stripeColorFor(accent: string): string {
-  // Library approximation, not the spec rule: a 20% accent / 80% white mix for
-  // banded rows of a built-in table style whose stripe dxf is not resolved.
-  // The normative definitions are the built-in table styles shipped with
-  // ECMA-376 Part 1 (SpreadsheetML presetTableStyles.xml: per-style dxfs with
-  // theme colour + tint, applied per §18.8.40 tableStyle / §18.5.1.5
-  // tableStyleInfo); no Excel measurement backs the 20% value. Resolving those
-  // definitions changes table rendering and is tracked as follow-up work.
-  const hex = accent.replace('#', '');
-  if (hex.length < 6) return '#F2F2F2';
-  const r = parseInt(hex.slice(0, 2), 16);
-  const g = parseInt(hex.slice(2, 4), 16);
-  const b = parseInt(hex.slice(4, 6), 16);
-  const mix = (ch: number) => Math.round(ch * 0.2 + 255 * 0.8);
-  const toHex = (v: number) => v.toString(16).padStart(2, '0').toUpperCase();
-  return `#${toHex(mix(r))}${toHex(mix(g))}${toHex(mix(b))}`;
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -2246,15 +2062,12 @@ function renderQuadrant(
     );
     const cf = evaluateCf(cell, aRow, aCol, cfContext, styles.dxfs ?? [], rc.cfDiagnostics);
     const effectiveFill = cf.fill ?? fill;
-    // Same layers as the main path's merged anchor: PivotTable style fill
-    // under the cell's own fill, and table / PivotTable font beneath CF.
-    // (Table fills and banding are not composed here: Excel does not allow
-    // merged cells inside a Table, see the table overlay note below.)
-    const tableStyle = rc.tableStyleMap.get(key);
-    const pivotFormat = rc.pivotStyleMap.get(key);
+    // Same layers as the main path's merged anchor: the Table / PivotTable
+    // style fill under the cell's own fill, and its font beneath CF.
+    const styleFormat = rc.structuredStyleMap.get(key);
 
-    if (!paintCellPatternFill(ctx, effectiveFill, aCx, aCy, cW, cH) && pivotFormat?.fill) {
-      paintCellPatternFill(ctx, pivotFormat.fill, aCx, aCy, cW, cH);
+    if (!paintCellPatternFill(ctx, effectiveFill, aCx, aCy, cW, cH) && styleFormat?.fill) {
+      paintCellPatternFill(ctx, styleFormat.fill, aCx, aCy, cW, cH);
     }
     if (cf.dataBar && cf.dataBar.ratio > 0) {
       const bInset = 2;
@@ -2279,15 +2092,15 @@ function renderQuadrant(
     const text = formatted.text;
     if (!text || (text === '0' && rc.worksheet.showZeros === false)) continue;
 
-    const fontForDraw = layeredCellFont(font, cf, tableStyle, styles, pivotFormat);
+    const fontForDraw = layeredCellFont(font, cf, styleFormat);
     ctx.font = buildFont(ctx, fontForDraw, cs, cjkFallback, text);
     const hyperlinkUrl = rc.hyperlinkMap.get(key);
     // Colour precedence (as the main path): hyperlink theme colour >
     // conditional-formatting font colour > number-format section colour
-    // ([Red] etc., §18.8.30) > table / PivotTable style colour > the cell's
-    // own font colour (a cell's own colour beats the table's; see
-    // tableStyleFontColor).
-    const tableFontColor = styleFontColor(tableFontDxfFor(tableStyle, styles), pivotFormat, xf);
+    // ([Red] etc., §18.8.30) > Table / PivotTable style colour > the cell's
+    // own font colour (a cell's own colour beats the style's; see
+    // styleFontColor).
+    const tableFontColor = styleFontColor(styleFormat, xf);
     const textColor = hyperlinkUrl
       ? '#0563C1'
       : (cf.fontColor ?? formatted.color ?? tableFontColor ?? font.color);
@@ -2325,7 +2138,7 @@ function renderQuadrant(
     // text whether or not its top-left anchor cell is scrolled out of view.
     // Rich runs take the table style's font color by the measured run rule
     // (richRunsWithTableColor); runs without <rPr> through the base font.
-    const tableRunColor = tableStyleFontColor(tableFontDxfFor(tableStyle, styles), xf);
+    const tableRunColor = tableRunFontColor(styleFormat, xf);
     const rawRuns = cell.value.type === 'text' ? cell.value.runs : undefined;
     const runs = rawRuns && richRunsWithTableColor(rawRuns, tableRunColor);
     const richBaseFont = tableRunColor != null ? { ...fontForDraw, color: tableRunColor } : fontForDraw;
@@ -2463,56 +2276,16 @@ function renderQuadrant(
       const { font, fill, border, xf } = resolveXf(styles, styleIndex);
       const cf = evaluateCf(cell, rowIndex, colIndex, cfContext, styles.dxfs ?? [], rc.cfDiagnostics);
       const effectiveFill = cf.fill ?? fill;
-      const tableStyle = rc.tableStyleMap.get(key);
-      // Custom `<tableStyle>` dxfs (ECMA-376 §18.8.83). When present, they
-      // drive fills / font color and borders strictly from the declared
-      // elements — no accent fallback for custom styles.
-      const dxfList = styles.dxfs ?? [];
-      const dxfAt = (i?: number) => (i != null ? dxfList[i] : undefined);
-      const tsDxfWhole = dxfAt(tableStyle?.wholeTableDxf);
-      const tsDxfHeader = dxfAt(tableStyle?.headerRowDxf);
-      const tsDxfTotal = dxfAt(tableStyle?.totalRowDxf);
-      const tsDxfFirstCol = dxfAt(tableStyle?.firstColumnDxf);
-      const tsDxfLastCol = dxfAt(tableStyle?.lastColumnDxf);
-      const tsDxfStripe = dxfAt(tableStyle?.stripeDxf);
-      // Per-cell table fill resolved from the element hierarchy
-      // (§18.8.83: wholeTable < band < column < header/total). The later a
-      // layer appears the higher its precedence; we pick the most specific
-      // fill that defines a fgColor.
-      const tableFillDxf =
-        (tableStyle?.isHeader && tsDxfHeader?.fill?.fgColor) ? tsDxfHeader :
-        (tableStyle?.isTotals && tsDxfTotal?.fill?.fgColor) ? tsDxfTotal :
-        (tableStyle?.isLastCol && tsDxfLastCol?.fill?.fgColor) ? tsDxfLastCol :
-        (tableStyle?.isFirstCol && tsDxfFirstCol?.fill?.fgColor) ? tsDxfFirstCol :
-        (tsDxfStripe?.fill?.fgColor) ? tsDxfStripe :
-        (!tableStyle?.isHeader && !tableStyle?.isTotals && tsDxfWhole?.fill?.fgColor) ? tsDxfWhole :
-        undefined;
-
       // Background fill (base or CF override). ECMA-376 §18.8.22 ST_PatternType.
       // - solid/gray*: blend fgColor with bgColor at the pattern's fg coverage.
       // - directional hatches (dark/light Horizontal/Vertical/Down/Up/Grid/
       //   Trellis): render via a small repeating tile using createPattern so
       //   the hatch actually shows, rather than approximating as a blend.
       let hasCellBackground = paintCellPatternFill(ctx, effectiveFill, cx, cy, cellW, cellH);
-      // PivotTable style fill (§18.8.41) under the cell's own fill.
-      const pivotFormat = rc.pivotStyleMap.get(key);
-      if (!hasCellBackground && pivotFormat?.fill) {
-        hasCellBackground = paintCellPatternFill(ctx, pivotFormat.fill, cx, cy, cellW, cellH);
-      }
-      if (hasCellBackground) {
-        // own fill painted; tableStyle fallbacks intentionally skipped
-      } else if (tableStyle && tableFillDxf?.fill?.fgColor) {
-        // Custom or built-in: a resolved table-element dxf fill wins.
-        ctx.fillStyle = hexToRgba(tableFillDxf.fill.fgColor);
-        ctx.fillRect(cx, cy, cellW, cellH);
-        hasCellBackground = true;
-      } else if (tableStyle && !tableStyle.isCustom && tableStyle.isBanded) {
-        // Accent-tint banding is an approximation for built-in style names
-        // only. Custom styles with no stripe dxf get no banding fill (Excel
-        // draws none — §18.5.1.2).
-        ctx.fillStyle = stripeColorFor(tableStyle.accent);
-        ctx.fillRect(cx, cy, cellW, cellH);
-        hasCellBackground = true;
+      // Table / PivotTable style fill (§18.8.41) under the cell's own fill.
+      const styleFormat = rc.structuredStyleMap.get(key);
+      if (!hasCellBackground && styleFormat?.fill) {
+        hasCellBackground = paintCellPatternFill(ctx, styleFormat.fill, cx, cy, cellW, cellH);
       }
 
       // Comment indicator triangle — drawn above fill but below borders so
@@ -2578,14 +2351,15 @@ function renderQuadrant(
         ? resolveMergeBorder(border, rowIndex, colIndex, mergeInfo.right, mergeInfo.bottom, cellMap, styles)
         : border;
       let mergedBorder = mergeBorders(baseBorder, cf.border);
-      // PivotTable style edges (§18.8.41) fill the edges the cell leaves unset.
-      if (pivotFormat) {
+      // Table / PivotTable style edges (§18.8.41) fill the edges the cell
+      // leaves unset.
+      if (styleFormat) {
         mergedBorder = {
           ...mergedBorder,
-          top: mergedBorder.top?.style ? mergedBorder.top : (pivotFormat.top ?? mergedBorder.top),
-          bottom: mergedBorder.bottom?.style ? mergedBorder.bottom : (pivotFormat.bottom ?? mergedBorder.bottom),
-          left: mergedBorder.left?.style ? mergedBorder.left : (pivotFormat.left ?? mergedBorder.left),
-          right: mergedBorder.right?.style ? mergedBorder.right : (pivotFormat.right ?? mergedBorder.right),
+          top: mergedBorder.top?.style ? mergedBorder.top : (styleFormat.top ?? mergedBorder.top),
+          bottom: mergedBorder.bottom?.style ? mergedBorder.bottom : (styleFormat.bottom ?? mergedBorder.bottom),
+          left: mergedBorder.left?.style ? mergedBorder.left : (styleFormat.left ?? mergedBorder.left),
+          right: mergedBorder.right?.style ? mergedBorder.right : (styleFormat.right ?? mergedBorder.right),
         };
       }
       // centerContinuous: hide internal vertical borders so the run reads as
@@ -2639,46 +2413,11 @@ function renderQuadrant(
           mergedBorder = { ...mergedBorder, left: pickStrongerEdge(mergedBorder.left, leftRight) };
         }
       }
-      // Excel Table style overlay (ECMA-376 §18.8.83). Custom styles draw only
-      // their dxf-defined borders; built-in style names fall back to a
-      // synthesized accent rule. Drawn on top of the cell border so an
-      // empty-border data cell still shows the table structure the style
-      // defines. None-style tables produce no `tableStyleMap` entry, so this is
-      // skipped. (Excel forbids merging cells inside a structured Table, so a
-      // merged anchor never carries a `tableStyle`; for the merged branch only
-      // the AutoFilter arrow can apply.)
-      const overlay = tableStyle
-        ? tableOverlayBorder(tableStyle, tsDxfWhole, tsDxfHeader, colIndex)
-        : null;
       const drawArrow = rc.autoFilterCells.has(key);
-      // Paint the base cell border, then the table overlay on top of it, then
-      // the AutoFilter arrow — the original inline order, kept intact whether
-      // this runs deferred (non-merged) or inline (merged anchor).
-      const paintOverlayAndArrow = () => {
-        if (overlay) {
-          if (overlay.kind === 'dxf') {
-            renderBorder(ctx, overlay.border, cx, cy, cellW, cellH, dpr);
-          } else if (overlay.kind === 'accent') {
-            const hp = 0.5 / dpr;
-            ctx.strokeStyle = overlay.color;
-            ctx.lineWidth = overlay.lineWidth;
-            ctx.beginPath();
-            // perimeter inset (-hp) kept literal: snapping could push it
-            // outside the cell's bottom edge; dpr>=3 edge accepted
-            ctx.moveTo(cx, cy + cellH - hp);
-            ctx.lineTo(cx + cellW, cy + cellH - hp);
-            if (overlay.topEdge) {
-              const ty = cy + crispOffset(cy, overlay.lineWidth, dpr);
-              ctx.moveTo(cx, ty);
-              ctx.lineTo(cx + cellW, ty);
-            }
-            ctx.stroke();
-          }
-        }
-        // AutoFilter dropdown indicator
-        if (drawArrow) {
-          drawAutoFilterArrow(ctx, cx, cy, cw, cellH);
-        }
+      // The AutoFilter arrow paints above the cell border, whether this runs
+      // deferred (non-merged) or inline (merged anchor).
+      const paintArrow = () => {
+        if (drawArrow) drawAutoFilterArrow(ctx, cx, cy, cw, cellH);
       };
 
       if (mergeInfo) {
@@ -2687,21 +2426,18 @@ function renderQuadrant(
         // (`mergedBorder` is reassigned by the conflict-resolution above) so
         // the deferred closure draws the value as of *this* anchor; cx/cy/cellW/
         // cellH are already block `const` and safe to capture directly. The
-        // overlay/arrow paint inline (pass 1) here, matching the prior order
-        // where the deferred merge border sat above them.
+        // arrow paints inline (pass 1) here, below the deferred merge border.
         const mb = mergedBorder;
         mergeBorderTasks.push(() => renderBorder(ctx, mb, cx, cy, cellW, cellH, dpr));
-        paintOverlayAndArrow();
+        paintArrow();
       } else {
         // Non-merged borders are deferred to pass 2 (after every fill) so a
         // later neighbour's fill can never over-paint this cell's edges. The
-        // overlay + arrow ride in the SAME closure, after the base border, so
-        // their mutual base-border < overlay < arrow order is preserved exactly
-        // — only the whole trio shifts above every cell's gray gridline.
+        // arrow rides in the SAME closure, after the border.
         const mb = mergedBorder;
         borderTasks.push(() => {
           renderBorder(ctx, mb, cx, cy, cellW, cellH, dpr);
-          paintOverlayAndArrow();
+          paintArrow();
         });
       }
 
@@ -2711,44 +2447,16 @@ function renderQuadrant(
       if (!text || (text === '0' && rc.worksheet.showZeros === false)) continue;
 
       textTasks.push(() => {
-      // The table-element dxf that applies to this cell's font (header/total/
-      // column/stripe/wholeTable), resolved by the same §18.8.83 hierarchy as
-      // the fill above. Used for both bold and color of custom styles.
-      const tableFontDxf =
-        (tableStyle?.isHeader) ? tsDxfHeader :
-        (tableStyle?.isTotals) ? tsDxfTotal :
-        (tableStyle?.isLastCol && tsDxfLastCol) ? tsDxfLastCol :
-        (tableStyle?.isFirstCol && tsDxfFirstCol) ? tsDxfFirstCol :
-        (tsDxfStripe) ? tsDxfStripe :
-        (tableStyle ? tsDxfWhole : undefined);
-      // Built-in style names: synthesize bold header/total rows (approximation).
-      // Custom styles: bold comes strictly from the element dxf font (§18.5.1.2).
-      const tableBold = tableStyle
-        ? (tableStyle.isCustom
-            ? !!tableFontDxf?.font?.bold
-            : (tableStyle.isHeader || tableStyle.isTotals))
-        : false;
       // CF is the top layer: a matched rule's toggle, on or off, overrides
       // the cell, table and PivotTable formatting beneath it (CfResult).
-      const effectiveBold = cf.fontBold ?? (font.bold || tableBold || !!pivotFormat?.bold);
-      const effectiveItalic = cf.fontItalic ?? (font.italic || !!pivotFormat?.italic);
-      const effectiveUnderline = cf.fontUnderline ?? (font.underline || !!pivotFormat?.underline);
-      const effectiveStrike = cf.fontStrike ?? (font.strike || !!pivotFormat?.strike);
-      const fontForDraw: CellFont = (
-        effectiveBold !== font.bold || effectiveItalic !== font.italic ||
-        effectiveUnderline !== font.underline || effectiveStrike !== font.strike
-      )
-        ? { ...font, bold: effectiveBold, italic: effectiveItalic, underline: effectiveUnderline, strike: effectiveStrike }
-        : font;
+      const fontForDraw = layeredCellFont(font, cf, styleFormat);
       ctx.font = buildFont(ctx, fontForDraw, cs, cjkFallback, text);
       const hyperlinkUrl = rc.hyperlinkMap.get(key);
-      // Table-style element dxfs can override font color (ECMA-376 §18.8.83),
-      // following the same element hierarchy as the fill/bold above.
-      const tableFontColor = styleFontColor(tableFontDxf, pivotFormat, xf);
       // Colour precedence: hyperlink > conditional-formatting font colour >
-      // number-format section colour ([Red] etc., §18.8.30) > table-style dxf
-      // colour > the cell's own font colour (a cell's own colour beats the
-      // table's; see tableStyleFontColor).
+      // number-format section colour ([Red] etc., §18.8.30) > Table /
+      // PivotTable style colour > the cell's own font colour (a cell's own
+      // colour beats the style's; see styleFontColor).
+      const tableFontColor = styleFontColor(styleFormat, xf);
       const textColor = hyperlinkUrl
         ? '#0563C1'
         : (cf.fontColor ?? formatted.color ?? tableFontColor ?? font.color);
@@ -3023,7 +2731,7 @@ function renderQuadrant(
 
       // Rich text: draw each run with its own font. Rich runs take the table
       // style's font color by the measured run rule (richRunsWithTableColor).
-      const tableRunColor = tableStyleFontColor(tableFontDxf, xf);
+      const tableRunColor = tableRunFontColor(styleFormat, xf);
       const rawRuns = cell.value.type === 'text' ? cell.value.runs : undefined;
       const runs = rawRuns && richRunsWithTableColor(rawRuns, tableRunColor);
       const richBaseFont = tableRunColor != null ? { ...fontForDraw, color: tableRunColor } : fontForDraw;
@@ -3212,6 +2920,9 @@ function renderQuadrant(
  *  cell-Map rebuild and a conditional-formatting recompile per frame. */
 interface SheetRenderCache {
   rowCount: number;
+  /** Workbook dxfs the structured style map resolved legacy table fields
+   *  against (undefined when built without styles). */
+  styleDxfs: readonly Dxf[] | undefined;
   /** Bound per-index entry limit these indexes were built under. */
   coordinateIndexLimit: number;
   cellMap: Map<string, Cell>;
@@ -3222,8 +2933,7 @@ interface SheetRenderCache {
   autoFilterCells: Set<string>;
   hyperlinkMap: Map<string, string>;
   commentCells: Set<string>;
-  tableStyleMap: Map<string, TableCellStyle>;
-  pivotStyleMap: Map<string, PivotCellFormat>;
+  structuredStyleMap: Map<string, StructuredCellFormat>;
   sparklineMap: Map<string, SparklineModel>;
 }
 const sheetRenderCache = new WeakMap<Worksheet, SheetRenderCache>();
@@ -3246,13 +2956,14 @@ function coordinateIndexIdentity(
   };
 }
 
-export function getSheetRenderCache(worksheet: Worksheet): SheetRenderCache {
+export function getSheetRenderCache(worksheet: Worksheet, styles?: Styles): SheetRenderCache {
   const coordinateIndexLimit = getWorksheetPolicy(worksheet).maxCoordinateIndexEntries;
   const cached = sheetRenderCache.get(worksheet);
   if (
     cached &&
     cached.rowCount === worksheet.rows.length &&
-    cached.coordinateIndexLimit === coordinateIndexLimit
+    cached.coordinateIndexLimit === coordinateIndexLimit &&
+    (styles === undefined || cached.styleDxfs === styles.dxfs)
   ) {
     return cached;
   }
@@ -3347,8 +3058,8 @@ export function getSheetRenderCache(worksheet: Worksheet): SheetRenderCache {
     autoFilterCells,
     hyperlinkMap,
     commentCells,
-    tableStyleMap: buildTableStyleMap(worksheet),
-    pivotStyleMap: buildPivotStyleMap(worksheet),
+    structuredStyleMap: buildStructuredStyleMap(worksheet, styles?.dxfs),
+    styleDxfs: styles?.dxfs,
     sparklineMap: buildSparklineMap(worksheet),
   };
   sheetRenderCache.set(worksheet, entry);
@@ -3367,31 +3078,18 @@ interface AutoRowHeightState {
 
 const autoRowHeightState = new WeakMap<Worksheet, AutoRowHeightState>();
 
-/** The table-element dxf that supplies a table cell's font (header / total /
- *  last / first column / stripe / whole table), by the same §18.8.83 element
- *  hierarchy the main paint path uses. */
-function tableFontDxfFor(tableStyle: TableCellStyle | undefined, styles: Styles): Dxf | undefined {
-  if (!tableStyle) return undefined;
-  const dxfList = styles.dxfs ?? [];
-  return tableStyle.isHeader
-    ? dxfList[tableStyle.headerRowDxf ?? -1]
-    : tableStyle.isTotals
-      ? dxfList[tableStyle.totalRowDxf ?? -1]
-      : tableStyle.isLastCol && tableStyle.lastColumnDxf != null
-        ? dxfList[tableStyle.lastColumnDxf]
-        : tableStyle.isFirstCol && tableStyle.firstColumnDxf != null
-          ? dxfList[tableStyle.firstColumnDxf]
-          : tableStyle.stripeDxf != null
-            ? dxfList[tableStyle.stripeDxf]
-            : dxfList[tableStyle.wholeTableDxf ?? -1];
+/** The Table style font color rich-text runs take (`richRunsWithTableColor`),
+ *  unless the cell's font color is its own formatting (`ownFontColor`,
+ *  resolved by the parser against the Normal style): Excel draws that color
+ *  over the table style's. The run rule was measured for Tables only. */
+function tableRunFontColor(format: StructuredCellFormat | undefined, xf: CellXf): string | null {
+  if (xf.ownFontColor || !format?.fontColorFromTable) return null;
+  return format.fontColorAuto ? AUTOMATIC_FONT_COLOR : format.fontColor ?? null;
 }
 
-/** A table-element dxf's font color, unless the cell's font color is its own
- *  formatting (`ownFontColor`, resolved by the parser against the Normal
- *  style): Excel draws that color over the table style's. */
-function tableStyleFontColor(tableFontDxf: Dxf | undefined, xf: CellXf): string | null {
-  return xf.ownFontColor ? null : tableFontDxf?.font?.color ?? null;
-}
+/** The automatic font color (ECMA-376 §18.3.1.15 auto), the system window
+ *  text color, which Excel draws black. */
+const AUTOMATIC_FONT_COLOR = '#000000';
 
 /** The table or PivotTable style font color for a cell, or null when the
  *  cell's font color is its own formatting. Measured in Excel for both: a
@@ -3399,12 +3097,11 @@ function tableStyleFontColor(tableFontDxf: Dxf | undefined, xf: CellXf): string 
  *  one given the theme "Black, Text 1" (authored like Normal) shows the
  *  PivotTable style's color. */
 function styleFontColor(
-  tableFontDxf: Dxf | undefined,
-  pivotFormat: PivotCellFormat | undefined,
+  format: StructuredCellFormat | undefined,
   xf: CellXf,
 ): string | null {
   if (xf.ownFontColor) return null;
-  return tableFontDxf?.font?.color ?? pivotFormat?.fontColor ?? null;
+  return format?.fontColorAuto ? AUTOMATIC_FONT_COLOR : format?.fontColor ?? null;
 }
 
 /** Rich-text runs as Excel draws them under a table style font color
@@ -3428,20 +3125,12 @@ function richRunsWithTableColor(runs: Run[], tableColor: string | null): Run[] {
 function layeredCellFont(
   base: CellFont,
   cf: CfResult,
-  tableStyle: TableCellStyle | undefined,
-  styles: Styles,
-  pivotFormat: PivotCellFormat | undefined,
+  styleFormat: StructuredCellFormat | undefined,
 ): CellFont {
-  const tableFontDxf = tableFontDxfFor(tableStyle, styles);
-  const tableBold = tableStyle
-    ? tableStyle.isCustom
-      ? !!tableFontDxf?.font?.bold
-      : tableStyle.isHeader || tableStyle.isTotals
-    : false;
-  const bold = cf.fontBold ?? (base.bold || tableBold || !!pivotFormat?.bold);
-  const italic = cf.fontItalic ?? (base.italic || !!pivotFormat?.italic);
-  const underline = cf.fontUnderline ?? (base.underline || !!pivotFormat?.underline);
-  const strike = cf.fontStrike ?? (base.strike || !!pivotFormat?.strike);
+  const bold = cf.fontBold ?? (base.bold || !!styleFormat?.bold);
+  const italic = cf.fontItalic ?? (base.italic || !!styleFormat?.italic);
+  const underline = cf.fontUnderline ?? (base.underline || !!styleFormat?.underline);
+  const strike = cf.fontStrike ?? (base.strike || !!styleFormat?.strike);
   return bold === base.bold && italic === base.italic &&
     underline === base.underline && strike === base.strike
     ? base
@@ -3613,8 +3302,8 @@ export function applyAutoRowHeights(
     1,
     1.2,
   );
-  const { cfContext, mergeAnchorSet, mergeSkipSet, tableStyleMap, pivotStyleMap } =
-    getSheetRenderCache(worksheet);
+  const { cfContext, mergeAnchorSet, mergeSkipSet, structuredStyleMap } =
+    getSheetRenderCache(worksheet, styles);
   const derived = new Map<number, number>();
   let changed = false;
   ctx.save();
@@ -3653,9 +3342,7 @@ export function applyAutoRowHeights(
         // O(cells) with a small constant even on a dense virtualized sheet.
         if (!cellCanGrowAutomaticRow(cell, font, xf, defaultFontLineHeightPx)) continue;
         const cf = evaluateCf(cell, row.index, cell.col, cfContext, styles.dxfs ?? []);
-        const measuredFont = layeredCellFont(
-          font, cf, tableStyleMap.get(key), styles, pivotStyleMap.get(key),
-        );
+        const measuredFont = layeredCellFont(font, cf, structuredStyleMap.get(key));
         const formatted = formatCellValueWithColor(cell, styles, cf.numFmt, worksheet.date1904);
         const text = formatted.text;
         if (!text || (text === '0' && worksheet.showZeros === false)) continue;
@@ -3835,8 +3522,7 @@ function virtualizedTextOverflowOverscan(
   cellMap: Map<string, Cell>,
   nonEmptyColsByRow: Map<number, readonly number[]>,
   cfContext: CfContext,
-  tableStyleMap: Map<string, TableCellStyle>,
-  pivotStyleMap: Map<string, PivotCellFormat>,
+  structuredStyleMap: Map<string, StructuredCellFormat>,
   mergeAnchorMap: Map<string, { totalW: number; totalH: number; right: number; bottom: number }>,
   colAxis: GridAxisGeometry,
   rowAxis: GridAxisGeometry,
@@ -3876,22 +3562,9 @@ function virtualizedTextOverflowOverscan(
       text.includes('\n')
     ) return false;
 
-    const tableStyle = tableStyleMap.get(key);
-    const tableFontDxfId = tableStyle?.isHeader
-      ? tableStyle.headerRowDxf
-      : tableStyle?.isTotals
-        ? tableStyle.totalRowDxf
-        : tableStyle?.isLastCol && tableStyle.lastColumnDxf != null
-          ? tableStyle.lastColumnDxf
-          : tableStyle?.isFirstCol && tableStyle.firstColumnDxf != null
-            ? tableStyle.firstColumnDxf
-            : tableStyle?.stripeDxf ?? tableStyle?.wholeTableDxf;
-    const tableFontDxf = tableFontDxfId != null ? styles.dxfs?.[tableFontDxfId] : undefined;
-    const builtInTableBold = !!tableStyle && !tableStyle.isCustom && (tableStyle.isHeader || tableStyle.isTotals);
-    const pivotFormat = pivotStyleMap.get(key);
-    const effectiveBold = cf.fontBold ?? (font.bold || builtInTableBold || !!tableFontDxf?.font?.bold
-      || !!pivotFormat?.bold);
-    const effectiveItalic = cf.fontItalic ?? (font.italic || !!pivotFormat?.italic);
+    const styleFormat = structuredStyleMap.get(key);
+    const effectiveBold = cf.fontBold ?? (font.bold || !!styleFormat?.bold);
+    const effectiveItalic = cf.fontItalic ?? (font.italic || !!styleFormat?.italic);
     const effectiveFont = (effectiveBold !== font.bold || effectiveItalic !== font.italic)
       ? { ...font, bold: effectiveBold, italic: effectiveItalic }
       : font;
@@ -4055,9 +3728,9 @@ export function renderViewport(
   // ── Viewport-independent lookups (memoized per Worksheet) ────
   const {
     cellMap, cfContext, mergeSkipSet, autoFilterCells,
-    hyperlinkMap, commentCells, tableStyleMap, pivotStyleMap, sparklineMap,
+    hyperlinkMap, commentCells, structuredStyleMap, sparklineMap,
     nonEmptyColsByRow,
-  } = getSheetRenderCache(worksheet);
+  } = getSheetRenderCache(worksheet, styles);
 
   // Merge anchor sizes are cellScale-scaled, so they stay per-frame.
   const mergeAnchorMap = new Map<string, { totalW: number; totalH: number; right: number; bottom: number }>();
@@ -4092,8 +3765,7 @@ export function renderViewport(
     cellMap,
     nonEmptyColsByRow,
     cfContext,
-    tableStyleMap,
-    pivotStyleMap,
+    structuredStyleMap,
     mergeAnchorMap,
     colAxis,
     rowAxis,
@@ -4129,8 +3801,7 @@ export function renderViewport(
     autoFilterCells,
     hyperlinkMap,
     commentCells,
-    tableStyleMap,
-    pivotStyleMap,
+    structuredStyleMap,
     sparklineMap,
     overflowTextAnchors: overflowOverscan.anchorKeys,
     mdw,
