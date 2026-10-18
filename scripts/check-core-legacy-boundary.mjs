@@ -139,38 +139,47 @@ export const ALLOWED_TOKENS = [
 ];
 
 /**
- * Column where a comment begins on this line, or Infinity. A line that
- * continues a block or doc comment (`*`, `/*`, `//`, `///`) is comment from
- * its first column; otherwise a `//` outside a string literal starts one.
+ * Comment spans of a TypeScript/JavaScript or Rust source, as [start, end)
+ * offsets. Line and block comments are tracked across lines; string and
+ * template literals are skipped so a `//` inside one is not a comment. In
+ * Rust a `'` may open a lifetime rather than a char literal, so only `"`
+ * strings are skipped there.
  */
-export function commentStart(line) {
-  const trimmed = line.trimStart();
-  if (/^(?:\/\/|\/\*|\*)/.test(trimmed)) return line.length - trimmed.length;
+export function commentSpans(text, path = '') {
+  const rust = path.endsWith('.rs');
+  const spans = [];
   let quote = null;
-  for (let i = 0; i < line.length - 1; i++) {
-    const char = line[i];
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
     if (quote) {
       if (char === '\\') i++;
-      else if (char === quote) quote = null;
-    } else if (char === '"' || char === "'" || char === '`') {
+      else if (char === quote || (char === '\n' && quote !== '`')) quote = null;
+      continue;
+    }
+    if (char === '/' && text[i + 1] === '/') {
+      const end = text.indexOf('\n', i);
+      spans.push([i, end < 0 ? text.length : end]);
+      i = end < 0 ? text.length : end;
+    } else if (char === '/' && text[i + 1] === '*') {
+      const close = text.indexOf('*/', i + 2);
+      const end = close < 0 ? text.length : close + 2;
+      spans.push([i, end]);
+      i = end - 1;
+    } else if (char === '"' || char === '`' || (!rust && char === "'")) {
       quote = char;
-    } else if (char === '/' && line[i + 1] === '/') {
-      return i;
-    } else if (char === '/' && line[i + 1] === '*') {
-      return i;
     }
   }
-  return Infinity;
+  return spans;
 }
 
-function lineViolations(path, line) {
+function lineViolations(path, line, offset = 0, spans = []) {
   const rules = [];
-  const comment = commentStart(line);
+  const inComment = (index) => spans.some(([start, end]) => offset + index >= start && offset + index < end);
   for (const rule of RULES) {
     const global = new RegExp(rule.pattern.source, `${rule.pattern.flags.replace('g', '')}g`);
     const unexplained = [...line.matchAll(global)].some((match) => !ALLOWED_TOKENS.some((allowance) =>
       allowance.rule === rule.id && allowance.path.test(path) && allowance.token.test(match[0])
-      && (!allowance.commentOnly || match.index >= comment || allowance.evidenceLine?.test(line) === true)));
+      && (!allowance.commentOnly || inComment(match.index) || allowance.evidenceLine?.test(line) === true)));
     if (unexplained) rules.push(rule.id);
   }
   return rules;
@@ -386,11 +395,16 @@ export function findViolations(files, { resolveModule } = {}) {
     if (seen.has(path)) continue;
     seen.add(path);
     const lines = text.split('\n');
-    if (isGuardedPath(path)) lines.forEach((line, index) => {
-      for (const rule of lineViolations(path, line)) {
-        violations.push({ path, line: index + 1, rule, text: line.trim().slice(0, 160) });
-      }
-    });
+    if (isGuardedPath(path)) {
+      const spans = commentSpans(text, path);
+      let offset = 0;
+      lines.forEach((line, index) => {
+        for (const rule of lineViolations(path, line, offset, spans)) {
+          violations.push({ path, line: index + 1, rule, text: line.trim().slice(0, 160) });
+        }
+        offset += line.length + 1;
+      });
+    }
     if (/\.[cm]?[jt]sx?$/.test(path)) {
       const source = parse(text, { sourceType: 'unambiguous', errorRecovery: true, plugins: ['typescript', 'jsx'] });
       const allowedExpressions = ALLOWED_COMPUTED_IMPORTS.get(path) ?? [];
