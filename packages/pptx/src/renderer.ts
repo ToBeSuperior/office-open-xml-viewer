@@ -2340,7 +2340,9 @@ async function prepareBackground(
       bitmap = await getCachedDuotoneBitmapByPath(
         fill.imagePath,
         fill.mimeType,
-        pixelTransform(fill),
+        // A tiled background paints at 96 DPI (paintTiledBackground), so its
+        // chain samples at that same DPI.
+        pixelTransform(fill.tile ? { ...fill, dpi: undefined } : fill),
         fetchImage,
         {
           ...(fill.blipEffects?.length && !fill.tile
@@ -2373,33 +2375,38 @@ async function prepareBackground(
           const dw = canvasW * (1 - l - r);
           const dh = canvasH * (1 - t - b);
           ctx.save();
-          // Clip to the slide rectangle so overscan (negative insets) or tile
-          // bleed is cropped at the slide edge rather than spilling onto
-          // neighbouring content.
-          ctx.beginPath();
-          ctx.rect(0, 0, canvasW, canvasH);
-          ctx.clip();
-          if (fill.alpha != null) ctx.globalAlpha = fill.alpha;
-          if (fill.tile) {
-            // §20.1.8.58 — tiled placement: repeat the blip at its native size.
-            paintTiledBackground(
-              ctx,
-              source,
-              fill.tile,
-              canvasW,
-              canvasH,
-              scale,
-              fill.srcRect,
-              sourceInspection?.dimensions ?? undefined,
-            );
-          } else {
-            // §20.1.8.56 stretch into the destination rect from the §20.1.8.30
-            // fillRect insets. l/t are left/top insets, r/b are right/bottom
-            // insets, so the destination spans [l, 1-r] × [t, 1-b] of the box;
-            // negative edges overscan past the box.
-            drawImageCropped(ctx, source, fill.srcRect, dx, dy, dw, dh);
+          try {
+            // Clip to the slide rectangle so overscan (negative insets) or tile
+            // bleed is cropped at the slide edge rather than spilling onto
+            // neighbouring content.
+            ctx.beginPath();
+            ctx.rect(0, 0, canvasW, canvasH);
+            ctx.clip();
+            if (fill.alpha != null) ctx.globalAlpha = fill.alpha;
+            if (fill.tile) {
+              // §20.1.8.58 — tiled placement: repeat the blip at its native
+              // size. Backgrounds keep their established 96-DPI tile size; the
+              // effect chain samples at that same DPI (backgroundPixelTransform).
+              paintTiledBackground(
+                ctx,
+                source,
+                fill.tile,
+                canvasW,
+                canvasH,
+                scale,
+                fill.srcRect,
+                sourceInspection?.dimensions ?? undefined,
+              );
+            } else {
+              // §20.1.8.56 stretch into the destination rect from the §20.1.8.30
+              // fillRect insets. l/t are left/top insets, r/b are right/bottom
+              // insets, so the destination spans [l, 1-r] × [t, 1-b] of the box;
+              // negative edges overscan past the box.
+              drawImageCropped(ctx, source, fill.srcRect, dx, dy, dw, dh);
+            }
+          } finally {
+            ctx.restore();
           }
-          ctx.restore();
         } catch (error) {
           if (isOptionalImageCodecUnavailableError(error, 'tiff')) {
             paintOptionalImagePlaceholder(ctx, 'tiff', {
@@ -2408,6 +2415,9 @@ async function prepareBackground(
             return;
           }
           if (error instanceof OoxmlResourceLimitError || isUnsupportedBlipEffectError(error) || isOoxmlDecodedImageLimitError(error) || isTiffDecodeError(error)) throw error;
+          // An authored CT_Blip chain is strict end to end: a native paint
+          // failure is its typed diagnostic, never the white fallback.
+          if (fill.blipEffects?.length) throw imageEffectError(error);
           // Paint failed — the white base painted above remains as the fallback.
         }
       },

@@ -111,6 +111,7 @@ const SHARED_PAINT_IMPORTS = new Map([
     // Chart picture-marker discovery and lookup warm the document-owned image
     // cache before measurement-free chart paint. They expose no layout API.
     ['chartImageFillKey', 'value'],
+    ['chartImageFillPixelTransform', 'value'],
     ['chartImageFillUsageSize', 'value'],
     ['collectChartImageFillUsages', 'value'],
     ['collectChartImageFillUsagesForCharts', 'value'],
@@ -124,6 +125,9 @@ const SHARED_PAINT_IMPORTS = new Map([
     ['deferBitmapCloseWhileLeased', 'value'],
     ['docxBorderDashArray', 'value'],
     ['drawImageCropped', 'value'],
+    // Pure geometry: the full source frame a stretched/cropped CT_Blip chain
+    // is evaluated on. It reads authored fractions only, never layout.
+    ['stretchedSourceFrame', 'value'],
     ['doubleRailGeometry', 'value'],
     ['fillDoubleBorder', 'value'],
     // Shared decoded-surface ownership is a paint resource concern. DOCX may

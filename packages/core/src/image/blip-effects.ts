@@ -176,14 +176,18 @@ export function blipEffectsCoverageReach(
       case 'glow': x += finite(effect.glow.radius); y += finite(effect.glow.radius); break;
       case 'shadow':
         if (!effect.inner) {
-          const d = finite(effect.shadow.dist) + finite(effect.shadow.blur);
-          // A scaled/skewed outer shadow can exceed the frame by its scale.
-          const k = Math.max(1, finite(effect.shadow.sx ?? 1), finite(effect.shadow.sy ?? 1));
-          x += d + (k - 1) * width; y += d + (k - 1) * height;
+          // A scaled or skewed shadow is an affine image of the frame about
+          // its alignment point (§20.1.8.49); no cheap static bound, so the
+          // host must not cull it.
+          const sh = effect.shadow;
+          if ((sh.sx ?? 1) !== 1 || (sh.sy ?? 1) !== 1 || (sh.kx ?? 0) !== 0 || (sh.ky ?? 0) !== 0) return null;
+          const d = finite(sh.dist) + finite(sh.blur);
+          x += d; y += d;
         }
         break;
       case 'presetShadow':
         for (const shadow of effect.shadows) {
+          if ((shadow.sx ?? 1) !== 1 || (shadow.sy ?? 1) !== 1 || (shadow.kx ?? 0) !== 0 || (shadow.ky ?? 0) !== 0) return null;
           const d = finite(shadow.dist) + finite(shadow.blur);
           x += d; y += d;
         }
@@ -191,6 +195,9 @@ export function blipEffectsCoverageReach(
       case 'reflection': {
         // A reflection mirrors at most the whole frame beyond an edge.
         const r = effect.reflection;
+        // Only the plain mirrored copy (|scale| <= 1, no skew) is bounded by
+        // one frame extent beyond an edge.
+        if (Math.abs(r.sx ?? 1) > 1 || Math.abs(r.sy ?? -1) > 1 || (r.kx ?? 0) !== 0 || (r.ky ?? 0) !== 0) return null;
         const d = finite(r.dist ?? 0) + finite(r.blur ?? 0);
         x += width + d; y += height + d;
         break;

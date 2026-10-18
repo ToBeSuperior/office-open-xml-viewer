@@ -960,4 +960,7 @@ it('bounds effect reach conservatively and axis-independently, or not at all', (
   expect(blipEffectsCoverageReach([{ type: 'shadow', shadow, inner: false }], 1000, 400))
     .toEqual({ x: 1050, y: 1050 });
   expect(blipEffectsCoverageReach([{ type: 'grayscale' }], 1000, 400)).toEqual({ x: 0, y: 0 });
+  // Skewed/scaled shadows have no cheap static bound.
+  expect(blipEffectsCoverageReach([{ type: 'shadow', shadow: { ...shadow, dist: 0, kx: 80 }, inner: false }], 10, 10))
+    .toBeNull();
 });
