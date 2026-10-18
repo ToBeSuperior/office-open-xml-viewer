@@ -653,7 +653,7 @@ mod tests {
             doc_grid_char_space: None,
             gutter_pt: None,
             rtl_gutter: None,
-            native_text_flow: None,
+            section_flow: None,
             page_borders_authored: None,
             page_borders: None,
             page_geometry: None,

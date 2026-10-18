@@ -91,7 +91,7 @@ import {
   type FootnotePartitionExtent,
   type FootnoteCursor,
 } from './footnote-fragmentation.js';
-import { noteSeparatorOccurrence } from './native-note-separators.js';
+import { noteSeparatorOccurrence } from './reserved-note-separators.js';
 import { paragraphGapAdjustment } from './paragraph-spacing.js';
 import {
   endnoteIdsInRetainedSlice,
@@ -381,7 +381,7 @@ function flowSection(owner: BodySectionLayoutInput, pageIndex: number) {
     geometry: context.geometry,
     columns: context.columns,
     textDirection: context.textDirection,
-    ...(context.nativeSectionFlow ? { nativeSectionFlow: context.nativeSectionFlow } : {}),
+    ...(context.sectionFlow ? { sectionFlow: context.sectionFlow } : {}),
     sectionBidi: context.sectionBidi === true,
     grid: context.grid,
   });
@@ -1292,10 +1292,10 @@ function* paginateBodyPassSteps(
   // a notice, a separator-only band or a carried line-free paragraph.
   const incomingTailPages = new Set<number>();
   const partitionFootnote = createFootnotePartitioner();
-  // Native continuation notice (MS-DOC 2.3.3; ECMA-376 §17.18.33). The story
+  // Reserved continuation notice (ECMA-376 §17.18.33). The story
   // is acquired through the ordinary story contract only when a fragment
   // actually continues; its definition is shared, its occurrence page-owned.
-  const continuationNotice = input.noteLayoutSettings?.nativeSeparatorRoles?.footnote?.continuationNotice;
+  const continuationNotice = input.noteLayoutSettings?.reservedSeparatorRoles?.footnote?.continuationNotice;
   const continuationNoticeFor = (
     location: BodyAcquisitionLocation,
     inlineExtentPt: number,
@@ -1738,7 +1738,7 @@ function* paginateBodyPassSteps(
     // measured stories once per event and kept as prefix sums; they are
     // conservative (continuation eligibility is judged with the smallest
     // possible charge, so a note that might have to stay whole is reserved
-    // whole). The page's single native notice is added once if any of those
+    // whole). The page's single reserved notice is added once if any of those
     // minima continues and neither the page nor an accepted plan owns it;
     // the current plan then partitions inside the capacity left after that
     // reserve and, if it continues, carries the same notice, so the notice is
@@ -2971,7 +2971,7 @@ function composePageStories(
     }
     const vertical = sectionWritingMode(page.section) !== 'horizontal-tb';
     const geometry = vertical
-      ? physicalSectionGeometry(page.section.geometry, page.section.nativeSectionFlow)
+      ? physicalSectionGeometry(page.section.geometry, page.section.sectionFlow)
       : page.section.geometry;
     const inlineStartPt = Math.abs(geometry.marginLeft);
     const inlineExtentPt = Math.max(
@@ -2981,7 +2981,7 @@ function composePageStories(
     const coordinateSpace = vertical ? 'upright-physical' as const : 'section-logical' as const;
     // Upright physical page stories are horizontal, so a native section frame
     // does not carry into them.
-    const { nativeSectionFlow: _nativeSectionFlow, ...pageSection } = page.section;
+    const { sectionFlow: _sectionFlow, ...pageSection } = page.section;
     const pageStorySection: DeepReadonly<SectionLayoutContext> = vertical
       ? Object.freeze({
           ...pageSection,

@@ -106,7 +106,7 @@ parts = {
     'ppt/slides/slide2.xml': warp_slide,
     'ppt/slides/slide3.xml': break_table_slide,
 }
-out = Path('tests/inheritance/fixtures/pptx-run-inheritance.pptx')
+out = Path('tests/patterns/fixtures/pptx-run-inheritance.pptx')
 with ZipFile(out, 'w', ZIP_DEFLATED) as package:
     for path, content in sorted(parts.items()):
         item = ZipInfo(path, (2020, 1, 1, 0, 0, 0))

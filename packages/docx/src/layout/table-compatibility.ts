@@ -15,7 +15,7 @@ export const WORD_CELL_OWNED_GRID_FRAME = defineCompatibilityRule({
     version: '16.113.3',
     platform: 'macOS 27.0',
   },
-  description: 'Native DOC import controls move six homogeneous fixed-layout horizontal LTR nested grids, including their borders and fills, together for left/center/right/absolute horizontal placement and nonzero text-relative vertical offsets. The producer elects only a first host-cell block at depth two, with every physical cell paragraph agreeing with its first-cell frame before continuation payloads are discarded, and no nondefault TAP positioning. Unpositioned anchors and no-wrap are admission counterexamples; mixed frames, later insertion, recursive child content, AutoFit, bidi and rotated cells retain residual diagnostics. The frame uses margin/text anchors, around wrap and automatic dimensions. [MS-DOC] 2.4.3 establishes row identity and 2.6.2 supplies the coordinates; neither establishes a universal nested-grid placement or AUTO-width rule. In the observed equal host bands, different fixed grid widths have the same aligned displacement, consistent with host content width as the alignment frame. Retain fixed grid ink unchanged, including overhang. Reusing that band for exclusion is a bounded library policy: varied host widths and general wrapping are unproved. Original and vertical-offset controls additionally distinguish the initial, top-aligned empty carrier from a carrier containing authored whitespace: only the former keeps its paragraph-relative wrapNone drawing at its pre-grid-admission insertion reference. Table and text flow still clear the complete grid frame. Other references, collision-constrained drawings, continuations and nonempty carriers retain actual flow ownership. The following paragraph selects the page and wrap acquisition, but its before-spacing does not replace the cell insertion cursor as the vertical frame origin.',
+  description: 'Word controls (synthetic binary Word documents opened in Word) move six homogeneous fixed-layout horizontal LTR nested grids, including their borders and fills, together for left/center/right/absolute horizontal placement and nonzero text-relative vertical offsets. A producer supplies `cellFrame` only for a first host-cell block at depth two, with every physical cell paragraph agreeing with its first-cell frame, and no table-level positioning. Unpositioned anchors and no-wrap are admission counterexamples; mixed frames, later insertion, recursive child content, AutoFit, bidi and rotated cells retain residual diagnostics. The frame uses margin/text anchors, around wrap and automatic dimensions. The source format establishes row identity and frame coordinates, not a universal nested-grid placement or AUTO-width rule. In the observed equal host bands, different fixed grid widths have the same aligned displacement, consistent with host content width as the alignment frame. Retain fixed grid ink unchanged, including overhang. Reusing that band for exclusion is a bounded library policy: varied host widths and general wrapping are unproved. Original and vertical-offset controls additionally distinguish the initial, top-aligned empty carrier from a carrier containing authored whitespace: only the former keeps its paragraph-relative wrapNone drawing at its pre-grid-admission insertion reference. Table and text flow still clear the complete grid frame. Other references, collision-constrained drawings, continuations and nonempty carriers retain actual flow ownership. The following paragraph selects the page and wrap acquisition, but its before-spacing does not replace the cell insertion cursor as the vertical frame origin.',
 });
 
 export function cellOwnedGridFramePosition(frame: Readonly<FramePr>): FloatingTablePositionInput {
@@ -666,12 +666,9 @@ export function wordFixedOccupiedGridInput(
  * Evidence boundary. ECMA-376 §17.3.1.11 defines framePr paragraph frames and
  * §17.4.57 makes a table without effective tblpPr nonfloating; neither
  * assigns a table row to a cell paragraph's frame, and MS-OI29500 2.1.43
- * defines no row promotion. MS-DOC 2.4.3 lets the leading first-cell PAP frame
- * context take part in adjacent-row identity only while both rows lack
- * nondefault TAP position/wrap: a binary row-identity precondition, not a WML
- * row-import rule and not proof that any tuple below is Word's native
- * identity. The rules below are therefore office observations, bounded to
- * their control class; whatever they do not name is library inference.
+ * defines no row promotion. The rules below are therefore office
+ * observations, bounded to their control class; whatever they do not name is
+ * library inference.
  *
  * Common control class (Word 16.113.3, macOS 27.0, public synthetic sources):
  * page/page notBeside carriers unless noted, a fixed 2×189pt grid with frame
