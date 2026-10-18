@@ -262,6 +262,37 @@ fn document_text_forms_no_markdown_structure() {
     }
 }
 
+/// CommonMark strips a document-initial BOM, so indentation after one at
+/// the very start of the document must not survive to open a code block
+/// (which would show the escapes literally). Covers a BOM followed by four
+/// spaces in one run, the BOM and spaces split across runs, and a tab.
+#[test]
+fn document_initial_bom_cannot_expose_an_indented_code_block() {
+    let r = |text: &str| format!(r#"<w:r><w:t xml:space="preserve">{text}</w:t></w:r>"#);
+    for runs in [
+        r("&#xFEFF;    Cost: 1"),
+        [r("&#xFEFF;"), r("  "), r("  Cost: 1")].concat(),
+        [
+            r("&#xFEFF;"),
+            "<w:r><w:tab/></w:r>".to_string(),
+            r("Cost: 1"),
+        ]
+        .concat(),
+        r("&#xFEFF;&#9;Cost: 1"),
+    ] {
+        let document = format!(
+            r#"<w:document xmlns:w="{W_NS}"><w:body><w:p>{runs}</w:p><w:sectPr/></w:body></w:document>"#
+        );
+        let bytes = package(&[("word/document.xml", document)]);
+
+        let markdown = to_markdown_native(&bytes).expect("markdown projects");
+        let gfm = ooxml_common::markdown::gfm_check::summarize(&markdown);
+
+        assert_eq!(gfm.code, 0, "{markdown:?}");
+        assert_eq!(gfm.text.trim(), "Cost: 1", "{markdown:?}");
+    }
+}
+
 /// The GFM checker itself sees every construct the regressions rule out, so
 /// a zero count above is a real absence.
 #[test]

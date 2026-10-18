@@ -4236,6 +4236,29 @@ mod tests {
         );
     }
 
+    /// A BOM before indentation at the start of a slide's first paragraph is
+    /// dropped with that indentation: renderers strip the BOM, which would
+    /// otherwise expose an indented code block showing the escapes.
+    #[test]
+    fn markdown_line_start_bom_cannot_expose_an_indented_code_block() {
+        for runs in [
+            r#"<a:r><a:t xml:space="preserve">&#xFEFF;    Cost: 1</a:t></a:r>"#,
+            r#"<a:r><a:t xml:space="preserve">&#xFEFF;</a:t></a:r><a:r><a:t xml:space="preserve">&#9;Cost: 1</a:t></a:r>"#,
+        ] {
+            let slide_sp = format!(
+                r#"<p:sp><p:nvSpPr><p:cNvPr id="5" name="Body"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1000000" cy="1000000"/></a:xfrm></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p>{runs}</a:p></p:txBody></p:sp>"#
+            );
+            let data = build_align_pptx(&slide_sp, "", "");
+
+            let markdown = to_markdown_native(&data).expect("markdown projects");
+            let gfm = ooxml_common::markdown::gfm_check::summarize(&markdown);
+
+            assert_eq!(gfm.headings, ["Slide 1"], "{markdown:?}");
+            assert_eq!(gfm.code, 0, "{markdown:?}");
+            assert_eq!(gfm.text.trim(), "Slide 1\nCost: 1", "{markdown:?}");
+        }
+    }
+
     fn build_align_pptx(slide_sp: &str, layout_extra_sp: &str, master_txstyles: &str) -> Vec<u8> {
         build_align_pptx_with_rels(slide_sp, layout_extra_sp, master_txstyles, "", "", "")
     }

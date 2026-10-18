@@ -122,9 +122,11 @@ fn is_indentation(c: char) -> bool {
 /// - in [`TextContext::Inline`], ASCII spaces and tabs at a projected line
 ///   start are dropped: four or more spaces (or a tab) would open an indented
 ///   code block, in which the escapes would render literally, and CommonMark
-///   ignores up to three leading spaces of a paragraph line anyway. Other
-///   Unicode spacing (NBSP, U+3000, EM SPACE, a BOM) is visible text that
-///   cannot indent, so it is kept; a block marker after it is still escaped;
+///   ignores up to three leading spaces of a paragraph line anyway. A BOM
+///   there is invisible noise that renderers strip, so it is dropped together
+///   with the indentation it would otherwise hide. Other Unicode spacing
+///   (NBSP, U+3000, EM SPACE) is visible text that cannot indent, so it is
+///   kept, as is a BOM in mid-line; a block marker after it is still escaped;
 /// - [`TextContext::Heading`] also escapes `#` and folds line breaks into
 ///   spaces; [`TextContext::TableCell`] turns line breaks into `<br>`.
 ///
@@ -164,8 +166,11 @@ pub fn escape_fragment(text: &str, context: TextContext, line_start: &mut bool) 
             scan = false;
             if drop_indent {
                 // CommonMark indentation is ASCII spaces and tabs only; other
-                // Unicode spacing is visible text and is kept.
-                rest = rest.trim_start_matches([' ', '\t']);
+                // Unicode spacing is visible text and is kept. A BOM here is
+                // invisible noise that renderers strip (CommonMark drops a
+                // document-initial one), which would expose the indentation
+                // after it, so it is dropped along with that indentation.
+                rest = rest.trim_start_matches([' ', '\t', '\u{feff}']);
             }
             let body = rest.trim_start_matches(|c| is_indentation(c) && !matches!(c, '\r' | '\n'));
             if body.len() != rest.len() {
@@ -432,7 +437,13 @@ mod tests {
         for (line, escaped) in [
             ("\u{a0}# forged", "\u{a0}\\# forged"),
             ("\u{2003}> forged", "\u{2003}\\> forged"),
-            ("\u{feff}# forged", "\u{feff}\\# forged"),
+            // A line-start BOM is dropped with the indentation after it; a
+            // BOM in mid-line or after visible spacing stays.
+            ("\u{feff}# forged", "\\# forged"),
+            ("\u{feff}    Cost: 1", "Cost\\: 1"),
+            ("\u{feff}\tCost: 1", "Cost\\: 1"),
+            ("x\u{feff}y", "x\u{feff}y"),
+            ("\u{a0}\u{feff}y", "\u{a0}\u{feff}y"),
             ("  \u{3000}  - x", "\u{3000}  \\- x"),
             ("#\u{a0}forged", "\\#\u{a0}forged"),
             ("-\u{3000}item", "\\-\u{3000}item"),
