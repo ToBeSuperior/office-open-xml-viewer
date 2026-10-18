@@ -765,6 +765,25 @@ impl StyleMap {
     /// properties need this provenance because §17.7.2 places style-origin
     /// numbering below the paragraph style, while direct `numPr` and its
     /// associated properties are applied in the final direct-formatting layer.
+    /// The paragraph layers beneath the paragraph style (§17.7.2): document
+    /// defaults, the whole-table style and its conditional formatting.
+    pub(crate) fn resolve_para_below_style(
+        &self,
+        table_style_id: Option<&str>,
+        cond: Option<&CondFmt>,
+    ) -> ParaFmt {
+        let mut para = ParaFmt::default();
+        let mut run = RunFmt::default();
+        apply_para(&mut para, &self.defaults_para);
+        if let Some(tid) = table_style_id {
+            self.apply_style_chain(tid, &mut para, &mut run);
+        }
+        if let Some(p) = cond.and_then(|c| c.para.as_ref()) {
+            apply_para(&mut para, p);
+        }
+        para
+    }
+
     pub(crate) fn resolve_paragraph_style_layer(&self, style_id: Option<&str>) -> ParaFmt {
         let mut paragraph = ParaFmt::default();
         let mut run = RunFmt::default();

@@ -6246,8 +6246,6 @@ fn parse_paragraph_cond_at_depth_with_diagnostics(
     let direct_para = ppr_node.map(parse_para_fmt).unwrap_or_default();
     // Style-chain tabs before the direct layer: a numbering level's tabs enter
     // the cascade between them (see `tab_stops` below).
-    let style_chain_tabs = base_para.tab_stops.clone();
-    let style_chain_clears = base_para.tab_clears.clone();
     let direct_indent_left = direct_para.indent_left;
     let direct_indent_first = direct_para.indent_first;
     let direct_indent_right = direct_para.indent_right;
@@ -6413,31 +6411,36 @@ fn parse_paragraph_cond_at_depth_with_diagnostics(
     // stays its natural text value (e.g. Tabletext = left).
 
     // A numbering level's pPr tabs (§17.9.6) take the same layer as its
-    // indents (resolve_numbered_indent_axes): directly selected numbering sits
-    // in the direct layer beneath the paragraph's own pPr; style-origin
-    // numbering sits beneath the paragraph style chain.
+    // indents (resolve_numbered_indent_axes), in the §17.7.2 order: document
+    // defaults and table formatting, then style-origin numbering, then the
+    // paragraph style, then directly selected numbering, then direct pPr. Each
+    // layer's clears remove lower stops at their positions.
     let level_tabs = numbering
         .as_ref()
         .and_then(|num| num_map.get_level(num.num_id, num.level))
         .and_then(|l| l.tab_stops.clone());
     let tab_stops = match level_tabs.as_deref() {
         Some(level_tabs) => {
-            let chain = style_chain_tabs.clone().unwrap_or_default();
-            let below_direct = if direct_numbering {
-                merge_tab_stops(&chain, level_tabs)
-            } else {
-                // The style chain outranks style-origin numbering, including
-                // the positions it clears.
-                let level_kept: Vec<_> = level_tabs
-                    .iter()
-                    .filter(|(pos, _, _)| style_chain_clears.iter().all(|c| (c - pos).abs() > 0.05))
-                    .cloned()
+            let layer = |base: Vec<(f64, String, String)>, fmt: &ParaFmt| {
+                let kept: Vec<_> = base
+                    .into_iter()
+                    .filter(|(pos, _, _)| fmt.tab_clears.iter().all(|c| (c - pos).abs() > 0.05))
                     .collect();
-                merge_tab_stops(&merge_tab_stops(&[], &level_kept), &chain)
+                match &fmt.tab_stops {
+                    Some(stops) => merge_tab_stops(&kept, stops),
+                    None => kept,
+                }
+            };
+            let lower = style_map.resolve_para_below_style(table_style_id, cond);
+            let lower_tabs = lower.tab_stops.clone().unwrap_or_default();
+            let with_style_and_level = if direct_numbering {
+                merge_tab_stops(&layer(lower_tabs, &paragraph_style), level_tabs)
+            } else {
+                layer(merge_tab_stops(&lower_tabs, level_tabs), &paragraph_style)
             };
             match &direct_para.tab_stops {
-                Some(direct) => merge_tab_stops(&below_direct, direct),
-                None => below_direct,
+                Some(direct) => merge_tab_stops(&with_style_and_level, direct),
+                None => with_style_and_level,
             }
         }
         None => base_para.tab_stops.clone().unwrap_or_default(),

@@ -1743,7 +1743,8 @@ function numberingFirstLineWindow(
     authoredFirstIndentPx: paragraph.indentFirst,
     bodyIndentAt: (markerLeadingEdgePx) => resolveNumberingMarkerGeometry(numbering, markerInput, {
       authoredFirstIndentPt: markerLeadingEdgePx,
-      physicalIndentLeftPt: context.physicalIndentLeftPt,
+      // Tab stops are measured from the leading margin: the right one in RTL.
+      physicalIndentLeftPt: context.baseRtl ? context.physicalIndentRightPt : context.physicalIndentLeftPt,
       tabStops: paragraph.tabStops,
       defaultTabPt: context.defaultTabPt,
     }, service).bodyOffsetPt,
@@ -5747,7 +5748,8 @@ function projectAcquiredParagraph(
     }
   }
   const firstLineMovedMarkerEdgePx = options.continuesFromPrevious
-    ? undefined : measured.lines[0]?.layout.numberingFirstLine?.leadingEdgePx;
+    ? undefined : measured.lines[0]?.layout.numberingFirstLine?.leadingEdgePx
+      ?? measured.markNumberingLeadingEdgePt;
   if (numberingPlan && lines[0]) {
     const markerPlacements = numberingMarkerPlacements(
       numberingPlan, paragraph, options.context, paragraphXPt, availableWidthPt, lines[0],

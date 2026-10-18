@@ -87,6 +87,9 @@ export interface MeasuredParagraph {
   readonly markGridAfterLeadingPt?: number;
   /** Selected empty-mark wrap gap, retained for measurement-free shading. */
   readonly markWrapBounds?: { readonly xPt: number; readonly yPt: number; readonly widthPt: number; readonly heightPt: number };
+  /** An empty numbered item whose marker leading edge a float moved: that
+   * edge, logical pt from the leading indent (placeNumberingFirstLine). */
+  readonly markNumberingLeadingEdgePt?: number;
   readonly requestedSpaceBeforePt: number;
   readonly requestedSpaceAfterPt: number;
   /** Established paragraph-wide ruby allocation in points, snapped to docGrid
@@ -246,6 +249,7 @@ export function measureParagraph(
     );
     const markAdvancePt = markMetrics.advancePx;
     let markWrapBounds: MeasuredParagraph['markWrapBounds'];
+    let markNumberingLeadingEdgePt: number | undefined;
     if (placement.wrap) {
       const window = placement.wrap.lineWindow({
         topYPt: markTopPt,
@@ -263,6 +267,26 @@ export function measureParagraph(
         columnWidthPt: placement.availableWidthPt,
       });
       markTopPt = window.topYPt;
+      const numbering = environment.numberingFirstLine;
+      if (numbering && !continuation) {
+        // The marker hosts on this mark line exactly as on a first text line
+        // (placeNumberingFirstLine): query the band widened by the authored
+        // hanging indent and place the marker at the moved leading edge.
+        const authored = numbering.authoredFirstIndentPx;
+        const hanging = Math.min(0, authored);
+        const band = placement.wrap.lineWindow({
+          topYPt: markTopPt, minimumStartWidthPt: 0, squareMinimumStartWidthPt: 0,
+          probeHeightPt: markAdvancePt,
+          paragraphXPt: paragraphXPt + (context.baseRtl ? 0 : hanging),
+          maximumWidthPt: paragraphWidthPt - hanging,
+          columnXPt: placement.paragraphXPt, columnWidthPt: placement.availableWidthPt,
+        });
+        const windowEdge = context.baseRtl
+          ? paragraphWidthPt - (band.xOffsetPt + band.maximumWidthPt)
+          : hanging + band.xOffsetPt;
+        const leadingEdge = Math.max(Math.max(0, windowEdge) + authored, windowEdge);
+        if (band.topYPt === markTopPt && leadingEdge > authored) markNumberingLeadingEdgePt = leadingEdge;
+      }
       if (window.xOffsetPt !== 0 || window.maximumWidthPt !== paragraphWidthPt) {
         markWrapBounds = { xPt: paragraphXPt + window.xOffsetPt, yPt: markTopPt,
           widthPt: window.maximumWidthPt, heightPt: markAdvancePt };
@@ -282,6 +306,7 @@ export function measureParagraph(
       : undefined;
     return {
       ...(markWrapBounds ? { markWrapBounds } : {}),
+      ...(markNumberingLeadingEdgePt === undefined ? {} : { markNumberingLeadingEdgePt }),
       ...(markPictureBaselineOffsetPt === undefined ? {} : { markPictureBaselineOffsetPt }),
       lines: [],
       markOnly: true,

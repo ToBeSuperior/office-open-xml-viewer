@@ -125,8 +125,13 @@ export function ownsGlyphs(request: Readonly<GlyphOwnershipRequest>): boolean {
       context ??= sharedContext(1, PROBE_EM_PX * 2);
       if (!context) return false;
       context.font = font;
-      const width = context.measureText(part).width;
-      owned = width === 0;
+      // Owned glyphs keep zero advance AND zero ink (the outlines scale too);
+      // a fallback, even a zero-advance combining mark, keeps positive ink.
+      const metrics = context.measureText(part);
+      const inkWidth = (metrics.actualBoundingBoxLeft ?? 0) + (metrics.actualBoundingBoxRight ?? 0);
+      const inkHeight = (metrics.actualBoundingBoxAscent ?? 0) + (metrics.actualBoundingBoxDescent ?? 0);
+      owned = metrics.width === 0 && Number.isFinite(inkWidth) && Number.isFinite(inkHeight)
+        && inkWidth <= 0 && inkHeight <= 0;
       if (ownership.size >= OWNERSHIP_LIMIT) ownership.clear();
       ownership.set(key, owned);
     }
