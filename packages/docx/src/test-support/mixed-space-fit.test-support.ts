@@ -136,6 +136,9 @@ function assertSummary({ breakerState, scale, strNaturalAdvance }: PassOperation
     && (!cached || (Math.abs(cached.tailPx - tail.tailPx) <= 1e-9 && cached.coreLast === tail.coreLast))
     && valid === full.valid
     && Math.abs(state.autoSpaceCapacity - full.autoSpaceCapacity) <= 1e-9
+    && state.autoSpaceInvalidItems === line.filter((item) => !inkless(item) && (!('text' in item)
+      || item.verticalRun === true || item.tateChuYoko === true || item.rtl === true
+      || item.fitTextRegionIndex !== undefined)).length
     && (!valid || ((state.eastAsianItems > 0) === full.eastAsian
       && first?.item === full.face && state.spaceCount === full.count
       && Math.abs((first?.capacity ?? 0) - full.perSpaceCapacity) <= 1e-9));

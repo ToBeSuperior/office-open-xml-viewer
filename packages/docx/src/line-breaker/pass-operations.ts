@@ -1448,6 +1448,35 @@ function gapSegment(state: Pick<PassOperationState, 'strAdvance' | 'scale' | 'ch
   return { widthPx: segment.measuredWidth, spacePx: 0 };
 }
 
+/** WORD_JUSTIFIED_INTERWORD_COMPRESSION for a prefix of a breakable (CJK)
+ * segment after the line's content: the overflow C the line keeps when the
+ * prefix is admitted (0 when it fits naturally), or undefined when refused.
+ * The same gap model and factor as a whole unit (fitJustifiedCompression). */
+export function justifiedPrefixCompression(state: Pick<PassOperationState,
+  'justifiedCompression' | 'baseRtl' | 'widthPolicy' | 'characterGrid' | 'breakerState'
+  | 'strAdvance' | 'availW' | 'scale'>, s: LayoutTextSeg, prefix: string): number | undefined {
+  const { breakerState: breaker } = state;
+  if (!justifiedCompressionApplies(state) || s.fitTextRegionIndex !== undefined
+    || breaker.currentLine.length === 0 || prefix.length === 0) return undefined;
+  if (!breaker.justifiedGapModel || breaker.justifiedGapModel.segmentCount !== breaker.currentLine.length) {
+    breaker.justifiedGapModel = lineGapModel(breaker.currentLine.map(item => gapSegment(state, item)), undefined, false);
+  }
+  const previous = breaker.justifiedGapModel;
+  const candidate: LayoutTextSeg = {
+    ...s, ...RESET_SLICED_TEXT_MEASUREMENT, text: prefix,
+    ...slicedTextMetadata(s, 0, prefix.length), measuredWidth: state.strAdvance(s, prefix),
+  };
+  const model = lineGapModel([gapSegment(state, candidate)], previous, false);
+  const overflow = model.visibleWidthPx - state.availW();
+  if (!(overflow > 0)) return 0;
+  return wordJustifiedInterwordCompressionFactor({
+    overflow, naturalGapSum: model.S,
+    candidateLineEndSeparator: model.lineEndSeparatorPx,
+    previousOpportunitySum: previous.S + previous.lineEndSeparatorPx,
+    expansionWithoutCandidate: state.availW() - previous.visibleWidthPx,
+  }) === undefined ? undefined : overflow;
+}
+
 /** Admit the whole unit against the same natural gap model that layout uses
  * for paint. Advances are never shortened here; compression is line-owned. */
 export function fitJustifiedCompression(state: Pick<PassOperationState,

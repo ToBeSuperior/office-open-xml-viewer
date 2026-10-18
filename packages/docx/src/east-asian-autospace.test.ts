@@ -127,6 +127,18 @@ describe('WORD_EAST_ASIAN_AUTO_SPACE', () => {
     expect(pitch).toBeGreaterThan(adv('甲'));
   });
 
+  it('admits a justified ideograph by compressing the gaps in mode 15', () => {
+    const text = '甲A甲A甲甲甲甲甲甲甲甲';
+    // Four gaps (S = 8.5pt); the tenth character overflows by 1pt <= S/4.
+    const head = [...text].slice(0, 10).join('');
+    const band = adv(head) + 4 * 8.5 / 4 - 1;
+    const first = (justification: 'both' | 'left') => placementsOf(retainStubParagraph({
+      runs: [run(text)], environment: MODE_15, bandPt: band, justification,
+    }), 0).map((placement) => placement.text).join('');
+    expect(first('both')).toBe(head);
+    expect(first('left')).toBe([...head].slice(0, 9).join(''));
+  });
+
   it('reads adjacency between grapheme-cluster bases, across and inside segments', () => {
     const segments = (...texts: string[]) => texts.map((text) =>
       ({ text, fontSize: 10, measuredWidth: 0 }) as unknown as LayoutTextSeg);

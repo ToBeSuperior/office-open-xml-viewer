@@ -43,6 +43,9 @@ interface Contribution {
   readonly mismatched: boolean;
   /** Shrinkable room of the item's WORD_EAST_ASIAN_AUTO_SPACE gap (0 when none). */
   readonly autoSpaceCapacity: number;
+  /** Content with its own advance geometry, which ends automatic-gap
+   * compression for the line (see {@link autoSpaceNeutral}). */
+  readonly autoSpaceInvalid: boolean;
   /** Terminal-cluster facts of the committed line ending with this item,
    * derived lazily (only East Asian lines ever ask) and then cached. */
   tail?: LineTail;
@@ -98,6 +101,7 @@ export interface MixedSpaceState {
   visibleItems: number;
   /** Total shrinkable room of the committed automatic East Asian gaps. */
   autoSpaceCapacity: number;
+  autoSpaceInvalidItems: number;
 }
 
 export function createMixedSpaceState(): MixedSpaceState {
@@ -111,6 +115,7 @@ export function createMixedSpaceState(): MixedSpaceState {
     firstGap: -1,
     visibleItems: 0,
     autoSpaceCapacity: 0,
+    autoSpaceInvalidItems: 0,
   };
 }
 
@@ -140,18 +145,21 @@ function contributionOf(state: MixedSpaceState, item: LayoutSeg, scale: number):
       // The visible-content predicate counts every text item, as before.
       visibleText: 'text' in item && /\S/u.test(item.text), eastAsian: false,
       invalid: false, gapCount: 0, capacity: 0, mismatched: false, autoSpaceCapacity: 0,
+      autoSpaceInvalid: false,
     };
   }
   if (!('text' in item)) {
     return {
       item, inkless: false, visibleText: false, eastAsian: false,
       invalid: true, gapCount: 0, capacity: 0, mismatched: false, autoSpaceCapacity: 0,
+      autoSpaceInvalid: true,
     };
   }
   const eastAsian = EAST_ASIAN_RE.test(item.text);
   const visibleText = /\S/u.test(item.text);
   const spaces = trailingSpaceCount(item.text);
   const autoSpaceCapacity = autoSpaceRoom(item, item.autoSpaceLeadingPx ?? 0, scale);
+  const autoSpaceInvalid = !autoSpaceNeutral(item);
   if (
     item.mixedNaturalTrailingSpacePx !== undefined &&
     spaces > 0 &&
@@ -165,12 +173,12 @@ function contributionOf(state: MixedSpaceState, item: LayoutSeg, scale: number):
     );
     return {
       item, inkless: false, visibleText, eastAsian, invalid: false,
-      gapCount: spaces, capacity, mismatched, autoSpaceCapacity,
+      gapCount: spaces, capacity, mismatched, autoSpaceCapacity, autoSpaceInvalid,
     };
   }
   return {
     item, inkless: false, visibleText, eastAsian, invalid: !neutral(item, item.text),
-    gapCount: 0, capacity: 0, mismatched: false, autoSpaceCapacity,
+    gapCount: 0, capacity: 0, mismatched: false, autoSpaceCapacity, autoSpaceInvalid,
   };
 }
 
@@ -183,6 +191,7 @@ function addContribution(state: MixedSpaceState, contribution: Contribution): vo
   if (contribution.mismatched) state.mismatchedGaps += 1;
   state.spaceCount += contribution.gapCount;
   state.autoSpaceCapacity += contribution.autoSpaceCapacity;
+  if (contribution.autoSpaceInvalid) state.autoSpaceInvalidItems += 1;
 }
 
 function removeContribution(state: MixedSpaceState): void {
@@ -194,6 +203,7 @@ function removeContribution(state: MixedSpaceState): void {
   if (contribution.mismatched) state.mismatchedGaps -= 1;
   state.spaceCount -= contribution.gapCount;
   state.autoSpaceCapacity -= contribution.autoSpaceCapacity;
+  if (contribution.autoSpaceInvalid) state.autoSpaceInvalidItems -= 1;
   if (state.firstGap === state.contributions.length) state.firstGap = -1;
 }
 
@@ -249,10 +259,9 @@ export function mixedLineHasVisibleText(breakerState: BreakerState): boolean {
  * evaluated before any candidate text is built or measured. */
 export function mixedLineMayShrink(breakerState: BreakerState): boolean {
   const state = breakerState.mixedSpace;
-  return breakerState.mixedSpaceEnabled
-    && (state.spaceCount > 0 || state.autoSpaceCapacity > 0)
-    && state.invalidItems === 0
-    && state.mismatchedGaps === 0;
+  return breakerState.mixedSpaceEnabled && (
+    (state.spaceCount > 0 && state.invalidItems === 0 && state.mismatchedGaps === 0)
+    || (state.autoSpaceCapacity > 0 && state.autoSpaceInvalidItems === 0));
 }
 
 /** Scope gate for a candidate holding `text`: the line can shrink — through
@@ -268,10 +277,15 @@ export function mixedCandidateMayShrink(
   const state = breakerState.mixedSpace;
   const last = breakerState.currentLine.at(-1);
   const candidateGap = segment?.autoSpaceCompressible === true && breakerState.mixedSpaceEnabled
-    && state.invalidItems === 0 && state.mismatchedGaps === 0
-    && last !== undefined && 'text' in last;
+    && state.autoSpaceInvalidItems === 0 && last !== undefined && 'text' in last;
   return (mixedLineMayShrink(breakerState) || candidateGap)
     && (state.eastAsianItems > 0 || EAST_ASIAN_RE.test(text));
+}
+
+/** U+0020 compression was not observed on a linesAndChars grid and keeps
+ * natural spaces there; WORD_EAST_ASIAN_AUTO_SPACE gaps shrink on it too. */
+function spacesShrinkOnGrid(gridType: string | null | undefined): boolean {
+  return gridType !== 'linesAndChars';
 }
 
 /** Room a WORD_EAST_ASIAN_AUTO_SPACE gap of `appliedPx` can give up on a line
@@ -317,6 +331,15 @@ function sameSpaceFace(candidate: LayoutTextSeg, reference: LayoutTextSeg): bool
     candidate.bold === reference.bold &&
     candidate.italic === reference.italic
   );
+}
+
+/** Content that keeps its natural advance beside shrinking automatic East
+ * Asian gaps: anything but vertical, tate-chu-yoko, right-to-left or fitText
+ * geometry. Authored spaces keep their advance, and the
+ * balanceSingleByteDoubleByteWidth projection does not touch the gap. */
+function autoSpaceNeutral(segment: LayoutTextSeg): boolean {
+  return !segment.verticalRun && !segment.tateChuYoko && !segment.rtl
+    && segment.fitTextRegionIndex === undefined;
 }
 
 /** Text without U+0020 that keeps its natural advance on a mixed line. */
@@ -374,19 +397,23 @@ export function performMixedSpaceRequirement(
     baseRtl ||
     widthPolicy !== 'bounded' ||
     characterGrid?.type === 'snapToChars' ||
-    characterGrid?.type === 'linesAndChars' ||
     breakerState.currentLine.length === 0
   )
     return undefined;
   const line = summaryLine(breakerState.mixedSpace);
-  if (!line.valid) return undefined;
   // Only mixed East Asian / Latin lines; Latin-only lines keep their own rule.
   if (!line.eastAsian && !pieces.some((piece) => EAST_ASIAN_RE.test(piece.text))) return undefined;
+  // U+0020 shrink only on a line and candidate inside their observed scope;
+  // automatic East Asian gaps only beside content of natural advance.
+  let spacesValid = line.valid && spacesShrinkOnGrid(characterGrid?.type);
+  let autoSpaceValid = breakerState.mixedSpace.autoSpaceInvalidItems === 0;
   let candidateAutoSpaceCapacity = 0;
   for (const [index, piece] of pieces.entries()) {
     const spaces = trailingSpaceCount(piece.text);
     const visible = piece.text.slice(0, piece.text.length - spaces);
-    if (!piece.segment.fontRoute || !neutral(piece.segment, visible)) return undefined;
+    if (!piece.segment.fontRoute) return undefined;
+    if (!autoSpaceNeutral(piece.segment)) autoSpaceValid = false;
+    if (!neutral(piece.segment, visible)) spacesValid = false;
     // Trailing spaces become gaps of the line; they must share its face.
     if (
       spaces > 0 &&
@@ -394,7 +421,7 @@ export function performMixedSpaceRequirement(
         piece.segment.mixedSpaceAverageWidthRatio === undefined ||
         (line.face !== undefined && !sameSpaceFace(piece.segment, line.face)))
     ) {
-      return undefined;
+      spacesValid = false;
     }
     // Every piece starts its segment and follows text on this line, so it
     // brings its same-line automatic gap.
@@ -402,8 +429,10 @@ export function performMixedSpaceRequirement(
       piece.segment, leadingAutoSpacePx(operationState, piece.segment), scale,
     );
   }
-  const spaceCapacity = line.face ? line.perSpaceCapacity * line.count : 0;
-  const capacity = spaceCapacity + breakerState.mixedSpace.autoSpaceCapacity + candidateAutoSpaceCapacity;
+  const spaceCapacity = spacesValid && line.face ? line.perSpaceCapacity * line.count : 0;
+  const autoSpaceCapacity = autoSpaceValid
+    ? breakerState.mixedSpace.autoSpaceCapacity + candidateAutoSpaceCapacity : 0;
+  const capacity = spaceCapacity + autoSpaceCapacity;
   if (!(capacity > 0)) return undefined;
   const naturalWidth = breakerState.currentWidth;
   const fitWidth = candidate.fitWidth;
@@ -451,7 +480,7 @@ export function performMarkMixedSpacesCompressed(operationState: PassOperationSt
  * advance still exceeds the band (a kinsoku retraction may have shortened it),
  * write each space-bearing segment once, and reset for the next line. */
 export function performSettleMixedSpaces(operationState: PassOperationState): void {
-  const { breakerState, availW, scale, strNaturalAdvance } = operationState;
+  const { breakerState, availW, scale, strNaturalAdvance, characterGrid } = operationState;
   if (breakerState.mixedSpace.compressed) {
     const line = summaryLine(breakerState.mixedSpace);
     // Finalization walks the line once; every gap is written exactly once.
@@ -474,8 +503,9 @@ export function performSettleMixedSpaces(operationState: PassOperationState): vo
     }
     const count = gaps.reduce((sum, gap) => sum + gap.count, 0);
     const needed = Math.max(0, breakerState.currentWidth - lineEndSpacePx - availW());
-    const spaceCapacity = line.valid && count > 0 ? line.perSpaceCapacity * count : 0;
-    const autoSpaceGaps = line.valid
+    const spaceCapacity = line.valid && count > 0 && spacesShrinkOnGrid(characterGrid?.type)
+      ? line.perSpaceCapacity * count : 0;
+    const autoSpaceGaps = breakerState.mixedSpace.autoSpaceInvalidItems === 0
       ? breakerState.mixedSpace.contributions.filter((contribution) => contribution.autoSpaceCapacity > 0)
       : [];
     const autoSpaceCapacity = autoSpaceGaps.reduce((sum, gap) => sum + gap.autoSpaceCapacity, 0);

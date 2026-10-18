@@ -46,7 +46,7 @@ import {
   rebaseSeaBreaks,
 } from './text-runs.js';
 import { fitCJKPrefix, hasEastAsianVisiblePredecessor } from './fit-search.js';
-import { LineGapRejection, fitJustifiedCompression, justifiedCompressionApplies, lineEndsWithText, type PassOperationState } from './pass-operations.js';
+import { LineGapRejection, fitJustifiedCompression, justifiedCompressionApplies, justifiedPrefixCompression, lineEndsWithText, type PassOperationState } from './pass-operations.js';
 
 /** The iterator reads only its declared slice of the explicit pass state. */
 export type BreakOpportunityIteratorContext = Pick<
@@ -424,7 +424,10 @@ function processTextSegment(context: BreakOpportunityIteratorContext, seg: Layou
   // Complete-unit justified admission precedes the ordinary natural-only
   // joined-unit preflight, so a style/source seam cannot bypass compression.
   s.measuredWidth = w;
-  if (!prefersWholeWordAtScriptBoundary(context, s) && fitJustifiedCompression(context, s)) return;
+  // A whole word after an ideograph owns a WORD_EAST_ASIAN_AUTO_SPACE gap of
+  // the justified-compression family; it is admitted as one unit either way.
+  if ((!prefersWholeWordAtScriptBoundary(context, s) || s.autoSpaceBeforePt !== undefined)
+    && fitJustifiedCompression(context, s)) return;
   // The authored opportunity follows the existing whole-unit justified fit;
   // it must not introduce a wrap before a word admitted by that policy.
   if (placeOptionalHyphenPrefix(context, s)) return;
@@ -1418,6 +1421,37 @@ function splitCjkOverflow(context: BreakOpportunityIteratorContext, frame: TextF
       mixedSpaceExtended = true;
     }
   }
+  // WORD_JUSTIFIED_INTERWORD_COMPRESSION: on a justified mode-15 line a CJK
+  // prefix is admitted like a whole unit, by the line's compressible gaps
+  // (U+0020 and WORD_EAST_ASIAN_AUTO_SPACE). Admission is monotone in the
+  // prefix length (C grows; S and E do not), so the same bounded search applies.
+  let justifiedExtended = false;
+  if (!mixedSpaceExtended && breakerState.currentLine.length > 0 && justifiedCompressionApplies(context)) {
+    const characters = [...s.text];
+    const admitted = (count: number): boolean => {
+      const candidate = characters.slice(0, count).join('');
+      return !candidate.endsWith(' ') && justifiedPrefixCompression(context, s, candidate) !== undefined;
+    };
+    const natural = Math.max(naturalRawSplit, [...proposedPrefixFor(naturalRawSplit, true)].length);
+    let low = natural;
+    let high = characters.length;
+    for (let step = 1; low + step <= characters.length; step *= 2) {
+      if (!admitted(low + step)) {
+        high = low + step - 1;
+        break;
+      }
+      low += step;
+    }
+    while (low < high) {
+      const middle = Math.ceil((low + high) / 2);
+      if (admitted(middle)) low = middle;
+      else high = middle - 1;
+    }
+    if (low > natural && low < characters.length) {
+      rawPrefix = characters.slice(0, low).join('');
+      justifiedExtended = true;
+    }
+  }
   // Apply kinsoku to the break position: retract leftwards so the tail
   // never begins with a 行頭禁則 char and the head never ends with a
   // 行末禁則 char (ECMA-376 §17.15.1.58–.60). When the current line
@@ -1466,6 +1500,20 @@ function splitCjkOverflow(context: BreakOpportunityIteratorContext, frame: TextF
     }
     mixedSpaceExtended = needsShrink(prefix);
   }
+  let justifiedOverflow = 0;
+  if (justifiedExtended) {
+    // The final head (after kinsoku and hanging) is itself admitted, or the
+    // checked head, or the natural break.
+    const overflowOf = (head: string): number | undefined =>
+      head.length === 0 ? 0 : justifiedPrefixCompression(context, s, head);
+    let overflow = overflowOf(prefix);
+    if (overflow === undefined) {
+      const checked = proposedPrefixFor(rawSplit, false);
+      overflow = overflowOf(checked);
+      prefix = overflow === undefined ? proposedPrefixFor(naturalRawSplit, true) : checked;
+    }
+    justifiedOverflow = overflow ?? 0;
+  }
   if (breakerState.currentLine.length === 0) {
     // minSplit keeps progress on an empty line even when no legal prefix
     // fits; that retained prefix is forced unless a legal one exists.
@@ -1480,6 +1528,7 @@ function splitCjkOverflow(context: BreakOpportunityIteratorContext, frame: TextF
       // The retained head overflows naturally and was admitted above.
       context.markMixedSpacesCompressed();
     }
+    if (justifiedOverflow > 0) breakerState.justifiedCompressionPx = justifiedOverflow;
     // Grid advance for the head piece — the same model as the line box / draw.
     const pw = strNaturalAdvance(s, prefix);
     const headSeg: LayoutTextSeg = {
