@@ -112,6 +112,10 @@ import {
   chartImageFillKey,
   chartImageFillPixelTransform,
   chartImageFillHostKey,
+  chartImageFillNeedsRenderedSize,
+  chartFillRenderedSizeKey,
+  chartImageFillStoreLookup,
+  collectChartFillRenderedSizes,
   chartImageFillUsageSize,
   collectChartImageFillUsages,
   collectChartImageFillUsagesForCharts,
@@ -8623,6 +8627,7 @@ async function renderSlideLeased(
       preserveNaturalSize: boolean;
       hasSourceCrop: boolean;
       host?: { rotation: number; flipH?: boolean; flipV?: boolean };
+      renderedSize?: import('@silurus/ooxml-core').ChartFillRenderedSize;
     }>();
     const admittedChartFills = new Set<string>();
     for (const usage of collectChartImageFillUsagesForCharts(
@@ -8640,6 +8645,8 @@ async function renderSlideLeased(
       for (const { usage, size } of usages) {
         const { fill } = usage;
         if (!admittedChartFills.has(chartImageFillKey(fill))) continue;
+        // Size-dependent chains are prepared per rendered size below.
+        if (chartImageFillNeedsRenderedSize(fill)) continue;
         const key = chartImageFillHostKey(fill, host);
         const prior = chartFillMap.get(key) ?? {
           fill,
@@ -8687,6 +8694,26 @@ async function renderSlideLeased(
           maxRetainedPixels: planned?.maxRetainedPixels,
           preserveNaturalSize,
           hasSourceCrop,
+        });
+      }
+      // A stretched fill whose chain is measured in physical units is
+      // evaluated per rendered size (Office applies blur/shadow lengths at the
+      // rendered size). A preparation pass of the same chart paint records
+      // each distinct size; each is decoded once under its own key.
+      for (const { fill, occurrence } of collectChartFillRenderedSizes(
+        element.chart,
+        {
+          x: emuToPx(element.x, scale), y: emuToPx(element.y, scale),
+          w: emuToPx(element.width, scale), h: emuToPx(element.height, scale),
+        },
+        PT_TO_EMU * scale, element.rotation, opts.threeD, opts.regionMap, opts.chartEx,
+      )) {
+        if (!admittedChartFills.has(chartImageFillKey(fill))) continue;
+        const key = chartFillRenderedSizeKey(fill, host, occurrence);
+        if (!chartFillMap.has(key)) chartFillMap.set(key, {
+          fill, widthPt: occurrence.widthPt, heightPt: occurrence.heightPt,
+          preserveNaturalSize: true, hasSourceCrop: fill.srcRect != null,
+          host, renderedSize: occurrence,
         });
       }
     }
@@ -8746,7 +8773,7 @@ async function renderSlideLeased(
       const chartPromises: Promise<unknown>[] = [...chartFillMap].map(async ([key, entry]) => {
         const {
           fill, widthPt, heightPt, targetWidthPx, targetHeightPx,
-          maxRetainedPixels, hasSourceCrop, host,
+          maxRetainedPixels, hasSourceCrop, host, renderedSize,
         } = entry;
         const target = targetWidthPx && targetHeightPx
           ? {
@@ -8765,12 +8792,12 @@ async function renderSlideLeased(
                 workerDecoder: svgDecoder,
               })
             : getCachedDuotoneBitmapByPath(
-                fill.imagePath, fill.mimeType, chartImageFillPixelTransform(fill, host) ?? undefined, fetchImage,
+                fill.imagePath, fill.mimeType, chartImageFillPixelTransform(fill, host, renderedSize) ?? undefined, fetchImage,
                 {
-                  // An ordered chain samples the source grid at the fill DPI
-                  // (see chartImageFillPixelTransform), not a usage frame.
-                  widthPt: fill.blipEffects?.length ? 0 : widthPt,
-                  heightPt: fill.blipEffects?.length ? 0 : heightPt,
+                  // A per-size chain is evaluated on its rendered frame; any
+                  // other chain samples the source grid at the fill DPI.
+                  widthPt: renderedSize ? renderedSize.widthPt : fill.blipEffects?.length ? 0 : widthPt,
+                  heightPt: renderedSize ? renderedSize.heightPt : fill.blipEffects?.length ? 0 : heightPt,
                   ...(target ?? {}),
                   failClosedOnDuotoneFailure: true,
                   tiff: opts.tiff,
@@ -8966,9 +8993,7 @@ async function renderSlideLeased(
           el.rotation,
           opts.threeD,
           opts.regionMap,
-          fill => chartMarkerImages.get(
-            chartImageFillHostKey(fill, { rotation: el.rotation, flipH: el.flipH, flipV: el.flipV }),
-          ),
+          chartImageFillStoreLookup(chartMarkerImages, { rotation: el.rotation, flipH: el.flipH, flipV: el.flipV }),
           opts.chartEx,
         );
         ctx.restore();

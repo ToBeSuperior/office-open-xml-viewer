@@ -112,6 +112,12 @@ const SHARED_PAINT_IMPORTS = new Map([
     // cache before measurement-free chart paint. They expose no layout API.
     ['chartImageFillKey', 'value'],
     ['chartImageFillPixelTransform', 'value'],
+    // Per-rendered-size chart picture preparation: a scratch-surface chart
+    // paint records the sizes; keys/lookups address the decoded sources.
+    ['chartImageFillNeedsRenderedSize', 'value'],
+    ['chartFillRenderedSizeKey', 'value'],
+    ['chartImageFillStoreLookup', 'value'],
+    ['collectChartFillRenderedSizes', 'value'],
     ['chartImageFillUsageSize', 'value'],
     ['collectChartImageFillUsages', 'value'],
     ['collectChartImageFillUsagesForCharts', 'value'],

@@ -3,7 +3,7 @@ import type { ImageFill } from '../types/common.js';
 import type {
   ChartDataPointOverride, ChartExElementStyle, ChartModel, ChartSeries, ChartStockBarPaint,
 } from '../types/chart.js';
-import { drawImageCropped, imageNaturalSize, srcRectHasVisibleArea } from '../image/crop.js';
+import { drawImageCropped, imageNaturalSize, srcRectHasVisibleArea, stretchedSourceFrame } from '../image/crop.js';
 import { imageEffectFrame, imageEffectOutsetPeriods } from '../image/image-effect-frame.js';
 import type { BlipPixelEffects } from '../image/blip-effects.js';
 import type { Duotone } from '../image/duotone.js';
@@ -86,7 +86,20 @@ const SURFACE_PICTURE_FAMILIES = new Set([
   'surface', 'surface3D',
 ]);
 
-export type ChartImageLookup = (fill: ImageFill) => CanvasImageSource | null | undefined;
+/** Full source frame (points) of one rendered occurrence of a stretched
+ * chart picture fill whose CT_Blip chain is measured in physical units. */
+export interface ChartFillRenderedSize {
+  readonly widthPt: number;
+  readonly heightPt: number;
+}
+
+/** Synchronous decoded-source lookup. `occurrence` is present when the fill's
+ * effect output depends on the rendered size (see chartImageFillOccurrence);
+ * work estimators omit it and accept any prepared occurrence. */
+export type ChartImageLookup = (
+  fill: ImageFill,
+  occurrence?: ChartFillRenderedSize,
+) => CanvasImageSource | null | undefined;
 
 /** Stable document-cache key for one decoded chart picture source. */
 export function chartImageFillKey(fill: ImageFill): string {
@@ -100,6 +113,94 @@ export function chartImageFillKey(fill: ImageFill): string {
     // (structural, so no delimiter can alias two recipes).
     fill.blipEffects?.length ? [fill.blipEffects, chartImageFillEffectDpi(fill)] : null,
   ]);
+}
+
+// Effect kinds whose output depends on the physical frame: EMU radii,
+// distances and offsets (§20.1.8.15/.32/.49/.50/.52/.53/.61) and nested
+// image fills mapped onto the frame. Pointwise effects are size-independent.
+const FRAME_DEPENDENT_EFFECTS = new Set([
+  'blur', 'softEdge', 'glow', 'shadow', 'presetShadow', 'reflection', 'transform', 'alphaOutset',
+]);
+
+function chainDependsOnFrame(effects: readonly unknown[], depth = 0): boolean {
+  // The parser bounds recipe depth with the shared effect-step ledger.
+  if (depth > 64) return true;
+  for (const effect of effects as readonly Record<string, unknown>[]) {
+    const type = effect?.type;
+    if (typeof type !== 'string') continue;
+    if (FRAME_DEPENDENT_EFFECTS.has(type)) return true;
+    if ((type === 'fill' || type === 'fillOverlay')
+      && (effect.fill as { fillType?: string } | undefined)?.fillType === 'image') return true;
+    const container = effect.container as { effects?: unknown[] } | undefined;
+    if (container?.effects && chainDependsOnFrame(container.effects, depth + 1)) return true;
+    const containers = effect.containers as Array<{ effects?: unknown[] }> | undefined;
+    if (containers?.some(c => c?.effects && chainDependsOnFrame(c.effects, depth + 1))) return true;
+  }
+  return false;
+}
+
+/** Whether a fill's effect output depends on each rendered size. A stretched
+ * fill maps its source onto every destination, so an EMU-measured chain
+ * (blur/shadow radius, offset) must be evaluated per occurrence, as Office
+ * applies it at the rendered size. A tiled fill samples at its DPI instead. */
+export function chartImageFillNeedsRenderedSize(fill: ImageFill): boolean {
+  return !fill.tile && !!fill.blipEffects?.length && chainDependsOnFrame(fill.blipEffects);
+}
+
+/** The occurrence a destination box of `widthPt`×`heightPt` represents: the
+ * full source frame after fillRect insets and the srcRect window
+ * (stretchedSourceFrame), quantized to 1/100 pt so identical layouts in the
+ * preparation and paint passes agree. Undefined for size-independent fills. */
+export function chartFillRenderedSize(
+  fill: ImageFill, widthPt: number, heightPt: number,
+): ChartFillRenderedSize | undefined {
+  if (!chartImageFillNeedsRenderedSize(fill)) return undefined;
+  const frame = stretchedSourceFrame(widthPt, heightPt, fill.srcRect, fill.fillRect);
+  const quantize = (value: number) => Math.round(value * 100) / 100;
+  if (![frame.width, frame.height].every(Number.isFinite)) rejectChartImageGeometry();
+  return { widthPt: quantize(frame.width), heightPt: quantize(frame.height) };
+}
+
+/** Decoded identity of one fill occurrence inside a host frame. */
+export function chartFillRenderedSizeKey(
+  fill: ImageFill, host?: ChartImageFillHost, occurrence?: ChartFillRenderedSize,
+): string {
+  const base = chartImageFillHostKey(fill, host);
+  return occurrence ? JSON.stringify([base, occurrence.widthPt, occurrence.heightPt]) : base;
+}
+
+/** A recorded occurrence request from a preparation pass. */
+export interface ChartFillRenderedSizeRequest {
+  readonly fill: ImageFill;
+  readonly occurrence: ChartFillRenderedSize;
+}
+
+/** Host store for prepared chart sources: an occurrence-keyed entry for each
+ * rendered size of a size-dependent fill, a plain entry otherwise. A lookup
+ * without an occurrence (work estimation) accepts any prepared occurrence. */
+export function chartImageFillStoreLookup(
+  store: ReadonlyMap<string, CanvasImageSource | null>,
+  host?: ChartImageFillHost,
+): ChartImageLookup {
+  return (fill, occurrence) => {
+    if (!chartImageFillNeedsRenderedSize(fill)) return store.get(chartFillRenderedSizeKey(fill, host));
+    if (occurrence) {
+      const exact = store.get(chartFillRenderedSizeKey(fill, host, occurrence));
+      if (exact !== undefined) return exact;
+    }
+    // Work estimation (no occurrence) accepts any prepared size. A paint
+    // occurrence whose host frame arithmetic differs from the preparation
+    // pass by rounding selects the prepared size within 1% on both axes.
+    const prefix = `[${JSON.stringify(chartImageFillHostKey(fill, host))},`;
+    for (const [key, image] of store) {
+      if (!key.startsWith(prefix)) continue;
+      if (!occurrence) { if (image) return image; continue; }
+      const [, w, h] = JSON.parse(key) as [string, number, number];
+      const near = (a: number, b: number) => Math.abs(a - b) <= Math.max(0.01, 0.01 * Math.max(a, b));
+      if (near(w, occurrence.widthPt) && near(h, occurrence.heightPt)) return image;
+    }
+    return undefined;
+  };
 }
 
 function chartImageFillEffectDpi(fill: ImageFill): number {
@@ -116,25 +217,32 @@ export interface ChartImageFillHost {
 }
 
 /** Decode-time pixel transform of a chart picture fill: its ordered CT_Blip
- * chain, or a lone duotone. Library policy: one fill recipe paints every
- * marker, bar, wall and floor that references it, at many sizes, so a chart
- * fill has no single authored frame. Its effects are therefore evaluated on
- * the source's own grid at the fill's DPI (blipFill@dpi, else 96 DPI), the
- * same physical sampling §20.1.8.58 uses for a tile and that core uses for a
- * nested tiled fill. That makes the result independent of usage size; the
- * DPI is part of {@link chartImageFillKey}, and the host orientation is part
- * of {@link chartImageFillHostKey}. Hosts decode such a fill at its native
- * size (no display target). */
+ * chain, or a lone duotone. A stretched fill whose chain is measured in
+ * physical units is evaluated per rendered occurrence (Office applies blur
+ * and shadow lengths at the rendered size): hosts pass the occurrence from
+ * the preparation pass and its frame as the loader's physical extent. Other
+ * chains (tiled fills, pointwise effects) are size-independent and sampled
+ * on the source grid at the fill DPI (blipFill@dpi, else 96 DPI; §20.1.8.58).
+ * The DPI is part of {@link chartImageFillKey}, the host orientation of
+ * {@link chartImageFillHostKey} and the occurrence of
+ * {@link chartFillRenderedSizeKey}. Hosts decode at native size. */
 export function chartImageFillPixelTransform(
   fill: ImageFill,
   host?: ChartImageFillHost,
+  occurrence?: ChartFillRenderedSize,
 ): Duotone | BlipPixelEffects | null {
   if (!fill.blipEffects?.length) return fill.duotone ?? null;
+  const orientation = {
+    hostRotation: fill.rotWithShape === false ? 0 : host?.rotation ?? 0,
+    hostFlipH: host?.flipH ?? false, hostFlipV: host?.flipV ?? false,
+  };
+  // A per-occurrence chain is sampled from the occurrence's physical frame,
+  // which hosts pass as widthPt/heightPt to the shared loader.
+  if (occurrence) return { effects: fill.blipEffects, duotone: fill.duotone ?? null, ...orientation };
   const emuPerPixel = 914400 / chartImageFillEffectDpi(fill);
   return {
     effects: fill.blipEffects, duotone: fill.duotone ?? null, emuPerPixelX: emuPerPixel, emuPerPixelY: emuPerPixel,
-    hostRotation: fill.rotWithShape === false ? 0 : host?.rotation ?? 0,
-    hostFlipH: host?.flipH ?? false, hostFlipV: host?.flipV ?? false,
+    ...orientation,
   };
 }
 
@@ -258,9 +366,11 @@ function chartImageTileStaticMetrics(fill: ImageFill): ChartImageTileStaticMetri
 
 /** Return the synchronously preloaded source for a validated chart image fill.
  * Kept internal to chart modules; hosts still own all fetch/decode work. */
-export function chartImageFillSource(fill: ImageFill): CanvasImageSource | null {
+export function chartImageFillSource(
+  fill: ImageFill, occurrence?: ChartFillRenderedSize,
+): CanvasImageSource | null {
   if (!imageFillModeIsPaintable(fill) || !fillCanProduceVisiblePixels(fill)) return null;
-  return activeLookup?.(fill) ?? null;
+  return activeLookup?.(fill, occurrence) ?? null;
 }
 
 /** Resolve the shared DrawingML tile size, offset, alignment and mirroring.
@@ -1264,7 +1374,7 @@ export function paintChartImageFill(
 ): boolean {
   if (![x, y, w, h, ptToPx, shapeRotationDeg].every(Number.isFinite) || w < 0 || h < 0) rejectChartImageGeometry();
   if (!imageFillModeIsPaintable(fill) || !fillCanProduceVisiblePixels(fill) || !(w > 0) || !(h > 0)) return false;
-  const image = activeLookup?.(fill);
+  const image = activeLookup?.(fill, chartFillRenderedSize(fill, w / ptToPx, h / ptToPx));
   if (!image) return false;
   if (shapeRotationDeg !== 0 && fill.rotWithShape == null) return false;
   ctx.save();

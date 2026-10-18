@@ -8,6 +8,11 @@ import {
   isOptionalImageCodecUnavailableError,
   PT_TO_PX,
   chartImageFillKey,
+  chartImageFillNeedsRenderedSize,
+  chartImageFillPixelTransform,
+  chartFillRenderedSizeKey,
+  chartImageFillStoreLookup,
+  collectChartFillRenderedSizes,
   chartImageFillUsageSize,
   collectChartImageFillUsages,
   collectChartImageFillUsagesForCharts,
@@ -310,6 +315,7 @@ async function resolveChartImages<TTextRun>(
       targetHeightPx?: number;
       preserveNaturalSize: boolean;
       hasSourceCrop: boolean;
+      renderedSize?: import('@silurus/ooxml-core').ChartFillRenderedSize;
     }>();
     for (const usage of collectChartImageFillUsagesForCharts(
       chartOccurrences.map(
@@ -321,7 +327,9 @@ async function resolveChartImages<TTextRun>(
       ) != null,
     )) {
       const { fill } = usage;
-      const key = chartImageFillKey(fill);
+      // Size-dependent chains are prepared per rendered size below.
+      if (chartImageFillNeedsRenderedSize(fill)) continue;
+      const key = chartFillRenderedSizeKey(fill);
       if (!chartEntries.has(key)) chartEntries.set(key, {
         fill,
         widthPt: 0,
@@ -330,10 +338,32 @@ async function resolveChartImages<TTextRun>(
         hasSourceCrop: usage.hasSourceCrop,
       });
     }
+    const admittedChartFills = new Set(collectChartImageFillUsagesForCharts(
+      chartOccurrences.map(({ descriptor }) => descriptor.model as import('@silurus/ooxml-core').ChartModel),
+      (usage, chartIndex) => chartImageFillUsageSize(usage, chartOccurrences[chartIndex]!.frame) != null,
+    ).map(({ fill }) => chartImageFillKey(fill)));
+    for (const { descriptor, frame } of chartOccurrences) {
+      // A stretched fill whose chain is measured in physical units is
+      // evaluated per rendered size: a preparation pass of the same chart
+      // paint (canonical handler: point units, ptToPx 1) records each size.
+      for (const { fill, occurrence } of collectChartFillRenderedSizes(
+        descriptor.model as import('@silurus/ooxml-core').ChartModel,
+        { x: 0, y: 0, w: frame.widthPt, h: frame.heightPt },
+        1, 0, options.threeD, options.regionMap, options.chartEx,
+      )) {
+        if (!admittedChartFills.has(chartImageFillKey(fill))) continue;
+        const key = chartFillRenderedSizeKey(fill, undefined, occurrence);
+        if (!chartEntries.has(key)) chartEntries.set(key, {
+          fill, widthPt: occurrence.widthPt, heightPt: occurrence.heightPt,
+          preserveNaturalSize: true, hasSourceCrop: fill.srcRect != null, renderedSize: occurrence,
+        });
+      }
+    }
     for (const { usages } of chartOccurrences) {
       for (const { usage, size } of usages) {
         const { fill } = usage;
-        const key = chartImageFillKey(fill);
+        if (chartImageFillNeedsRenderedSize(fill)) continue;
+        const key = chartFillRenderedSizeKey(fill);
         const prior = chartEntries.get(key);
         if (!prior) continue;
         const preserveNaturalSize = prior.preserveNaturalSize || usage.preserveNaturalSize;
@@ -356,8 +386,10 @@ async function resolveChartImages<TTextRun>(
       }
     }
     await Promise.all([...chartEntries].map(async ([key, entry]) => {
-      if (images.has(key)) {
-        const image = images.get(key);
+      // The source preload keys plain chart fills by chartImageFillKey.
+      const preloadKey = entry.renderedSize ? undefined : chartImageFillKey(entry.fill);
+      if (preloadKey !== undefined && images.has(preloadKey)) {
+        const image = images.get(preloadKey);
         chartImages.set(
           key,
           isOptionalImageCodecUnavailableError(image, 'tiff') ? null : image ?? null,
@@ -365,8 +397,16 @@ async function resolveChartImages<TTextRun>(
         return;
       }
       const {
-        fill, widthPt, heightPt, targetWidthPx, targetHeightPx, hasSourceCrop,
+        fill, widthPt, heightPt, targetWidthPx, targetHeightPx, hasSourceCrop, renderedSize,
       } = entry;
+      // A per-size chain is evaluated on its rendered frame; other chains
+      // sample the source grid at the fill DPI (chartImageFillPixelTransform).
+      const transform = chartImageFillPixelTransform(fill, undefined, renderedSize);
+      const effectOrientation = transform && 'effects' in transform && !renderedSize
+        ? { emuPerPixelX: transform.emuPerPixelX, emuPerPixelY: transform.emuPerPixelY }
+        : undefined;
+      const effectWidthPt = fill.blipEffects?.length ? renderedSize?.widthPt ?? 0 : widthPt;
+      const effectHeightPt = fill.blipEffects?.length ? renderedSize?.heightPt ?? 0 : heightPt;
       const target = targetWidthPx && targetHeightPx
         ? { targetWidthPx, targetHeightPx }
         : undefined;
@@ -378,15 +418,18 @@ async function resolveChartImages<TTextRun>(
             })
           : getCachedSvgImageByPath(path, fetchImage);
         const decodePath = (path: string, mime: string) => mime === 'image/svg+xml' && !fill.duotone
+          && !fill.blipEffects?.length
           ? decodeSvg(path)
           : decodeRaster(
               path, mime, undefined, fetchImage as DocxFetchImage,
-              widthPt, heightPt, fill.duotone, options.tiff, target,
-              undefined, options.svgDecoder,
+              effectWidthPt, effectHeightPt, fill.duotone, options.tiff,
+              fill.blipEffects?.length ? undefined : target,
+              undefined, options.svgDecoder, undefined,
+              fill.blipEffects?.length ? fill.blipEffects : undefined, effectOrientation,
             );
         let image: CanvasImageSource | null;
         const blip = { svgImagePath: fill.svgImagePath, srcRect: hasSourceCrop ? true : null };
-        if (preferVectorBlip(blip)) {
+        if (!fill.blipEffects?.length && preferVectorBlip(blip)) {
           try {
             image = await decodePath(blip.svgImagePath, 'image/svg+xml');
           } catch (error) {
@@ -567,7 +610,7 @@ async function renderSelectedDocumentPageLeased<TTextRun>(
         ? createCanonicalCanvasPaintResourceHandlers(
             options.threeD,
             options.regionMap,
-            fill => chartImages.get(chartImageFillKey(fill)),
+            chartImageFillStoreLookup(chartImages),
             options.chartEx,
           )
         : canonicalCanvasPaintResourceHandlers,

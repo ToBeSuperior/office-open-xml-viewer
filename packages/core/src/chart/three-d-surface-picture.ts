@@ -105,6 +105,18 @@ function sceneMetricDistance(
   );
 }
 
+/** Rendered size (points) of a wall/floor picture: the scene-metric extent of
+ * the surface's inner face, onto which a stretched picture is mapped. It is
+ * the occurrence size for per-occurrence CT_Blip chains (chartFillRenderedSize). */
+export function chartThreeDSurfacePictureSizePt(
+  geometry: ChartThreeDSurfaceGeometry, ptToPx: number,
+): { widthPt: number; heightPt: number } | null {
+  if (geometry.inner.length !== 4 || !(ptToPx > 0)) return null;
+  const width = sceneMetricDistance(geometry.inner[0], geometry.inner[1], geometry.modelDepth) / ptToPx;
+  const height = sceneMetricDistance(geometry.inner[1], geometry.inner[2], geometry.modelDepth) / ptToPx;
+  return [width, height].every(v => Number.isFinite(v) && v > 0) ? { widthPt: width, heightPt: height } : null;
+}
+
 export function paintChartThreeDSurfacePicture(
   ctx: CanvasRenderingContext2D,
   fill: ImageFill,

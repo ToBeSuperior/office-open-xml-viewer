@@ -25227,3 +25227,54 @@ describe('ChartEx box-and-whisker line paint (PowerPoint 16.113)', () => {
     expect(boxLines({}).every(line => line.lineWidth === 0.75)).toBe(true);
   });
 });
+
+describe('per-rendered-size chart picture-fill effects', () => {
+  it('evaluates a blur per marker size: each size is prepared once and its outset scales', async () => {
+    const { collectChartFillRenderedSizes } = await import('./renderer.js');
+    const { chartFillRenderedSizeKey, chartImageFillStoreLookup, chartImageFillPixelTransform } = await import('./image-fill.js');
+    const { applyBlipPixelEffects } = await import('../image/blip-effects.js');
+    const picture = {
+      fillType: 'image' as const, stretch: true,
+      imagePath: 'xl/media/marker.png', mimeType: 'image/png',
+      blipEffects: [{ type: 'blur' as const, radius: 2 * 12700, grow: true }],
+    };
+    const model = baseModel({
+      chartType: 'line', categories: ['A', 'B'],
+      series: [
+        series({ values: [1, 2], showMarker: true, markerSymbol: 'picture', markerSize: 8, markerFillPaint: picture }),
+        series({ values: [2, 1], showMarker: true, markerSymbol: 'picture', markerSize: 16, markerFillPaint: picture }),
+      ],
+    });
+    const recorded = recordingCtx();
+    vi.stubGlobal('OffscreenCanvas', class { width = 1; height = 1; getContext() { return recorded.ctx; } });
+    try {
+      const sizes = collectChartFillRenderedSizes(model, RECT, 1);
+      // One request per distinct rendered size, not per marker.
+      expect(sizes).toHaveLength(2);
+      const [small, large] = [...sizes].sort((a, b) => a.occurrence.widthPt - b.occurrence.widthPt);
+      expect(large!.occurrence.widthPt / small!.occurrence.widthPt).toBeCloseTo(2, 1);
+      // The same 10 px source evaluated on each occurrence's physical frame:
+      // the 2 pt blur spans half as many source pixels on the larger marker.
+      const outset = (widthPt: number, heightPt: number) => {
+        const value = chartImageFillPixelTransform(picture, undefined, { widthPt, heightPt });
+        if (!value || !('effects' in value)) throw new Error('expected an effect chain');
+        const result = applyBlipPixelEffects({ data: new Uint8ClampedArray(10 * 10 * 4).fill(255), width: 10, height: 10 },
+          { ...value, emuPerPixelX: widthPt * 12700 / 10, emuPerPixelY: heightPt * 12700 / 10 }) as { frame?: { x: number } };
+        return result.frame?.x ?? 0;
+      };
+      const smallOutset = outset(small!.occurrence.widthPt, small!.occurrence.heightPt);
+      const largeOutset = outset(large!.occurrence.widthPt, large!.occurrence.heightPt);
+      expect(smallOutset).toBeGreaterThan(largeOutset);
+      // Paint lookups address each prepared size independently.
+      const store = new Map<string, CanvasImageSource | null>([
+        [chartFillRenderedSizeKey(picture, undefined, small!.occurrence), { width: 1, height: 1 } as CanvasImageSource],
+        [chartFillRenderedSizeKey(picture, undefined, large!.occurrence), { width: 2, height: 2 } as CanvasImageSource],
+      ]);
+      const lookup = chartImageFillStoreLookup(store);
+      expect(lookup(picture, small!.occurrence)).toMatchObject({ width: 1 });
+      expect(lookup(picture, large!.occurrence)).toMatchObject({ width: 2 });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});

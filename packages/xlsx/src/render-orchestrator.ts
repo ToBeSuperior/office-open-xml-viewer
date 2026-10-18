@@ -24,6 +24,7 @@ import {
   isOptionalImageCodecUnavailableError,
   EMU_PER_PT,
   EMU_PER_PX,
+  PT_TO_PX,
   type MathRenderer,
   type ChartThreeDRenderer,
   type ChartRegionMapRenderer,
@@ -36,6 +37,9 @@ import {
   type SvgBlobDecoder,
   type ImageResourceOptions,
   chartImageFillKey,
+  chartImageFillNeedsRenderedSize,
+  chartFillRenderedSizeKey,
+  collectChartFillRenderedSizes,
   chartImageFillPixelTransform,
   chartImageFillUsageSize,
   collectChartImageFillUsages,
@@ -448,6 +452,11 @@ export async function prefetchImages(
     effectiveDpr?: number;
     svgDecoder?: SvgBlobDecoder;
     imageResources?: ImageResourceOptions;
+    /** Chart modules the paint uses; the per-rendered-size preparation pass
+     * must lay charts out exactly as the paint will. */
+    threeD?: ChartThreeDRenderer;
+    regionMap?: ChartRegionMapRenderer;
+    chartEx?: ChartExRenderer;
   },
 ): Promise<void> {
   // This map is only the synchronous lookup for the current frame. Never keep
@@ -578,6 +587,8 @@ export async function prefetchImages(
       usage: ChartImageFillUsage;
       size: ChartImageFillUsageSize;
     }>;
+    displayWidth: number;
+    displayHeight: number;
   }> = [];
   for (const chart of charts) {
     if (!anchorMayIntersectViewport(
@@ -622,7 +633,8 @@ export async function prefetchImages(
       sizedUsages.push({ usage, size });
     }
     if (!sizesAreValid) continue;
-    chartDescriptors.push({ chart, frame: chartFrame, usages: sizedUsages });
+    chartDescriptors.push({ chart, frame: chartFrame, usages: sizedUsages,
+      displayWidth: display.width, displayHeight: display.height });
   }
   const allowedChartUsages = collectChartImageFillUsagesForCharts(
     chartDescriptors.map(({ chart }) => chart.chart),
@@ -639,10 +651,13 @@ export async function prefetchImages(
     targetHeightPx?: number;
     preserveNaturalSize: boolean;
     hasSourceCrop: boolean;
+    renderedSize?: import('@silurus/ooxml-core').ChartFillRenderedSize;
   }>();
   for (const usage of allowedChartUsages) {
     const { fill } = usage;
-    const key = chartImageFillKey(fill);
+    // Size-dependent chains are prepared per rendered size below.
+    if (chartImageFillNeedsRenderedSize(fill)) continue;
+    const key = chartFillRenderedSizeKey(fill);
     chartEntries.set(key, {
       fill,
       widthPt: 0,
@@ -651,10 +666,28 @@ export async function prefetchImages(
       hasSourceCrop: usage.hasSourceCrop,
     });
   }
+  const admittedChartFills = new Set(allowedChartUsages.map(({ fill }) => chartImageFillKey(fill)));
   for (const descriptor of chartDescriptors) {
+    // A stretched fill whose chain is measured in physical units is evaluated
+    // per rendered size: a preparation pass of the same chart paint (natural
+    // 96-DPI space, see renderAnchoredCharts) records each distinct size.
+    const scale = opts?.cellScale ?? 1;
+    for (const { fill, occurrence } of collectChartFillRenderedSizes(
+      descriptor.chart.chart,
+      { x: 0, y: 0, w: descriptor.displayWidth / scale, h: descriptor.displayHeight / scale },
+      PT_TO_PX, 0, opts?.threeD, opts?.regionMap, opts?.chartEx,
+    )) {
+      if (!admittedChartFills.has(chartImageFillKey(fill))) continue;
+      const key = chartFillRenderedSizeKey(fill, undefined, occurrence);
+      if (!chartEntries.has(key)) chartEntries.set(key, {
+        fill, widthPt: occurrence.widthPt, heightPt: occurrence.heightPt,
+        preserveNaturalSize: true, hasSourceCrop: fill.srcRect != null, renderedSize: occurrence,
+      });
+    }
     for (const { usage, size } of descriptor.usages) {
       const { fill } = usage;
-      const key = chartImageFillKey(fill);
+      if (chartImageFillNeedsRenderedSize(fill)) continue;
+      const key = chartFillRenderedSizeKey(fill);
       const prior = chartEntries.get(key);
       if (!prior) continue;
       const preserveNaturalSize = prior.preserveNaturalSize || usage.preserveNaturalSize;
@@ -678,19 +711,19 @@ export async function prefetchImages(
     }
   }
   for (const [key, entry] of chartEntries) {
-    const { fill, widthPt, heightPt, targetWidthPx, targetHeightPx, hasSourceCrop } = entry;
+    const { fill, widthPt, heightPt, targetWidthPx, targetHeightPx, hasSourceCrop, renderedSize } = entry;
     setImageRef(refs, key, {
       imagePath: fill.imagePath,
       mimeType: fill.mimeType,
       svgImagePath: fill.svgImagePath,
-      // An ordered chain samples the source grid at the fill DPI (core
-      // chartImageFillPixelTransform), so it is decoded at native size.
-      widthPt: fill.blipEffects?.length ? 0 : widthPt,
-      heightPt: fill.blipEffects?.length ? 0 : heightPt,
+      // A per-size chain is evaluated on its rendered frame; any other chain
+      // samples the source grid at the fill DPI, both at native size.
+      widthPt: renderedSize ? renderedSize.widthPt : fill.blipEffects?.length ? 0 : widthPt,
+      heightPt: renderedSize ? renderedSize.heightPt : fill.blipEffects?.length ? 0 : heightPt,
       // A zero-inset sentinel forces the raster SVG twin without applying crop
       // twice: widthPt/heightPt already contain the post-crop metafile maxima.
       srcRect: hasSourceCrop ? { l: 0, t: 0, r: 0, b: 0 } : null,
-      duotone: chartImageFillPixelTransform(fill),
+      duotone: chartImageFillPixelTransform(fill, undefined, renderedSize),
       failClosedOnDuotoneFailure: true,
       ...(targetWidthPx && targetHeightPx && !fill.blipEffects?.length
         ? { targetWidthPx, targetHeightPx }
@@ -944,6 +977,9 @@ async function renderWorksheetViewportLeased(
       effectiveDpr,
       svgDecoder,
       imageResources: opts.imageResources,
+      threeD: deps.threeD,
+      regionMap: deps.regionMap,
+      chartEx: deps.chartEx,
     });
   }
 

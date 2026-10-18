@@ -6,7 +6,13 @@
 import type { ChartModel, ChartRect } from '../types/chart';
 
 import { classicDataMarkPaintWorkCount } from './classic-paint-work.js';
-import { paintChartImageFill, type ChartImageLookup, withChartImageLookup } from './image-fill.js';
+import {
+  paintChartImageFill, type ChartImageLookup, withChartImageLookup, collectChartImageFillUsages,
+  chartImageFillNeedsRenderedSize, chartFillRenderedSizeKey, type ChartFillRenderedSizeRequest,
+} from './image-fill.js';
+import { assertChartImageWork } from './image-fill-errors.js';
+import { createAuxCanvas } from '../canvas/aux-canvas.js';
+import { OoxmlError } from '../errors/ooxml-error.js';
 
 import { paintChartStyleEffects, withChartEffectBudget } from './style-effects.js';
 
@@ -18,6 +24,7 @@ import {
   classicCanvasPointCount,
   chartEffectConsumerUpperBound,
   MAX_CANVAS_CHART_POINTS,
+  MAX_CHART_MARKER_IMAGE_SOURCES,
   sourceChartStructureCount,
 } from './resource-limits.js';
 import { classicPlotDispatch } from './plot-groups.js';
@@ -362,6 +369,45 @@ function renderChartImpl(
   } finally {
     ctx.restore();
   }
+}
+
+/** Preparation pass for per-occurrence chart picture fills: run the same
+ * chart layout and paint the host will run (identical arguments) on a 1×1
+ * scratch surface with a recording lookup, and return every distinct
+ * occurrence of a size-dependent fill (chartImageFillNeedsRenderedSize). Hosts
+ * decode exactly those occurrences, so one decode serves each distinct
+ * rendered size in both the main thread and the worker. The number of
+ * distinct occurrences shares the existing per-render picture-source cap. */
+export function collectChartFillRenderedSizes(
+  chart: ChartModel,
+  rect: ChartRect,
+  ptToPx: number = PT_TO_PX,
+  shapeRotationDeg = 0,
+  threeD?: ChartThreeDRenderer,
+  regionMap?: ChartRegionMapRenderer,
+  chartEx?: ChartExRenderer,
+): ChartFillRenderedSizeRequest[] {
+  if (!collectChartImageFillUsages(chart).some(({ fill }) => chartImageFillNeedsRenderedSize(fill))) return [];
+  const scratch = createAuxCanvas(1, 1);
+  const ctx = scratch?.getContext('2d') as CanvasRenderingContext2D | null | undefined;
+  if (!scratch || !ctx) throw new OoxmlError('unsupported-image-effect', 'Chart occurrence surface unavailable');
+  const requests = new Map<string, ChartFillRenderedSizeRequest>();
+  try {
+    renderChart(ctx, chart, rect, ptToPx, shapeRotationDeg, threeD, regionMap, (fill, occurrence) => {
+      if (occurrence) {
+        const key = chartFillRenderedSizeKey(fill, undefined, occurrence);
+        if (!requests.has(key)) {
+          assertChartImageWork(requests.size + 1, MAX_CHART_MARKER_IMAGE_SOURCES);
+          requests.set(key, { fill, occurrence });
+        }
+      }
+      // The recording pass draws into a 1×1 scratch surface; any drawable works.
+      return scratch as unknown as CanvasImageSource;
+    }, chartEx);
+  } finally {
+    scratch.width = 0;
+  }
+  return [...requests.values()];
 }
 
 /** Paint a chart in the host's user units. Excel's chart PDF controls keep a

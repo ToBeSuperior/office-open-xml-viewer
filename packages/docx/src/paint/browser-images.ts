@@ -28,6 +28,7 @@ import {
   chartImageFillKey,
   stretchedSourceFrame,
   chartImageFillPixelTransform,
+  chartImageFillNeedsRenderedSize,
   chartImageFillUsageSize,
   collectChartImageFillUsages,
   isOptionalImageCodecUnavailableError,
@@ -394,6 +395,9 @@ function imageDecodeRequests(
       for (const { usage, size } of usages) {
         if (!size) continue;
         const fill = usage.fill;
+        // Size-dependent chains are prepared per rendered size by the chart
+        // paint preparation (resolveChartImages), not by this source preload.
+        if (chartImageFillNeedsRenderedSize(fill)) continue;
         const raster = metafileRasterSize(
           fill.mimeType,
           fill.srcRect,

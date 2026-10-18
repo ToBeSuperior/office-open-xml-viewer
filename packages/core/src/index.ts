@@ -230,7 +230,7 @@ export {
   symbolTextToUnicodeSegments,
   type SymbolTextSegment,
 } from './fonts/symbol-font';
-export { renderChart } from './chart/renderer';
+export { renderChart, collectChartFillRenderedSizes } from './chart/renderer';
 export { formatLocalizedExcelShortDate } from './chart/chart-number-format';
 export { autoResize, type AutoResizeOptions } from './autoResize';
 export {
@@ -318,6 +318,12 @@ export {
   chartImageFillKey,
   chartImageFillPixelTransform,
   chartImageFillHostKey,
+  chartFillRenderedSize,
+  chartFillRenderedSizeKey,
+  chartImageFillNeedsRenderedSize,
+  chartImageFillStoreLookup,
+  type ChartFillRenderedSize,
+  type ChartFillRenderedSizeRequest,
   type ChartImageFillHost,
   chartImageFillUsageSize,
   collectChartImageFillUsages,
