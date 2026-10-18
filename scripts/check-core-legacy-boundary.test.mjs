@@ -132,6 +132,8 @@ test('citation allowances admit the token only inside comments', () => {
   assert.deepEqual(at(policy, "export const binary = (f: string) =>\n  /* source kind */ f === 'MS-XLS';"), ['legacy-binary-spec']);
   assert.deepEqual(at(table, "const limit = /* page */ source === 'MS-DOC' ? 1 : 0;"), ['legacy-binary-spec']);
   assert.deepEqual(at(policy, "const url = 'https://example.test/a'; // [MS-XLS] 2.4"), []);
+  assert.deepEqual(at(policy, "export const b = (f: string) =>\n  f.replace(/\\//g, '-') === 'MS-XLS';"), ['legacy-binary-spec']);
+  assert.deepEqual(at(table, "const p = /a\\/b/.test(s) && s === 'MS-DOC';"), ['legacy-binary-spec']);
   assert.deepEqual(at(policy, "/*\n  multi-line [MS-XLSB] note\n*/ const kind = 'MS-XLSB';"), ['legacy-binary-spec']);
   const rules = 'packages/docx/src/layout/line-compatibility.ts';
   assert.deepEqual(at(rules, "const rule = {\n  reference: '[MS-DOC] §2.9.146',\n};"), []);

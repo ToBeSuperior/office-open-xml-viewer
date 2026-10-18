@@ -140,13 +140,27 @@ export const ALLOWED_TOKENS = [
 
 /**
  * Comment spans of a TypeScript/JavaScript or Rust source, as [start, end)
- * offsets. Line and block comments are tracked across lines; string and
- * template literals are skipped so a `//` inside one is not a comment. In
- * Rust a `'` may open a lifetime rather than a char literal, so only `"`
- * strings are skipped there.
+ * offsets. TypeScript/JavaScript comments come from the Babel parser. Rust is
+ * scanned: line and block comments are tracked across lines and `"` strings
+ * are skipped (a `'` may open a lifetime rather than a char literal).
  */
 export function commentSpans(text, path = '') {
-  const rust = path.endsWith('.rs');
+  // JavaScript needs a real parser: a regex literal such as /\//g is not a
+  // comment, which no character scanner can decide without the grammar.
+  if (/\.[cm]?[jt]sx?$/.test(path)) {
+    try {
+      const { comments = [] } = parse(text, {
+        sourceType: 'unambiguous', errorRecovery: true, plugins: ['typescript', 'jsx'],
+      });
+      return comments.map((comment) => [comment.start, comment.end]);
+    } catch {
+      // Unparseable source admits no comment-only allowance (fails closed).
+      return [];
+    }
+  }
+  // Manifests, JSON and other non-code files have no comments to admit.
+  if (!path.endsWith('.rs')) return [];
+  const rust = true;
   const spans = [];
   let quote = null;
   for (let i = 0; i < text.length; i++) {
