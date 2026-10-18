@@ -2641,6 +2641,7 @@ function walls(
     const faces = group.faces;
     if (!effective.fill || !faces.length) return;
     if (effective.fill.fillType === 'image') {
+      const pictureFill = effective.fill;
       const size = chartThreeDSurfacePictureSizePt(group.slab, ptToPx);
       const image = chartImageFillSource(effective.fill,
         size ? chartFillRenderedSize(effective.fill, size.widthPt, size.heightPt) : undefined);
@@ -2651,6 +2652,8 @@ function walls(
         ctx, effective.fill, image, surface, kind,
         group.slab, group.faces.map(face => face.faceIndex),
         project, axis.max - axis.min,
+        (widthPt, heightPt) => chartImageFillSource(pictureFill, chartFillRenderedSize(pictureFill, widthPt, heightPt)),
+        ptToPx,
       );
       return;
     }

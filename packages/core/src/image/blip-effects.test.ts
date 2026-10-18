@@ -972,3 +972,15 @@ it('rejects an over-wide union grid before allocating it', async () => {
   expect(() => unionEffectGrids({ width: 1, height: 1 }, { width: 40_001, height: 1, frame: { x: 0, y: 0, width: 1, height: 1 } }))
     .toThrowError(expect.objectContaining({ metric: 'image-dimension' }));
 });
+
+it('charges the pinned original readback while replacement buffers are live', () => {
+  // Two replacing blurs on a 4096×1792 base: decoded source + pinned readback
+  // + first result + scratch + second result exceed the 128 MiB working set.
+  const width = 4096, height = 1792;
+  const blur: BlipEffect = { type: 'blur', radius: 95, grow: false };
+  expect(() => assertBlipPixelEffectsBudget({ effects: [blur, blur] }, width * height, { width, height }))
+    .toThrowError(expect.objectContaining({ metric: 'active-decoded-bytes' }));
+  // An in-place pointwise chain mutates that readback and stays admitted.
+  expect(() => assertBlipPixelEffectsBudget({ effects: [{ type: 'grayscale' }] }, width * height, { width, height }))
+    .not.toThrow();
+});

@@ -127,8 +127,21 @@ export function paintChartThreeDSurfacePicture(
   visibleFaceIndices: readonly number[],
   project: (point: ThreeDScenePoint) => SurfacePicturePoint,
   valueSpan: number,
+  /** Per-mapping source for size-dependent CT_Blip chains: called with the
+   * physical size (pt) of each face or repetition the picture is mapped onto,
+   * so EMU-measured effects match that rendered size. */
+  sourceFor?: (widthPt: number, heightPt: number) => CanvasImageSource | null,
+  ptToPx = 1,
 ): boolean {
   const plan = planChartThreeDSurfacePicture(fill, surface, kind, valueSpan);
+  // Scene-metric size of a mapped face span (value axis runs face[3]→face[0]).
+  const mapped = (face: readonly ThreeDScenePoint[], lower = 0, upper = 1): CanvasImageSource | null => {
+    if (!sourceFor) return image;
+    const widthPt = sceneMetricDistance(face[3], face[2], geometry.modelDepth) / ptToPx;
+    const heightPt = sceneMetricDistance(face[3], face[0], geometry.modelDepth) * (upper - lower) / ptToPx;
+    if (![widthPt, heightPt].every(v => Number.isFinite(v) && v > 0)) return null;
+    return sourceFor(widthPt, heightPt);
+  };
   if (!plan) return false;
   if (geometry.inner.length !== 4) rejectChartImageGeometry();
   // A spatial CT_Blip effect can grow the decoded grid around the authored
@@ -294,6 +307,10 @@ export function paintChartThreeDSurfacePicture(
         ? fullQuad
         : sceneFace?.map(project) as SurfacePictureQuad | undefined;
       if (!quad) continue;
+      const faceImage = geometry.thickness === 0 && faceIndex === 0
+        ? mapped([geometry.inner[0], geometry.inner[3], geometry.inner[2], geometry.inner[1]])
+        : sceneFace ? mapped(sceneFace) : null;
+      if (!faceImage) continue;
       const fillDestination = relativeRectQuad(quad, fill.fillRect);
       if (!fillDestination) continue;
       const destination = crop
@@ -311,7 +328,7 @@ export function paintChartThreeDSurfacePicture(
       for (let index = 1; index < quad.length; index++) ctx.lineTo(quad[index].x, quad[index].y);
       ctx.closePath();
       ctx.clip();
-      drawProjected(image, ctx, grid.w, grid.h, destination, 0.5, sourceRect);
+      drawProjected(faceImage, ctx, grid.w, grid.h, destination, 0.5, sourceRect);
       ctx.restore();
     }
   } else {
@@ -377,23 +394,27 @@ export function paintChartThreeDSurfacePicture(
         if (stackFraction == null) continue;
         if (surfacePictureFaceUsesStackedMapping(plan, faceIndex)) {
           for (let index = 0; index < Math.ceil(1 / stackFraction); index++) {
-            drawProjected(
-              image, ctx, grid.w, grid.h,
+            const unit = mapped(face, index * stackFraction, (index + 1) * stackFraction);
+            if (unit) drawProjected(
+              unit, ctx, grid.w, grid.h,
               stackQuad(face, index * stackFraction, (index + 1) * stackFraction),
               0.5, sourceRect,
             );
           }
         } else {
-          drawProjected(image, ctx, grid.w, grid.h, quad, 0.5, sourceRect);
+          const whole = mapped(face);
+          if (whole) drawProjected(whole, ctx, grid.w, grid.h, quad, 0.5, sourceRect);
         }
       } else if (plan.stackUnit != null && surfacePictureFaceUsesValueAxis(plan, faceIndex)) {
         for (let index = 0; index < repetitions; index++) {
           const lower = index * plan.stackUnit / valueSpan;
           const upper = (index + 1) * plan.stackUnit / valueSpan;
-          drawProjected(image, ctx, grid.w, grid.h, stackQuad(face, lower, upper), 0.5, sourceRect);
+          const unit = mapped(face, lower, upper);
+          if (unit) drawProjected(unit, ctx, grid.w, grid.h, stackQuad(face, lower, upper), 0.5, sourceRect);
         }
       } else if (plan.stackUnit != null) {
-        drawProjected(image, ctx, grid.w, grid.h, quad, 0.5, sourceRect);
+        const whole = mapped(face);
+        if (whole) drawProjected(whole, ctx, grid.w, grid.h, quad, 0.5, sourceRect);
       }
       ctx.restore();
     }

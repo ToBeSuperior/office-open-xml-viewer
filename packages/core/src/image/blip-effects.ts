@@ -432,13 +432,18 @@ function effectPlan(value: BlipPixelEffects, pixels: number, geometry?: EffectGr
   };
   const result = visit(value.effects, original);
   if (value.duotone && !value.effects.some(e => e.type === 'duotone')) { result.count++; result.work += result.pixels; }
-  // One decoded source remains owned while the readback pipeline runs. The
-  // readback backing store is explicitly released before graph evaluation.
-  // Original-fill references hold a snapshot only during evaluation. It is
-  // released before the final ImageData/canvas/result-bitmap bake.
+  // One decoded source remains owned while the readback pipeline runs, and
+  // applyImageDataTransform keeps the original readback ImageData pinned
+  // until the transformed buffer is written back, so both stay live through
+  // every effect. Original-fill references hold a further snapshot only
+  // during evaluation; it is released before the final bake.
+  // A chain that allocates a replacement buffer (spatial effects, unions)
+  // runs while the pinned readback is still live; an in-place pointwise
+  // chain mutates that readback itself.
+  const replacesReadback = result.peak > pixels || result.pixels !== pixels;
   if (usesOriginalImage(value.effects)) { result.peak += pixels; result.work += pixels; }
   result.peak = Math.max(result.peak, result.pixels * 3);
-  result.peak += pixels;
+  result.peak += pixels * (replacesReadback ? 2 : 1);
   return result;
 }
 function effectContainers(effects: readonly BlipEffect[], value: BlipPixelEffects): Map<string, BlipEffectContainer> {

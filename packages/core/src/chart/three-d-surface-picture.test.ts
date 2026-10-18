@@ -21,6 +21,7 @@ function paint(
     faceIndex?: number;
     faceIndices?: readonly number[];
     effectFrame?: { x: number; y: number; width: number; height: number };
+    sourceFor?: (widthPt: number, heightPt: number) => CanvasImageSource | null;
   } = {},
 ): {
   painted: boolean;
@@ -116,6 +117,7 @@ function paint(
     faceIndices,
     point => ({ x: point.x * (options.projectXScale ?? 1), y: point.y }),
     10,
+    options.sourceFor,
   );
   return {
     painted,
@@ -477,4 +479,20 @@ it('draws neighbouring 3-D tiles whose effect outset reaches the face', () => {
   const grown = paint(tiled, { ...options, effectFrame: { x: 5, y: 0, width: 10, height: 10 } });
   expect(plain.painted && grown.painted).toBe(true);
   expect(grown.sourceDraws.length).toBeGreaterThan(plain.sourceDraws.length);
+});
+
+it('resolves a size-dependent source per stacked repetition at its mapped size', () => {
+  const sizes: Array<[number, number]> = [];
+  const unit = { width: 800, height: 100 } as unknown as CanvasImageSource;
+  const result = paint(imageFill, {
+    imageWidth: 800, imageHeight: 100, faceWidth: 400, faceHeight: 100, pictureFormat: 'stack',
+    sourceFor: (widthPt, heightPt) => { sizes.push([widthPt, heightPt]); return unit; },
+  });
+  expect(result.painted).toBe(true);
+  // Two stacked repetitions, each mapped onto half the face height.
+  expect(sizes).toHaveLength(2);
+  for (const [widthPt, heightPt] of sizes) {
+    expect(widthPt).toBeCloseTo(400, 6);
+    expect(heightPt).toBeCloseTo(50, 6);
+  }
 });

@@ -913,6 +913,8 @@ export function renderSurfaceChart(
               || projection.cameraFacing(face))
             .map(({ faceIndex }) => faceIndex),
           project, surfaceSpan,
+          (widthPt, heightPt) => chartImageFillSource(imageFill, chartFillRenderedSize(imageFill, widthPt, heightPt)),
+          ptToPx,
         );
       }
     }
