@@ -17,7 +17,6 @@ import type {
   PullSessionIdentity,
   WorkerErrorPayload,
 } from '@silurus/ooxml-core/worker';
-import type { CfDiagnosticCollector } from './cf-diagnostics.js';
 
 export interface Workbook {
   sheets: SheetMeta[];
@@ -905,12 +904,11 @@ export interface ConditionalFormat {
  * own formula, [MS-XLSX] 2.6.27) is nonzero. Formulas are not evaluated: an
  * activity formula or `cellIs` operand is used only when it is a literal or
  * a single-cell reference to a cached value, and otherwise the rule does not
- * match. A rule the evaluator cannot evaluate is reported by
- * `XlsxWorkbook.getLastConditionalFormattingDiagnostics()` (#1547).
- * `extThresholdFormula` marks an effective linked x14 threshold that cannot
- * be admitted. Ambiguous extension IDs use an `other` marker. Its provenance
- * uses fixed bits expression=1, cellIs=2, activity=4, threshold=8; unknown bits
- * have no diagnostic meaning. No raw formulas are exposed in render reports.
+ * match. A rule the evaluator cannot evaluate neither formats nor stops lower
+ * rules (#1547). `extThresholdFormula` marks an effective linked x14
+ * threshold that cannot be admitted. Ambiguous extension IDs use an `other`
+ * marker. Its provenance uses fixed bits expression=1, cellIs=2, activity=4,
+ * threshold=8; unknown bits have no meaning.
  */
 export type CfRule =
   | { type: 'cellIs'; operator: string; formulas: string[]; dxfId: number | null; priority: number; stopIfTrue?: boolean }
@@ -1317,10 +1315,6 @@ export interface RenderViewportOptions extends XlsxRenderViewportOptions {
   regionMap?: ChartRegionMapRenderer;
   /** @internal Optional Microsoft ChartEx renderer. */
   chartEx?: ChartExRenderer;
-  /** @internal Operation-local CF diagnostics for ONE render invocation.
-   *  Never cached on a worksheet or CfContext and never posted to a worker
-   *  (excluded from WireRenderViewportOptions). */
-  cfDiagnostics?: CfDiagnosticCollector;
 }
 
 export type WorkerRequest =
