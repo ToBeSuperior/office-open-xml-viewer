@@ -172,6 +172,7 @@ fn policy(blob: &[u8], work_budget: &mut usize) -> Result<Policy, String> {
             &zip64_records,
         ),
         archive_offset,
+        entries: count,
     })
 }
 
@@ -180,6 +181,8 @@ struct Policy {
     /// while indexing (shared `ooxml_common::zip::IndexView` rules).
     view: ooxml_common::zip::IndexView,
     archive_offset: u64,
+    /// The number of directory records the preflight validated.
+    entries: usize,
 }
 
 /// zip 2.x retries earlier footer signatures after an index error. Block that
@@ -229,6 +232,7 @@ pub(super) fn open<'a>(
     work_budget: &mut usize,
 ) -> Result<zip::ZipArchive<IndexReader<'a>>, String> {
     let policy = policy(blob, work_budget)?;
+    let expected_entries = policy.entries;
     let config = zip::read::Config {
         archive_offset: zip::read::ArchiveOffset::Known(policy.archive_offset),
     };
@@ -240,7 +244,8 @@ pub(super) fn open<'a>(
     };
     let unreadable = || unsupported("unreadable PowerPoint alternative shape XML package");
     let archive = zip::ZipArchive::with_config(config, reader).map_err(|_| unreadable())?;
-    if state.get() == IndexState::DifferentFooter {
+    // The index must be exactly the validated directory.
+    if state.get() == IndexState::DifferentFooter || archive.len() != expected_entries {
         return Err(unreadable());
     }
     state.set(IndexState::Ready);

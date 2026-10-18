@@ -871,7 +871,6 @@ fn inspect_central_directory(
             range: directory.start..directory.start,
             patches: Vec::new(),
             hidden: Vec::new(),
-            metadata_starts: Vec::new(),
             footers: Vec::new(),
         },
         zip64_footer: None,
@@ -896,17 +895,16 @@ const OPAQUE_EXTRA_FIELD_ID: u16 = 0x7a7a;
 /// - Entry comments read as zero, so their bytes are never footer-like.
 /// - A fixed-size footer read (EOCD, ZIP64 locator or record) at any other
 ///   position than the validated ones fails, so the reader can never index an
-///   unvalidated directory. Reads that start at a record's name, extra or
-///   comment offset are metadata reads and exempt.
+///   unvalidated directory. Comments read as zero and non-ZIP64 extra ids
+///   are remapped, so only a name that itself begins with a footer
+///   signature (never a valid OPC part name in practice) can collide; such a
+///   package fails closed.
 #[derive(Debug, Clone)]
 pub struct IndexView {
     range: std::ops::Range<usize>,
     patches: Vec<(usize, u16)>,
     /// Entry comments: metadata OPC never uses, read as zero while indexing.
     hidden: Vec<std::ops::Range<usize>>,
-    /// Name, extra and comment offsets of every directory record (sorted):
-    /// reads starting there are metadata, never footer parsing.
-    metadata_starts: Vec<usize>,
     footers: Vec<usize>,
 }
 
@@ -922,7 +920,6 @@ impl IndexView {
     ) -> Self {
         let mut patches = Vec::new();
         let mut hidden = Vec::new();
-        let mut metadata_starts = Vec::new();
         let mut cursor = directory_start;
         while cursor + 46 <= eocd
             && le_u32(data, cursor) == Some(CENTRAL_DIRECTORY_HEADER_SIGNATURE)
@@ -938,7 +935,6 @@ impl IndexView {
             let extra_start = name_start + name_len as usize;
             let extra_end = (extra_start + extra_len as usize).min(eocd);
             let comment_start = extra_start + extra_len as usize;
-            metadata_starts.extend([name_start, extra_start, comment_start]);
             hidden.push(comment_start..comment_start + comment_len as usize);
             let mut field = extra_start;
             while field + 4 <= extra_end {
@@ -957,7 +953,6 @@ impl IndexView {
             range: directory_start..eocd + 22,
             patches,
             hidden,
-            metadata_starts,
             footers,
         }
     }
@@ -1005,7 +1000,6 @@ impl IndexView {
         // Judge what the reader would see: hidden bytes are never footers.
         if footer_block.is_some_and(|signature| le_u32(output, 0) == Some(signature))
             && !self.footers.contains(&start)
-            && self.metadata_starts.binary_search(&start).is_err()
         {
             return Err(std::io::Error::other("unvalidated ZIP footer record"));
         }
@@ -1956,6 +1950,27 @@ mod tests {
             assert_eq!(read_zip_bytes(&mut archive, "word/a.xml").unwrap(), b"a");
             assert!(open_validated_slice(&out).is_ok());
         }
+    }
+
+    #[test]
+    fn a_footer_shaped_entry_name_fails_closed_instead_of_steering_the_index() {
+        // A 22-byte name that begins with an EOCD signature: the reader's
+        // fixed-size read there must never be accepted as a footer.
+        let name = "PK\u{5}\u{6}aaaaaaaaaaaaaaaaaa";
+        let mut bytes = Vec::new();
+        {
+            let mut writer = zip::ZipWriter::new(Cursor::new(&mut bytes));
+            writer
+                .start_file(name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            writer.write_all(b"a").unwrap();
+            writer.finish().unwrap();
+        }
+        let view = preflight_archive_limits(&bytes).unwrap().index_view;
+        let name_at =
+            le_u32(&bytes, last_signature(&bytes, EOCD_SIGNATURE) + 16).unwrap() as usize + 46;
+        let mut block = [0u8; 22];
+        assert!(view.read(&bytes, name_at, &mut block).is_err());
     }
 
     #[test]
