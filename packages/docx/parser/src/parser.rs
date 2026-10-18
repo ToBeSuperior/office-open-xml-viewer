@@ -12494,17 +12494,45 @@ impl VmlShapeTypeIndex {
             let Some(source) = input.get(node.range()) else {
                 continue;
             };
-            if self.types.contains_key(id)
-                || self.types.len() >= VML_SHAPE_TYPE_ENTRY_LIMIT
-                || source.len() > VML_SHAPE_TYPE_BYTE_LIMIT
+            if self.types.contains_key(id) || self.types.len() >= VML_SHAPE_TYPE_ENTRY_LIMIT {
+                continue;
+            }
+            // Size the whole recorded entry, namespace declarations included,
+            // before allocating it.
+            let escaped_len = |uri: &str| {
+                uri.len()
+                    + uri.chars().fold(0, |extra, character| {
+                        extra
+                            + match character {
+                                '&' => 4,
+                                '<' => 3,
+                                '"' => 5,
+                                _ => 0,
+                            }
+                    })
+            };
+            let namespaces = || {
+                node.namespaces()
+                    .filter(|namespace| namespace.name() != Some("xml"))
+            };
+            let length = namespaces().fold(
+                "<recorded>".len() + source.len() + "</recorded>".len(),
+                |length, namespace| {
+                    length.saturating_add(
+                        " xmlns=\"\"".len()
+                            + namespace.name().map_or(0, |prefix| prefix.len() + 1)
+                            + escaped_len(namespace.uri()),
+                    )
+                },
+            );
+            if length > VML_SHAPE_TYPE_BYTE_LIMIT
+                || self.bytes.saturating_add(length) > VML_SHAPE_TYPE_TOTAL_BYTE_LIMIT
             {
                 continue;
             }
-            let mut xml = String::from("<recorded");
-            for namespace in node.namespaces() {
-                if namespace.name() == Some("xml") {
-                    continue;
-                }
+            let mut xml = String::with_capacity(length);
+            xml.push_str("<recorded");
+            for namespace in namespaces() {
                 xml.push_str(" xmlns");
                 if let Some(prefix) = namespace.name() {
                     xml.push(':');
@@ -12524,9 +12552,7 @@ impl VmlShapeTypeIndex {
             xml.push('>');
             xml.push_str(source);
             xml.push_str("</recorded>");
-            if self.bytes.saturating_add(xml.len()) > VML_SHAPE_TYPE_TOTAL_BYTE_LIMIT {
-                continue;
-            }
+            debug_assert_eq!(xml.len(), length);
             self.bytes += xml.len();
             self.types.insert(
                 id.to_string(),
@@ -32448,6 +32474,29 @@ mod vml_pict_tests {
             streamed.iter().map(|shape| red(shape)).collect::<Vec<_>>(),
             [false, true, true]
         );
+    }
+
+    /// The per-definition byte bound covers the re-declared namespaces, so a
+    /// tiny shape type under a huge inherited namespace is not recorded.
+    #[test]
+    fn recorded_shapetype_bound_counts_inherited_namespaces() {
+        let uri = format!("urn:{}", "x".repeat(70 * 1024));
+        let document = format!(
+            r##"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:big="{uri}"><w:body>
+              <w:p><w:r><w:pict><v:shapetype id="t" fillcolor="#ff0000"/></w:pict></w:r></w:p>
+              <w:p><w:r><w:pict><v:rect type="#t" style="width:20pt;height:30pt"/></w:pict></w:r></w:p>
+            </w:body></w:document>"##
+        );
+        let mut index = VmlShapeTypeIndex::default();
+        let parsed = roxmltree::Document::parse(&document).unwrap();
+        index.index(parsed.root_element());
+        assert!(index.types.is_empty());
+        assert_eq!(index.bytes, 0);
+        let small = document.replace(&uri, "urn:small");
+        let parsed = roxmltree::Document::parse(&small).unwrap();
+        index.index(parsed.root_element());
+        assert_eq!(index.types.len(), 1);
+        assert_eq!(index.bytes, index.types["t"].xml.len());
     }
 
     /// CSS relative positioning keeps the inline flow advance and offsets the
