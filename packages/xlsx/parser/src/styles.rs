@@ -249,8 +249,12 @@ pub(crate) fn parse_dxf(dxf_node: roxmltree::Node, theme_colors: &[String]) -> D
                         }
                     }
                 }
-                // In dxf, conditional format fills often only have bgColor; mirror into fgColor
-                if f.fg_color.is_none() && f.bg_color.is_some() {
+                // A differential format's solid fill shows its bgColor (Excel
+                // export of a table style whose firstRowStripe dxf carries a
+                // different fgColor paints the bgColor), unlike a cell fill's
+                // fgColor (§18.8.32); a fill with only bgColor (the common
+                // conditional-format form) is the same rule.
+                if f.bg_color.is_some() && (f.fg_color.is_none() || f.pattern_type == "solid") {
                     f.fg_color = f.bg_color.clone();
                 }
                 d.fill = Some(f);
@@ -776,6 +780,22 @@ mod strict_namespace_tests {
 
     fn theme() -> Vec<String> {
         vec!["#111111".into(); 12]
+    }
+
+    #[test]
+    fn differential_solid_fill_shows_its_background_color() {
+        let xml = format!(
+            r#"<styleSheet xmlns="{X_NS_STRICT}"><dxfs count="2">
+          <dxf><fill><patternFill patternType="solid"><fgColor rgb="FFD9D9D9"/><bgColor rgb="FFF2F2F2"/></patternFill></fill></dxf>
+          <dxf><fill><patternFill patternType="gray125"><fgColor rgb="FFD9D9D9"/><bgColor rgb="FFF2F2F2"/></patternFill></fill></dxf>
+        </dxfs></styleSheet>"#
+        );
+        let doc = roxmltree::Document::parse(&xml).unwrap();
+        let dxfs = parse_dxfs(&doc, &theme());
+        let fg = |i: usize| dxfs[i].fill.as_ref().unwrap().fg_color.clone();
+        assert_eq!(fg(0).as_deref(), Some("#F2F2F2"));
+        // A pattern keeps its pattern color.
+        assert_eq!(fg(1).as_deref(), Some("#D9D9D9"));
     }
 
     #[test]

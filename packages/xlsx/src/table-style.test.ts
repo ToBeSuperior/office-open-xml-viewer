@@ -74,6 +74,17 @@ describe('table style element layering', () => {
     );
   });
 
+  it('bands the visible rows only, around a hidden data row', () => {
+    const ws = table({ showColumnStripes: false, totalsRowCount: 0 }, [
+      element('firstRowStripe', fill('#000003')),
+    ]) as Worksheet & { rows: unknown[] };
+    (ws as unknown as { rows: unknown[] }).rows = [{ index: 2, hidden: true, cells: [] }];
+    const map = buildStructuredStyleMap(ws);
+    expect([2, 3, 4, 5, 6].map((r) => fg(map, r, 2))).toEqual(
+      [undefined, '#000003', undefined, '#000003', undefined],
+    );
+  });
+
   it('draws region border edges on the outline and horizontal/vertical inside', () => {
     const border = {
       font: null, fill: null,

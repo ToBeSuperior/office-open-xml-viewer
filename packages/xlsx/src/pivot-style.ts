@@ -223,8 +223,43 @@ const TABLE_ORDER = [
   'lastTotalCell',
 ] as const;
 
-/** The regions of every element kind for one Table (§18.18.77). */
-function tableRegions(t: TableInfo, sizes: Map<string, number>): Map<string, Rect[]> {
+/** Stripe bands over the visible lines `from..to`, cycling `first` (size a)
+ *  and `second` (size b) visible lines; hidden lines take no band. Each band
+ *  spans its first to last line (a band's outline edges are its region's). */
+function visibleBands(
+  from: number, to: number, a: number, b: number, hidden: (line: number) => boolean,
+): { first: Rect[]; second: Rect[] } {
+  const out = { first: [] as Rect[], second: [] as Rect[] };
+  let odd = true;
+  let left = Math.max(1, a);
+  let band: Rect | null = null;
+  for (let line = from; line <= to; line++) {
+    if (hidden(line)) continue;
+    if (!band) {
+      band = { top: line, bottom: line, left: 0, right: 0 };
+      (odd ? out.first : out.second).push(band);
+    }
+    band.bottom = line;
+    left -= 1;
+    if (left === 0) {
+      odd = !odd;
+      left = Math.max(1, odd ? a : b);
+      band = null;
+    }
+  }
+  return out;
+}
+
+/** The regions of every element kind for one Table (§18.18.77). Stripes
+ *  alternate over the visible rows and columns of the body: Excel re-bands a
+ *  table around hidden rows (a hidden first data row leaves the first stripe
+ *  on the next visible row in the sample-5 Excel export). */
+function tableRegions(
+  t: TableInfo,
+  sizes: Map<string, number>,
+  hiddenRow: (row: number) => boolean,
+  hiddenCol: (col: number) => boolean,
+): Map<string, Rect[]> {
   const { top, bottom, left, right } = t.range;
   const header = Math.max(0, t.headerRowCount ?? 1);
   const totals = Math.max(0, t.totalsRowCount ?? 0);
@@ -239,12 +274,12 @@ function tableRegions(t: TableInfo, sizes: Map<string, number>): Map<string, Rec
   };
   add('wholeTable', { top, bottom, left, right });
   if (t.showColumnStripes) {
-    const cols = bands(left, right, sizes.get('firstColumnStripe') ?? 1, sizes.get('secondColumnStripe') ?? 1);
+    const cols = visibleBands(left, right, sizes.get('firstColumnStripe') ?? 1, sizes.get('secondColumnStripe') ?? 1, hiddenCol);
     for (const band of cols.first) add('firstColumnStripe', { top: bodyTop, bottom: bodyBottom, left: band.top, right: band.bottom });
     for (const band of cols.second) add('secondColumnStripe', { top: bodyTop, bottom: bodyBottom, left: band.top, right: band.bottom });
   }
   if (t.showRowStripes) {
-    const rows = bands(bodyTop, bodyBottom, sizes.get('firstRowStripe') ?? 1, sizes.get('secondRowStripe') ?? 1);
+    const rows = visibleBands(bodyTop, bodyBottom, sizes.get('firstRowStripe') ?? 1, sizes.get('secondRowStripe') ?? 1, hiddenRow);
     for (const band of rows.first) add('firstRowStripe', { ...band, left, right });
     for (const band of rows.second) add('secondRowStripe', { ...band, left, right });
   }
@@ -300,12 +335,16 @@ export function buildStructuredStyleMap(worksheet: Worksheet): Map<string, Struc
     operation: 'expand-structured-style-coordinates',
     limit: getWorksheetPolicy(worksheet).maxCoordinateIndexEntries,
   };
+  const hiddenRows = new Set((worksheet.rows ?? []).filter((row) => row.hidden).map((row) => row.index));
+  const hiddenCols = worksheet.colHidden ?? {};
+  const hiddenRow = (row: number) => hiddenRows.has(row);
+  const hiddenCol = (col: number) => hiddenCols[col] === true;
   for (const table of worksheet.tables ?? []) {
     const elements = table.styleElements ?? [];
     if (elements.length === 0) continue;
     assertCoordinateRangeArea(table.range, identity);
     const sizes = new Map(elements.map((element) => [element.kind, element.size]));
-    layer(map, identity, TABLE_ORDER, elements, tableRegions(table, sizes), true);
+    layer(map, identity, TABLE_ORDER, elements, tableRegions(table, sizes, hiddenRow, hiddenCol), true);
   }
   for (const pivot of worksheet.pivotTables ?? []) {
     const style = pivot.style;

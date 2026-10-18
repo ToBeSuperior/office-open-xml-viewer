@@ -1150,8 +1150,14 @@ mod style_tests {
         assert!(header.dxf.font.as_ref().unwrap().bold);
         assert!(find("firstRowStripe").dxf.fill.is_some());
         // A PivotTable style name is not a Table style, and vice versa.
-        assert!(styles.table_elements("PivotStyleLight16", &theme).unwrap().is_none());
-        assert!(styles.elements("TableStyleMedium2", &theme).unwrap().is_none());
+        assert!(styles
+            .table_elements("PivotStyleLight16", &theme)
+            .unwrap()
+            .is_none());
+        assert!(styles
+            .elements("TableStyleMedium2", &theme)
+            .unwrap()
+            .is_none());
     }
 
     #[test]
