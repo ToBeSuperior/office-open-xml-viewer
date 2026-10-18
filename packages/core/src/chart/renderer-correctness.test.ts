@@ -25313,6 +25313,11 @@ describe('per-rendered-size preparation failures and sizes', () => {
       .toThrowError(expect.objectContaining({ code: 'unsupported-image-effect' }));
     // A further preparation round asks without rejecting, to learn the miss.
     expect(chartImageFillStoreLookup(store, undefined, false)(blurred, { widthPt: 20, heightPt: 10 })).toBeUndefined();
+    // A preparation round never substitutes a near-equal prepared size,
+    // although paint tolerates host rounding within 1%.
+    const near = { widthPt: 10, heightPt: 9.95 };
+    expect(chartImageFillStoreLookup(store, undefined, false)(blurred, near)).toBeUndefined();
+    expect(chartImageFillStoreLookup(store)(blurred, near)).toMatchObject({ width: 1 });
     // A fill that was never prepared stays an ordinary miss.
     expect(chartImageFillStoreLookup(new Map())(blurred, prepared)).toBeUndefined();
   });

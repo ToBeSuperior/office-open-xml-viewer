@@ -196,6 +196,9 @@ export function chartImageFillStoreLookup(
     if (occurrence) {
       const exact = store.get(chartFillRenderedSizeKey(fill, host, occurrence));
       if (exact !== undefined) return exact;
+      // A preparation round resolves exact canonical sizes only, so a
+      // near-equal size is decoded on its own physical frame.
+      if (!strict) return undefined;
     }
     // Work estimation (no occurrence) accepts any prepared size. A paint
     // occurrence whose host frame arithmetic differs from the preparation
