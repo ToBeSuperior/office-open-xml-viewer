@@ -136,6 +136,7 @@ import {
   isOoxmlDecodedImageLimitError,
   OoxmlDecodedImageLimitError,
   MAX_IMAGE_EFFECT_PASSES,
+  MAX_IMAGE_EFFECT_PIXEL_WORK,
   OoxmlResourceLimitError,
   OoxmlError,
   isTiffDecodeError,
@@ -2602,8 +2603,17 @@ function paintTiledBackground(
   const padCellsY = Math.ceil(reach.y / (flipY ? 2 : 1));
   const wrapDraws = (2 * padCellsX + 1) * (2 * padCellsY + 1) * (flipX ? 2 : 1) * (flipY ? 2 : 1);
   if (!Number.isSafeInteger(wrapDraws) || wrapDraws > MAX_IMAGE_EFFECT_PASSES * MAX_IMAGE_EFFECT_PASSES) {
+    aux.width = 0;
     throw new OoxmlDecodedImageLimitError('image-effect-work', MAX_IMAGE_EFFECT_PASSES * MAX_IMAGE_EFFECT_PASSES,
       Number.isSafeInteger(wrapDraws) ? wrapDraws : Number.MAX_SAFE_INTEGER);
+  }
+  // Each wrapped draw can touch the whole scratch cell; charge that pixel work
+  // against the shared effect work ceiling before drawing (resource policy).
+  const wrapWork = wrapDraws > (flipX ? 2 : 1) * (flipY ? 2 : 1) ? wrapDraws * scratchW * scratchH : 0;
+  if (!Number.isSafeInteger(wrapWork) || wrapWork > MAX_IMAGE_EFFECT_PIXEL_WORK) {
+    aux.width = 0;
+    throw new OoxmlDecodedImageLimitError('image-effect-work', MAX_IMAGE_EFFECT_PIXEL_WORK,
+      Number.isSafeInteger(wrapWork) ? wrapWork : Number.MAX_SAFE_INTEGER);
   }
   for (let j = -padCellsY; j <= padCellsY; j++) {
     for (let i = -padCellsX; i <= padCellsX; i++) {
@@ -2724,11 +2734,17 @@ export function paintPreparedShapeImageFill(
       const coverW = w * cos + h * sin;
       const coverH = w * sin + h * cos;
       ctx.translate(x, y);
-      return paintTiledBackground(
-        ctx, prepared.image, fill.tile, w, h, scale, fill.srcRect, prepared.intrinsicSize,
-        fill.dpi && fill.dpi > 0 ? fill.dpi : 96,
-        { x: (w - coverW) / 2, y: (h - coverH) / 2, w: coverW, h: coverH },
-      );
+      try {
+        return paintTiledBackground(
+          ctx, prepared.image, fill.tile, w, h, scale, fill.srcRect, prepared.intrinsicSize,
+          fill.dpi && fill.dpi > 0 ? fill.dpi : 96,
+          { x: (w - coverW) / 2, y: (h - coverH) / 2, w: coverW, h: coverH },
+        );
+      } catch (error) {
+        // A fill carrying a CT_Blip chain is strict end to end: a native tile
+        // surface/pattern failure is its typed diagnostic.
+        throw fill.blipEffects?.length ? imageEffectError(error) : error;
+      }
     }
     const rect = fill.fillRect ?? {};
     const dx = x + (rect.l ?? 0) * w;
