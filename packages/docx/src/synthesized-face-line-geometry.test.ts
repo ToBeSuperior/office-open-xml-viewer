@@ -95,6 +95,22 @@ describe('bold runs of a face catalogued only at 400 (#1848)', () => {
     expect(comparisons).toEqual([]);
   });
 
+  it('keeps a bold anchor host outside the synthesized geometry', () => {
+    // The anchor character of a floating object has no span of its own: a
+    // bold host whose East Asian slot names a regular-only face keeps its
+    // Canvas box (the stub's 8 + 2) even where the raster proof would
+    // succeed and would give 1.3 em (rule scope).
+    const { layoutServices, comparisons } = minchoServices(true);
+    const segments = buildSegments([{
+      type: 'anchorHost', fontSize: 14, fontFamily: 'MS Mincho', fontFamilyEastAsia: 'MS Mincho',
+      bold: true,
+    }] as DocRun[], { pageIndex: 0, totalPages: 1, layoutServices: layoutServices as never });
+    const line = layoutLines(context, segments, 400, 0, 1)[0]!;
+    expect(lineBoxHeight(null, line.ascent, line.descent, 1, undefined, false,
+      line.intendedSingle, true, line.gridCountSingle)).toBeCloseTo(10, 8);
+    expect(comparisons).toEqual([]);
+  });
+
   it('declines a span whose glyphs fall back to another face', () => {
     // Korean authored in MS Mincho: the face paints the probe identically,
     // but the span's own glyphs come from a fallback face.

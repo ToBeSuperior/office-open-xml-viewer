@@ -62,7 +62,6 @@ import {
   selectResourceAverageWidthRatio,
   selectResourceMetric,
   allowsReferenceFontMetric,
-  authoredReferenceVerticalMetric,
   selectedFontLineMetric,
   type MetricTupleIndex,
 } from './font-metrics.js';
@@ -1996,10 +1995,10 @@ function appendRunsToSegments(
         naturalMetricAllowed && !resourceMetric && mayUseAuthoredReferenceVerticalMetric(selected)
           && allowsReferenceFontMetric(indexedFontMetrics(environment.layoutServices?.text.fontMetrics
             ?? environment.layoutServices?.text.localMetrics ?? {}), selected)
-          ? (selected.weight === weight && selected.style === style
-            ? authoredReferenceVerticalMetric(selected, environment.layoutServices
-              ? { text: environment.layoutServices.text, probe: probeText } : undefined)
-            : referenceFontLineMetrics(selected.requestedFamily, weight, style))
+          // LIBRARY_SYNTHESIZED_FACE_LINE_GEOMETRY covers measured text
+          // spans and paragraph marks only; an anchor host is outside its
+          // evidence, so only an exact catalogued tuple lends its geometry.
+          ? referenceFontLineMetrics(selected.requestedFamily, weight, style)
           : undefined;
       const familyLineMetric = resourceMetric ?? referenceMetric;
       segs.push({

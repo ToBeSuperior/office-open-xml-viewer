@@ -66,6 +66,10 @@ pub(super) fn build(
                 settings.balance_single_byte_double_byte_width,
             ),
             character_spacing_control: settings.character_spacing_control.map(str::to_string),
+            // Word opens every Word 97-2003 binary document in compatibility
+            // mode 11 (WdCompatibilityMode.wdWord2003, Document.CompatibilityMode);
+            // a .doc file has no w:compatSetting of its own to carry it.
+            compatibility_mode: Some(11),
             ..DocumentSettings::default()
         });
     let document_typography_settings = Some(DocumentTypographySettingsWire {
