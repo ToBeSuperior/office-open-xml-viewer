@@ -47,8 +47,9 @@ export type NativeRoutePrimaryAdmission = (
 //   sentinel A: advance 0.50 em, box 0.70 / 0.20 em, ink 8 em up / 3 em down
 //   sentinel B: advance 0.75 em, box 0.60 / 0.30 em, ink 9 em up / 4 em down
 //
-// The ink reaches far beyond any text glyph, so a sentinel glyph shows in the
-// measured ink box even when it is a zero-advance mark over a wide base.
+// A sentinel glyph therefore makes the cluster's ink box at least 11 em tall
+// wherever it is placed, unless the cluster's own ink is that tall already
+// (then ownership is not claimed).
 //
 // Appending a sentinel to a family-list prefix ends font fallback there: every
 // cluster the prefix cannot draw is drawn by the sentinel, never by a later
@@ -127,7 +128,7 @@ function sentinelFontBytes(
   for (const [start, end] of groups) cmap13.push(...u32(start), ...u32(end), ...u32(1));
   const tables: Record<string, number[]> = {
     'OS/2': [
-      ...u16(4), ...i16(advance), ...u16(400), ...u16(5), ...u16(0), ...zeros(20),
+      ...u16(4), ...i16(advance), ...u16(400), ...u16(5), ...u16(0), ...zeros(16),
       ...i16(50), ...i16(250), ...i16(0), ...zeros(10), ...zeros(16), 0x4f, 0x4f, 0x58, 0x4d,
       ...u16(0x00c0), ...u16(0x20), ...u16(0xffff),
       ...i16(ascent), ...i16(-descent), ...i16(0), ...u16(ascent), ...u16(descent),
@@ -533,6 +534,8 @@ export function nativeRouteOwnershipFonts(
   ];
 }
 
+const SENTINEL_A_INK_PX = (SENTINELS[0].inkUp + SENTINELS[0].inkDown) * PROBE_EM / SENTINEL_UPM;
+
 const SENTINEL_ONLY_FONTS = [
   `${PROBE_EM}px ${quoteCssFontFamily(SENTINEL_FAMILIES[0])}`,
   `${PROBE_EM}px ${quoteCssFontFamily(SENTINEL_FAMILIES[1])}`,
@@ -543,9 +546,10 @@ const ownershipFonts: (string | undefined)[] = [];
 /** Route-independent control results, bounded like the per-route caches. */
 const sentinelControls = new Map<string, boolean>();
 
-/** Advance and ink extents. Any sentinel glyph changes the ink ascent (8 em
- * vs 9 em, beyond every text glyph), also when the shaper zeroes the advance
- * of a mark it draws over a wider base glyph. */
+/** Advance and ink extents. A sentinel glyph is an ink bar 11 em (A) or
+ * 13 em (B) tall; wherever a shaper places it (a zero-advance mark over a
+ * wide base, raised or lowered by fallback mark positioning), the cluster's
+ * ink box is then at least that tall. */
 function geometry(context: CanvasFontBoxProbeContext, text: string): readonly number[] {
   const measured = context.measureText(text);
   return [
@@ -607,7 +611,11 @@ export function nativeRouteClusterOwned(
   if (!routed) return false;
   const measured = measurePair(fonts, cluster);
   if (!measured) return undefined;
-  return sameGeometry(measured[0]!, measured[1]!);
+  // Equal geometry proves no sentinel glyph only while the cluster's own ink
+  // could not mask one: an ink box at least as tall as sentinel A's bar
+  // (stacked marks) may contain it, so such a cluster is not owned.
+  const [, , , ascent, descent] = measured[0]!;
+  return sameGeometry(measured[0]!, measured[1]!) && ascent! + descent! < SENTINEL_A_INK_PX;
 }
 
 /** The sentinels are registered and applied in this realm (once per prepared

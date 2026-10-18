@@ -47,6 +47,7 @@ import { ProgressiveLayoutObserverNotifier } from '@silurus/ooxml-core/internal/
 import type { DocxDocumentModel, RenderPageOptions, WorkerRequest, WorkerResponse, DocComment, DocNote, DocRevision } from './types';
 import { renderLayoutSourceToCanvas, documentHasMath, prepareMathRuns, type DocxTextRunInfo } from './renderer';
 import { createLayoutServices, nativeRouteLineRequests } from './layout-runtime.js';
+import { mainThreadFallbackWarning } from './main-thread-fallback.js';
 import { admitDocxNativeRouteLines, measureDocxNativeRouteLines } from './native-route-line-metrics.js';
 import { buildBookmarkPageMap } from './bookmark-nav';
 import { DOCX_GOOGLE_FONTS, docxGoogleFontPlan, docxOfficeFontFallbackRequests } from './google-fonts';
@@ -415,6 +416,8 @@ export class DocxDocument {
   private _embeddedFontFaces: FontFace[] = [];
   /** Library-owned exact-local or pinned substitute faces in main mode. */
   private _officeFontFaces: FontFace[] = [];
+  /** Why a worker-mode load continued on the main thread. */
+  _mainThreadFallbackReason: 'vertical' | 'nativeRouteSentinels' = 'vertical';
   /** Native route sentinels (native-route-line-metrics.ts), main mode. */
   private _nativeRouteFaces: FontFace[] = [];
   private _nativeRouteFacesReleased = false;
@@ -590,9 +593,7 @@ export class DocxDocument {
       checkAbort();
       if (mode === 'worker' && doc._mode === 'main') {
         metrics.setMode('main');
-        console.warn(
-          "[ooxml] mode: 'worker' fell back to main-thread rendering because this document requires DOM OpenType vertical glyph selection.",
-        );
+        console.warn(mainThreadFallbackWarning(doc._mainThreadFallbackReason));
       }
       if (opts.math && doc._mode === 'worker' && !rendererDescriptors?.math) {
         console.warn(
@@ -1008,6 +1009,7 @@ export class DocxDocument {
         this._document = adapted.document;
         this._meta = null;
         this._mode = 'main';
+        this._mainThreadFallbackReason = res.reason ?? 'vertical';
       } else {
         this._meta = (res as Extract<RenderWorkerResponse, { type: 'parsedMeta' }>).meta;
       }
@@ -1355,6 +1357,7 @@ export class DocxDocument {
           this._document = adapted.document;
           this._meta = null;
           this._mode = 'main';
+          this._mainThreadFallbackReason = res.reason ?? 'vertical';
           this._review = snapshotReviewData(
             adapted.document.comments ?? [],
             adapted.document.revisions ?? [],

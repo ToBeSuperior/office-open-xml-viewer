@@ -323,6 +323,7 @@ self.onmessage = async (e: MessageEvent<RenderWorkerWireRequest | WorkerSvgDecod
         post({
           type: 'mainThreadVerticalFallback',
           id,
+          ...(nativeSentinels ? {} : { reason: 'nativeRouteSentinels' as const }),
           ...fallbackIdentity,
           usage: resourceUsage,
           ...(req.source ? { viewDefaults } : {}),

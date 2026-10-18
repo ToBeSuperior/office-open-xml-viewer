@@ -169,14 +169,17 @@ describe.skipIf(!existsSync(chromium.executablePath()))('DOCX native route line 
           const [line] = oracle.measureNativeRouteNormalLines([{ familyList: list, weight: 400, style: 'normal' }],
             document, () => true);
           if (line?.primaryFamily !== 'Arial') return null;
+          // Stacked marks whose own ink could hide a sentinel bar.
+          const STACKED = '\u0174' + '\u0301'.repeat(100) + '\u0323'.repeat(100) + '\ufe2e';
           const fonts = oracle.nativeRouteOwnershipFonts(line.primaryFamilyText, 400, 'normal');
-          return Object.fromEntries(['A', 'e\u0301', ' ', '\u6f22', '\u2764\ufe0f', '1\ufe0f\u20e3', 'a\u1ab0', '\u041c\u1ab0', '\u0174\ufe2e', '\u2764\ufe0f\u0301', '\u{1f600}']
+          return Object.fromEntries(['A', 'e\u0301', ' ', '\u6f22', '\u2764\ufe0f', '1\ufe0f\u20e3', 'a\u1ab0', '\u041c\u1ab0', '\u0174\ufe2e', '\u2764\ufe0f\u0301', '\u{1f600}', STACKED]
             .map(cluster => [cluster, oracle.nativeRouteClusterOwned(fonts, cluster)]));
         }, ABSENT);
         if (!result) test.skip();
+        const STACKED = '\u0174' + '\u0301'.repeat(100) + '\u0323'.repeat(100) + '\ufe2e';
         expect(result!['A']).toBe(true);
         expect(result![' ']).toBe(true);
-        for (const cluster of ['\u6f22', '\u2764\ufe0f', '1\ufe0f\u20e3', 'a\u1ab0', '\u041c\u1ab0', '\u0174\ufe2e', '\u2764\ufe0f\u0301', '\u{1f600}']) {
+        for (const cluster of ['\u6f22', '\u2764\ufe0f', '1\ufe0f\u20e3', 'a\u1ab0', '\u041c\u1ab0', '\u0174\ufe2e', '\u2764\ufe0f\u0301', '\u{1f600}', STACKED]) {
           expect(result![cluster], cluster).not.toBe(true);
         }
       } finally {

@@ -45,6 +45,7 @@ import { ProgressiveLayoutObserverNotifier } from '@silurus/ooxml-core/internal/
 import type { DocxDocumentModel, RenderPageOptions, WorkerRequest, WorkerResponse, DocComment, DocNote, DocRevision } from '../types';
 import { renderLayoutSourceToCanvas, documentHasMath, prepareMathRuns, type DocxTextRunInfo } from '../renderer';
 import { createLayoutServices, prepareMainThreadNativeRouteMetrics } from '../layout-runtime.js';
+import { mainThreadFallbackWarning } from '../main-thread-fallback.js';
 import { buildBookmarkPageMap } from '../bookmark-nav';
 import { DOCX_GOOGLE_FONTS, docxGoogleFontPlan, docxOfficeFontFallbackRequests } from '../google-fonts';
 import { loadEmbeddedFonts } from '../embedded-fonts';
@@ -261,9 +262,7 @@ export async function loadDocxModelSource(
       );
       if (mode === 'worker' && doc._mode === 'main') {
         metrics.setMode('main');
-        console.warn(
-          "[ooxml] mode: 'worker' fell back to main-thread rendering because this document requires DOM OpenType vertical glyph selection.",
-        );
+        console.warn(mainThreadFallbackWarning(doc._mainThreadFallbackReason));
       }
       if (opts.math && doc._mode === 'worker' && !rendererDescriptors?.math) {
         console.warn(

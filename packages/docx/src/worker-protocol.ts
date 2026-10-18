@@ -188,6 +188,8 @@ export type RenderWorkerResponse =
   | ({
       type: 'mainThreadVerticalFallback';
       id: number;
+      /** Omitted for DOM vertical glyph selection. */
+      reason?: 'nativeRouteSentinels';
       usage?: OoxmlResourceUsageSnapshot;
       /** The model source's own view preferences, validated in the worker. */
       viewDefaults?: { showTrackedChanges?: boolean };
