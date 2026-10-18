@@ -15656,6 +15656,7 @@ fn parse_table_with_diagnostics(
         layout: table_layout_kind_acquisition(tbl_pr.and_then(|p| child_w(p, "tblLayout"))),
         cell_spacing: table_width_acquisition(tbl_pr.and_then(|p| child_w(p, "tblCellSpacing"))),
         cell_margins: table_margin_acquisition(tbl_pr.and_then(|p| child_w(p, "tblCellMar"))),
+        outer_edge_indent: false,
     };
 
     DocTable {

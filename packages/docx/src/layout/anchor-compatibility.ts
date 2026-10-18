@@ -208,7 +208,7 @@ export const WORD_MODE14_COLUMN_LINE_START_ORIGIN = defineCompatibilityRule({
     version: '16.113.2',
     platform: 'macOS 27.0',
   },
-  description: 'In compatibility mode 14 a positionH posOffset relative to the column is measured from the left edge of the first free gap of the anchor paragraph first-line band (at the paragraph content start, before any float pushes the line down), around the floats of other paragraphs only; paragraph indents and alignment do not move it. The resolved position is kept when the line later moves. Mode 15 measures from the column edge. Alignment and percentage offsets are unmeasured and keep the column edge. Windows Word 16.0 build 16.0.20430 retest: Both platforms place the single picture at x=79.05pt, y=288pt, with identical source line partitions. There is no earlier wrapping float in these selected controls. Column edge and first-free-gap origin coincide, so the pair tests an unobstructed counterexample only and cannot validate the mode-14 displaced-origin branch. Keep the original Mac rule.',
+  description: 'In compatibility mode 14 a positionH posOffset relative to the column is measured from the left edge of the first free gap of the anchor paragraph first-line band (at the paragraph content start, before any float pushes the line down), around the floats of other paragraphs only; paragraph indents and alignment do not move it. The resolved position is kept when the line later moves. Mode 15 measures from the column edge. Alignment and percentage offsets, and modes below 14, are unmeasured and keep the column edge. Windows Word 16.0 build 16.0.20430 retest: Both platforms place the single picture at x=79.05pt, y=288pt, with identical source line partitions. There is no earlier wrapping float in these selected controls. Column edge and first-free-gap origin coincide, so the pair tests an unobstructed counterexample only and cannot validate the mode-14 displaced-origin branch. Keep the original Mac rule.',
 });
 
 export const WORD_TIGHT_WRAP_BOTTOM_EDGE = defineCompatibilityRule({
@@ -274,7 +274,7 @@ export const WORD_MODE14_TIGHT_ANCHOR_LINE_REWRAP = defineCompatibilityRule({
     version: '16.113.2',
     platform: 'macOS 27.0',
   },
-  description: 'In compatibility mode 14 the line holding a wrapTight anchor is first laid out without that object; it is laid out again around the object (with distL/distR) only when the unpadded polygon intersects the line content, an empty paragraph mark counting as one paragraph-mark em. Mode 15 and square wrap always wrap the anchor line.',
+  description: 'In compatibility mode 14 the line holding a wrapTight anchor is first laid out without that object; it is laid out again around the object (with distL/distR) only when the unpadded polygon intersects the line content, an empty paragraph mark counting as one paragraph-mark em. Mode 15, unmeasured modes below 14 and square wrap always wrap the anchor line.',
 });
 
 export const WORD_LATER_ANCHOR_EARLIER_LINE_WRAP = defineCompatibilityRule({

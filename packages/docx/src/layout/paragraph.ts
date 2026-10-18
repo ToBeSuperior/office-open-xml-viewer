@@ -4005,8 +4005,7 @@ function acquireAnchorOccurrence(
       ? { anchorLineExemptTopPt: options.anchorLineExemptions.get(occurrenceId)! }
       : {}),
     ...(effectiveResult.geometry.wrap.kind === 'tight'
-      && options.environment.compatibilityMode !== undefined
-      && options.environment.compatibilityMode <= 14
+      && options.environment.compatibilityMode === 14
       ? { wordMode14TightAnchor: true }
       : {}),
     verticalOwnership: anchorAxisOwnership(
@@ -4752,7 +4751,7 @@ function wordMode14AnchorLineExemptions(
 ): ReadonlyMap<string, number> {
   const mode = options.environment.compatibilityMode;
   const exemptions = new Map<string, number>();
-  if (mode === undefined || mode > 14) return exemptions;
+  if (mode !== 14) return exemptions;
   for (const exclusion of ownedExclusions) {
     if (exclusion.wrap !== 'tight' || exclusion.anchorOccurrenceId === undefined) continue;
     const line = layout.lines.find((candidate) => candidate.placements.some((placement) =>
@@ -4785,8 +4784,7 @@ function wordMode14ColumnOriginApplies(
   options: ParagraphAcquisitionOptions,
 ): boolean {
   const mode = options.environment.compatibilityMode;
-  return mode !== undefined
-    && mode <= 14
+  return mode === 14
     && options.ordinaryFlow
     && acquisition.simplePosition.enabled !== true
     && acquisition.horizontal.relativeFromStatus === 'valid'

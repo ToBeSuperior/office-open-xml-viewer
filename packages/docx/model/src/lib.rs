@@ -3672,6 +3672,11 @@ pub struct TableLayoutAcquisitionWire {
     pub layout: Option<TableLayoutKindAcquisitionWire>,
     pub cell_spacing: Option<TableWidthAcquisitionWire>,
     pub cell_margins: Option<TableMarginAcquisitionWire>,
+    /// The producer supplies the table indent as the physical outer table
+    /// edge and its own grid, not the OOXML leading text edge that
+    /// compatibility modes below 15 hang the first cell margin from.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub outer_edge_indent: bool,
 }
 
 #[derive(Serialize, Debug, Clone, Default)]

@@ -899,6 +899,7 @@ export function tableFormatInput(table: TableLayoutSource): TableFormatInput {
   const input = snapshotPlainData({
     effectiveStyleId: acquisition.table?.effectiveStyleId ?? null,
     ordinaryFlow,
+    ...(acquisition.table?.outerEdgeIndent === true ? { outerEdgeIndent: true } : {}),
     // §17.4.37 membership is decided by the parser; carry its facts verbatim.
     logicalSequenceId: acquisition.table?.logicalSequenceId ?? null,
     logicalRowOffset: acquisition.table?.logicalRowOffset ?? 0,

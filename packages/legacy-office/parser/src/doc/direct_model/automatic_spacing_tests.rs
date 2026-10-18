@@ -259,6 +259,8 @@ fn automatic_spacing_dop_setting_reaches_canonical_document_without_neighbor_bit
             "DOP {size}, flags {flags}"
         );
         assert_eq!(settings.adjust_line_height_in_table, Some(flags & 8 == 0));
+        // Word opens every binary document in compatibility mode 11.
+        assert_eq!(settings.compatibility_mode, Some(11));
         // A declared complete DOP must not read bit2 from a truncated payload.
         table.pop();
         let truncated = build_scoped_cfb(&[("WordDocument", word), ("0Table", table)]);
@@ -268,5 +270,9 @@ fn automatic_spacing_dop_setting_reaches_canonical_document_without_neighbor_bit
                 .contains("truncated Word document properties")
         );
     }
-    assert!(document(&base("absent\r")).settings.is_none());
+    // Without a DOP only the format's compatibility mode is known.
+    let absent = document(&base("absent\r")).settings.unwrap();
+    assert_eq!(absent.compatibility_mode, Some(11));
+    assert_eq!(absent.default_tab_stop, None);
+    assert_eq!(absent.adjust_line_height_in_table, None);
 }

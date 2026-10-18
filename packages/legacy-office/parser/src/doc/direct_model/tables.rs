@@ -457,6 +457,7 @@ fn project_table(
             effective_style_id: None,
             cell_frame,
             ordinary_flow,
+            outer_edge_indent: true,
             logical_sequence_id: format!("legacy-doc/table/{sequence}"),
             logical_row_offset: 0,
             logical_total_rows: row_count,
@@ -967,6 +968,8 @@ mod tests {
         assert_eq!(table.table_layout.logical_row_offset, 0);
         assert_eq!(table.table_layout.logical_total_rows, 1);
         assert!(table.table_layout.ordinary_flow);
+        // The TDefTable boundary is the physical outer edge ([MS-DOC] 2.9.321).
+        assert!(table.table_layout.outer_edge_indent);
     }
     #[test]
     fn tcgrf_text_flow_projects_and_rotated_cells_with_nested_tables_fail_closed() {

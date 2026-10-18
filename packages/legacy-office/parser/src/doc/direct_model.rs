@@ -54,10 +54,12 @@ pub(super) fn build(
             ));
         }
     };
-    let settings = facts
-        .document_settings
-        .as_ref()
-        .map(|settings| DocumentSettings {
+    // Word opens every Word 97-2003 binary document in compatibility mode 11
+    // (WdCompatibilityMode.wdWord2003, Document.CompatibilityMode); a .doc
+    // file has no w:compatSetting of its own, and the mode does not depend on
+    // the DOP, so a recovered document without one keeps it too.
+    let settings = Some(match facts.document_settings.as_ref() {
+        Some(settings) => DocumentSettings {
             default_tab_stop: Some(f64::from(settings.default_tab_twips) / 20.0),
             adjust_line_height_in_table: Some(settings.adjust_line_height_in_table),
             split_pg_break_and_para_mark: settings.split_pg_break_and_para_mark,
@@ -66,8 +68,14 @@ pub(super) fn build(
                 settings.balance_single_byte_double_byte_width,
             ),
             character_spacing_control: settings.character_spacing_control.map(str::to_string),
+            compatibility_mode: Some(11),
             ..DocumentSettings::default()
-        });
+        },
+        None => DocumentSettings {
+            compatibility_mode: Some(11),
+            ..DocumentSettings::default()
+        },
+    });
     let document_typography_settings = Some(DocumentTypographySettingsWire {
         normal_style_font_size_pt: facts.formatting.direct_normal_style_font_size_pt()?,
     });

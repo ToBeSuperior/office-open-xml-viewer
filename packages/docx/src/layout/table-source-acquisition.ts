@@ -40,6 +40,9 @@ export interface TableLayoutAcquisitionWire {
   readonly effectiveStyleId: string | null;
   readonly cellFrame?: DeepReadonly<FramePr> | null;
   readonly ordinaryFlow: boolean;
+  /** The producer supplies the indent as the physical outer table edge and
+   * its own grid, so OOXML table compatibility modes do not apply. */
+  readonly outerEdgeIndent?: boolean;
   readonly logicalSequenceId?: string | null;
   readonly logicalRowOffset?: number;
   readonly logicalTotalRows?: number;

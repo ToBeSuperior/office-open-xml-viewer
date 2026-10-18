@@ -1454,6 +1454,8 @@ export interface TableRowFormatInput {
 export interface TableFormatInput {
   readonly effectiveStyleId: string | null;
   readonly ordinaryFlow: boolean;
+  /** The producer supplies the indent as the physical outer table edge. */
+  readonly outerEdgeIndent?: boolean;
   /** Parser-owned ECMA-376 §17.4.37 logical table membership. */
   readonly logicalSequenceId?: string | null;
   readonly logicalRowOffset?: number;
