@@ -465,6 +465,68 @@ pub struct StyleMap {
     default_table_style_id: Option<String>,
 }
 
+/// Library resource policy, not an ECMA-376 rule: §17.7.4.3 `basedOn` chains
+/// have no normative length limit, but every paragraph, run and table
+/// resolves its whole chain, so a long chain multiplies parse work by the
+/// number of resolutions. Word-authored documents in the private corpus stay
+/// at five or fewer levels; 64 leaves ample headroom while bounding each
+/// resolution. A longer chain fails closed with a typed resource error.
+pub(crate) const MAX_STYLE_INHERITANCE_DEPTH: usize = 64;
+
+/// The largest number of distinct styles any one `basedOn` chain applies,
+/// counted exactly as [`StyleMap::apply_style_chain`] and
+/// [`StyleMap::resolve_table_style`] walk it (a cycle stops at the first
+/// revisited style; a missing parent ends the chain). `styles` maps each style
+/// id to its `basedOn`; each style is resolved once, so this is linear.
+/// The walk stops as soon as a chain is proven longer than `limit`, so its
+/// per-walk state never grows past `limit + 1` entries.
+fn max_style_inheritance_depth(styles: &HashMap<&str, Option<&str>>, limit: usize) -> usize {
+    let mut depth: HashMap<&str, usize> = HashMap::with_capacity(styles.len());
+    let mut deepest = 0;
+    let mut path: Vec<&str> = Vec::new();
+    let mut on_path: HashMap<&str, usize> = HashMap::new();
+    for &start in styles.keys() {
+        path.clear();
+        on_path.clear();
+        let mut current = Some(start);
+        // Depth of the style that ends the walk's unresolved suffix.
+        let mut tail = 0;
+        while let Some(id) = current {
+            if let Some(&known) = depth.get(id) {
+                tail = known;
+                break;
+            }
+            if path.len() > limit {
+                return path.len();
+            }
+            let Some(&based_on) = styles.get(id) else {
+                break;
+            };
+            if let Some(&cycle_start) = on_path.get(id) {
+                // Every style on the cycle walks the whole cycle once.
+                let cycle_len = path.len() - cycle_start;
+                for member in path.drain(cycle_start..) {
+                    depth.insert(member, cycle_len);
+                }
+                tail = cycle_len;
+                break;
+            }
+            on_path.insert(id, path.len());
+            path.push(id);
+            current = based_on;
+        }
+        for member in path.drain(..).rev() {
+            tail += 1;
+            depth.insert(member, tail);
+        }
+        if tail > limit {
+            return tail;
+        }
+        deepest = deepest.max(tail);
+    }
+    deepest
+}
+
 impl StyleMap {
     /// Style ID of the paragraph style marked `w:default="1"` in styles.xml.
     /// International templates may use non-English IDs (e.g. "a", "標準").
@@ -494,7 +556,14 @@ impl StyleMap {
         self.table_styles.contains_key(style_id)
     }
 
+    #[cfg(test)]
     pub fn parse(xml: &str) -> Self {
+        Self::parse_part(xml, "word/styles.xml")
+    }
+
+    /// [`StyleMap::parse`] for the styles part at `part` (the document
+    /// relationship target), which a resource-limit error names.
+    pub fn parse_part(xml: &str, part: &str) -> Self {
         let doc = match parse_guarded(xml) {
             Ok(d) => d,
             // Malformed optional styles may degrade. A depth crossing has
@@ -603,6 +672,33 @@ impl StyleMap {
                     based_on,
                 },
             );
+        }
+
+        // Table styles resolve through their own map (`resolve_table_style`),
+        // which a later same-id paragraph/character declaration does not
+        // overwrite, so both inheritance graphs are bounded.
+        let style_graph: HashMap<&str, Option<&str>> = styles
+            .iter()
+            .map(|(id, def)| (id.as_str(), def.based_on.as_deref()))
+            .collect();
+        let table_graph: HashMap<&str, Option<&str>> = table_styles
+            .iter()
+            .map(|(id, def)| (id.as_str(), def.based_on.as_deref()))
+            .collect();
+        let depth = max_style_inheritance_depth(&style_graph, MAX_STYLE_INHERITANCE_DEPTH).max(
+            max_style_inheritance_depth(&table_graph, MAX_STYLE_INHERITANCE_DEPTH),
+        );
+        drop((style_graph, table_graph));
+        if depth > MAX_STYLE_INHERITANCE_DEPTH {
+            // Latches the typed resource error for the package operation; the
+            // unbounded cascade is never resolved.
+            let _ = ooxml_common::resource::observe_hard_limit(
+                ooxml_common::resource::HardResourceLimitKind::DocxStyleInheritanceDepth,
+                Some(part),
+                MAX_STYLE_INHERITANCE_DEPTH as u64,
+                depth as u64,
+            );
+            return Self::empty();
         }
 
         StyleMap {

@@ -263,6 +263,7 @@ enum TextFlow {
 }
 
 impl TextFlow {
+    #[cfg(test)]
     fn raw(self) -> u16 {
         match self {
             Self::HorzN => 0,

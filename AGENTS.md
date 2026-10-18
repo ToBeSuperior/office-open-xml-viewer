@@ -451,7 +451,8 @@ When the user asks for a release, prepare a dedicated PR named
 
 Release checklist:
 
-1. Update README screenshots in `docs/images/{pptx,docx,xlsx}.png`.
+1. Update README screenshots in `docs/images/{pptx,docx,xlsx}.png` with
+   `pnpm screenshots:readme`.
 2. Review README against the current implementation:
    - ESM-only package format,
    - install/import examples,

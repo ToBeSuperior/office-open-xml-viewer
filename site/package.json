@@ -5,16 +5,12 @@
   "type": "module",
   "description": "Showcase / marketing site for @silurus/ooxml",
   "scripts": {
-    "copy-samples": "node scripts/copy-samples.mjs",
     "predev": "pnpm --filter @silurus/ooxml-legacy-office build && node scripts/copy-samples.mjs",
     "prebuild": "pnpm --filter @silurus/ooxml-legacy-office build && node scripts/copy-samples.mjs",
-    "prebuild:ci": "pnpm --filter @silurus/ooxml-legacy-office build && node scripts/copy-samples.mjs",
     "dev": "astro dev",
     "build": "astro build",
-    "build:ci": "astro build",
     "preview": "astro preview",
-    "postbuild": "node ../scripts/build-model-source-sidecars.mjs --out-dir dist/_astro",
-    "postbuild:ci": "node ../scripts/build-model-source-sidecars.mjs --out-dir dist/_astro"
+    "postbuild": "node ../scripts/build-model-source-sidecars.mjs --out-dir dist/_astro"
   },
   "dependencies": {
     "@silurus/ooxml-core": "workspace:*",

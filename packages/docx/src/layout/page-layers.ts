@@ -15,7 +15,7 @@ import type {
   TableLayout,
   TextBoxLayout,
 } from './types.js';
-import { noteOwnedBlocks } from './native-note-separators.js';
+import { noteOwnedBlocks } from './reserved-note-separators.js';
 
 export const PAGE_LAYER_IDS = [
   'background',

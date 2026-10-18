@@ -28,18 +28,19 @@ pub const PARSE_DIAGNOSTIC_SEVERITY_INVALID_DRAWING_EXTENT: DiagnosticSeverity =
     DiagnosticSeverity::Error;
 pub const PARSE_DIAGNOSTIC_SEVERITY_DEGENERATE_DRAWING_EXTENT: DiagnosticSeverity =
     DiagnosticSeverity::Warning;
-/// Native DOC nested-cell paragraph frames kept as `framePr` facts while the
-/// shared consumer lays their tables out in ordinary cell flow. Word's native
-/// DOC positioning of such frames is not established; this is a library
-/// fallback, reported rather than silent.
-pub const PARSE_DIAGNOSTIC_CODE_NATIVE_DOC_NESTED_CELL_FRAME_FLOW: &str =
-    "NATIVE_DOC_NESTED_CELL_FRAME_FLOW";
-pub const PARSE_DIAGNOSTIC_SEVERITY_NATIVE_DOC_NESTED_CELL_FRAME_FLOW: DiagnosticSeverity =
+/// Nested-cell paragraph frames a producer retained as `framePr` facts while
+/// the shared consumer lays their tables out in ordinary cell flow. Word
+/// evidence for that flow covers WordprocessingML sources only, so a producer
+/// whose source format has no such evidence reports it rather than staying
+/// silent. The WordprocessingML parser never emits this code.
+pub const PARSE_DIAGNOSTIC_CODE_NESTED_CELL_FRAME_FLOW: &str = "NESTED_CELL_FRAME_FLOW";
+pub const PARSE_DIAGNOSTIC_SEVERITY_NESTED_CELL_FRAME_FLOW: DiagnosticSeverity =
     DiagnosticSeverity::Warning;
-/// Source part of a code-specific fact: the [MS-DOC] main stream of a native
-/// Word binary. A code without its own part constant is a WordprocessingML
-/// `word/document.xml` fact; layout accepts each code only from its own part.
-pub const PARSE_DIAGNOSTIC_PART_NATIVE_DOC_NESTED_CELL_FRAME_FLOW: &str = "WordDocument";
+/// Source part of a code-specific fact: the main document story of a
+/// producer that has no WordprocessingML part name. A code without its own
+/// part constant is a WordprocessingML `word/document.xml` fact; layout
+/// accepts each code only from its own part.
+pub const PARSE_DIAGNOSTIC_PART_NESTED_CELL_FRAME_FLOW: &str = "document";
 
 pub const PARSE_DIAGNOSTIC_CODE_REF_BOOKMARK_RESOURCE_LIMIT: &str = "REF_BOOKMARK_RESOURCE_LIMIT";
 pub const PARSE_DIAGNOSTIC_SEVERITY_REF_BOOKMARK_RESOURCE_LIMIT: DiagnosticSeverity =
@@ -242,62 +243,44 @@ mod serialization_tests {
     }
 
     #[test]
-    fn native_separator_wire_keeps_story_and_mark_distinctions() {
-        let source = |header_cp| NativeNoteSeparatorSourceWire {
-            header_cp,
-            fc: 0x800 + header_cp * 2,
-            prm: 0,
-            paragraph_style: 0,
-        };
-        let story = |class, guard_cp, paragraph| NativeNoteSeparatorStoryWire {
-            class,
-            content_start_cp: 6,
-            content_end_cp: 6,
-            guard_cp,
-            rule: None,
-            paragraph,
-        };
-        let partial = NativeNoteSeparatorParagraphWire {
+    fn reserved_separator_wire_keeps_story_and_mark_distinctions() {
+        let paragraph = ReservedNoteSeparatorParagraphWire {
             paragraph: DocParagraph::default(),
             content_mark: None,
             numbered: false,
             framed: false,
-            source: source(0),
         };
-        let hidden = NativeNoteSeparatorParagraphWire {
-            content_mark: Some(NativeNoteSeparatorCharacterWire {
+        let hidden = ReservedNoteSeparatorParagraphWire {
+            content_mark: Some(ReservedNoteSeparatorCharacterWire {
                 run: None,
                 insertion: false,
             }),
             framed: true,
-            ..partial.clone()
+            ..paragraph.clone()
         };
-        let json = |value: &NativeNoteSeparatorStoryWire| serde_json::to_value(value).unwrap();
-        let empty = json(&story(NativeNoteSeparatorStoryClass::Empty, None, None));
-        assert_eq!(empty["class"], "empty");
-        assert!(empty.get("guardCp").is_none());
-        let guard = json(&story(
-            NativeNoteSeparatorStoryClass::GuardOnly,
-            Some(6),
-            None,
-        ));
-        assert_eq!(guard["class"], "guardOnly");
-        assert_eq!(guard["guardCp"], 6);
-        let partial = json(&story(
-            NativeNoteSeparatorStoryClass::Rule,
-            None,
-            Some(partial),
-        ));
+        let json = |value: &ReservedNoteSeparatorStoryWire| serde_json::to_value(value).unwrap();
+        let empty = json(&ReservedNoteSeparatorStoryWire::default());
+        assert_eq!(empty, serde_json::json!({}));
+        let partial = json(&ReservedNoteSeparatorStoryWire {
+            rule: None,
+            paragraph: Some(paragraph),
+        });
         assert!(partial["paragraph"].get("contentMark").is_none());
         assert!(partial["paragraph"].get("framed").is_none());
-        assert_eq!(partial["paragraph"]["source"]["headerCp"], 0);
-        let hidden = json(&story(
-            NativeNoteSeparatorStoryClass::Rule,
-            None,
-            Some(hidden),
-        ));
+        let hidden = json(&ReservedNoteSeparatorStoryWire {
+            rule: Some(ReservedNoteSeparatorRuleWire {
+                mark: Some(NoteSeparatorMark::Short),
+                control: ReservedNoteSeparatorCharacterWire {
+                    run: None,
+                    insertion: true,
+                },
+            }),
+            paragraph: Some(hidden),
+        });
         assert_eq!(hidden["paragraph"]["contentMark"], serde_json::json!({}));
         assert_eq!(hidden["paragraph"]["framed"], true);
+        assert_eq!(hidden["rule"]["mark"], "short");
+        assert_eq!(hidden["rule"]["control"]["insertion"], true);
     }
 
     #[test]
@@ -378,122 +361,100 @@ pub struct NoteLayoutSettingsWire {
     pub footnote_separator_paragraph: Option<Box<DocParagraph>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub footnote_continuation_separator_paragraph: Option<Box<DocParagraph>>,
-    /// Native (MS-DOC) producer only: supported PAPX/CHPX facts and native
-    /// provenance of the reserved separator stories it admitted. Omitted for
-    /// DOCX and for documents without native notes. The shared consumer uses
-    /// the retained rule/control and paragraph-mark metrics with reserved-story
-    /// ownership. Numeric short-rule geometry remains library layout policy;
-    /// continuation roles apply only while footnote continuation is enabled
-    /// (the default; an explicit `false` keeps whole-note pagination).
+    /// Reserved note separator stories (ECMA-376 §17.11.2/§17.11.10
+    /// `w:footnote`/`w:endnote` of §17.18.33 type `separator`,
+    /// `continuationSeparator` or `continuationNotice`) supplied as resolved
+    /// stories by a producer that admits each one into the closed shape
+    /// below: an optional Short/Full rule control and at most one run-free
+    /// paragraph whose control and paragraph mark keep their own character
+    /// properties. Layout measures each story through the paragraph pipeline
+    /// and reserves it with reserved-story ownership. Numeric short-rule
+    /// geometry remains library layout policy; continuation roles apply only
+    /// while footnote continuation is enabled (the default; an explicit
+    /// `false` keeps whole-note pagination). The WordprocessingML parser does
+    /// not emit this field; its formatted separators use the fields above.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub native_separators: Option<Box<NativeNoteSeparatorsWire>>,
+    pub reserved_separators: Option<Box<ReservedNoteSeparatorsWire>>,
 }
 
-/// MS-DOC 2.3.3 reserved separator stories, retained once per document for
-/// each present note kind (never per note, page or worker).
+/// Reserved separator stories, retained once per document for each present
+/// note kind (never per note, page or worker).
 #[derive(Serialize, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
-pub struct NativeNoteSeparatorsWire {
+pub struct ReservedNoteSeparatorsWire {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub footnote: Option<NativeNoteSeparatorStoriesWire>,
+    pub footnote: Option<ReservedNoteSeparatorStoriesWire>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub endnote: Option<NativeNoteSeparatorStoriesWire>,
+    pub endnote: Option<ReservedNoteSeparatorStoriesWire>,
 }
 
 /// The three role slots of one note kind (separator, continuation separator,
 /// continuation notice). Role does not select the rule kind.
 #[derive(Serialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
-pub struct NativeNoteSeparatorStoriesWire {
-    pub separator: NativeNoteSeparatorStoryWire,
-    pub continuation_separator: NativeNoteSeparatorStoryWire,
-    pub continuation_notice: NativeNoteSeparatorStoryWire,
+pub struct ReservedNoteSeparatorStoriesWire {
+    pub separator: ReservedNoteSeparatorStoryWire,
+    pub continuation_separator: ReservedNoteSeparatorStoryWire,
+    pub continuation_notice: ReservedNoteSeparatorStoryWire,
 }
 
-/// Closed native story shape. An empty story has no CPs, a guard-only story
-/// only its terminal guard mark, a paragraph-only story one authored
-/// paragraph mark before the guard. The guard is never authored content.
-#[derive(Serialize, Debug, Clone, Copy, Eq, PartialEq)]
+/// Closed story shape. No paragraph is an empty story (no ink, no flow); a
+/// paragraph without a rule is a paragraph-only story; a rule always comes
+/// with the paragraph whose mark ends it.
+#[derive(Serialize, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
-pub enum NativeNoteSeparatorStoryClass {
-    Empty,
-    GuardOnly,
-    ParagraphOnly,
-    Rule,
+pub struct ReservedNoteSeparatorStoryWire {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rule: Option<ReservedNoteSeparatorRuleWire>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub paragraph: Option<ReservedNoteSeparatorParagraphWire>,
 }
 
+/// The rule control character (§17.11.23 `separator` / §17.11.1
+/// `continuationSeparator` semantics). `mark` is present only when the
+/// producer established that the control has its rule meaning.
 #[derive(Serialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
-pub struct NativeNoteSeparatorStoryWire {
-    pub class: NativeNoteSeparatorStoryClass,
-    /// Header-document CPs of the authored content, excluding the guard.
-    pub content_start_cp: usize,
-    pub content_end_cp: usize,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub guard_cp: Option<usize>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub rule: Option<NativeNoteSeparatorRuleWire>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub paragraph: Option<NativeNoteSeparatorParagraphWire>,
-}
-
-/// The U+0003/U+0004 control character. `mark` is present only when the
-/// effective sprmCFSpec (MS-DOC 2.6.1) gives the byte its rule meaning.
-#[derive(Serialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct NativeNoteSeparatorRuleWire {
+pub struct ReservedNoteSeparatorRuleWire {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mark: Option<NoteSeparatorMark>,
-    pub control: NativeNoteSeparatorCharacterWire,
-    pub source: NativeNoteSeparatorSourceWire,
+    pub control: ReservedNoteSeparatorCharacterWire,
 }
 
-/// Effective supported paragraph properties of the story's paragraph, kept
-/// separate from the control character. `content_mark` is absent when the
-/// story authors no paragraph mark (a partial rule); the guard never fills in.
+/// Effective paragraph properties of the story's paragraph, kept separate
+/// from the control character. `content_mark` is absent when the story
+/// authors no paragraph mark.
 #[derive(Serialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
-pub struct NativeNoteSeparatorParagraphWire {
+pub struct ReservedNoteSeparatorParagraphWire {
     pub paragraph: DocParagraph,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub content_mark: Option<NativeNoteSeparatorCharacterWire>,
-    /// Presence only: the owned numbering/frame cascades are not retained,
-    /// so a consumer must not treat such a paragraph as represented.
+    pub content_mark: Option<ReservedNoteSeparatorCharacterWire>,
+    /// Presence only: the producer did not retain the paragraph's numbering
+    /// or frame properties, so a consumer must not treat it as represented.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub numbered: bool,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub framed: bool,
-    pub source: NativeNoteSeparatorSourceWire,
 }
 
-/// Effective supported CHPX of one character. An absent run is an effective
-/// vanish, which differs from an absent character.
+/// Effective character properties of one character. An absent run is an
+/// effectively hidden character, which differs from an absent character.
 #[derive(Serialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
-pub struct NativeNoteSeparatorCharacterWire {
+pub struct ReservedNoteSeparatorCharacterWire {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub run: Option<TextRun>,
-    /// Effective sprmCFRMark tracked insertion; revision metadata is not kept.
+    /// The character is a tracked insertion; revision metadata is not kept.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub insertion: bool,
 }
 
-/// Native-local provenance: header-document CP, file FC, piece PRM and the
-/// paragraph style index. It is not a shared model `SourceRef`.
-#[derive(Serialize, Debug, Clone, Copy, Eq, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct NativeNoteSeparatorSourceWire {
-    pub header_cp: usize,
-    pub fc: usize,
-    pub prm: u16,
-    pub paragraph_style: usize,
-}
-
-/// Closed shared producer fact for a bare separator story. MS-DOC §2.3.3
-/// supplies the role, while §2.6.1 sprmCFSpec supplies Short/Full semantics.
-/// A native producer owns CP guards, effective special-character properties
-/// and formatting admission; this fact does not authorize dropping custom
-/// text or formatting. None suppresses ink under existing band-gap policy.
+/// Closed shared producer fact for a bare separator story: the story role
+/// comes from its note type, Short/Full from the rule control's meaning. A
+/// producer owns story-shape, special-character and formatting admission;
+/// this fact does not authorize dropping custom text or formatting. None
+/// suppresses ink under existing band-gap policy.
 #[derive(Serialize, Debug, Clone, Copy, Eq, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum NoteSeparatorMark {
@@ -960,18 +921,27 @@ pub struct SectionPlacementWire {
     pub gutter_pt: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rtl_gutter: Option<bool>,
-    /// Native (MS-DOC) producer only: the effective raw MS-DOC 2.6.4
-    /// sprmSTextFlow operand (MS-ODRAW 2.4.5 MSOTXFL, 0..=5), omitted when the
-    /// section has no such SPRM. Normalized once at the TS model boundary;
-    /// OOXML producers never emit it.
+    /// Canonical page frame that no Transitional ST_TextDirection token
+    /// expresses in this library: lines advance bottom to top, later lines to
+    /// the right, every glyph turned a quarter counter-clockwise (CSS
+    /// `sideways-lr`). Valid only beside text direction `btLr`, whose own
+    /// mapping is otherwise unchanged. The WordprocessingML parser never
+    /// emits it; a producer whose source distinguishes that frame does.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub native_text_flow: Option<u16>,
+    pub section_flow: Option<SectionFlow>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub page_borders_authored: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub page_borders: Option<PageBorders>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub page_geometry: Option<Box<SectionPageGeometryWire>>,
+}
+
+/// See [`SectionPlacementWire::section_flow`].
+#[derive(Serialize, Debug, Clone, Copy, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum SectionFlow {
+    BottomToTop,
 }
 
 #[derive(Serialize, Debug, Clone, Default)]
@@ -2776,8 +2746,8 @@ pub struct TextRun {
     /// An authored discretionary hyphen owns this otherwise empty run's
     /// formatting. ECMA-376 §17.3.3.29: it has zero advance and no glyph until
     /// its break is selected, when the run displays a U+002D hyphen-minus.
-    /// Native DOC U+001F uses the same consumer; this is independent of
-    /// automatic dictionary hyphenation. Keep it separate from ordinary text
+    /// Other producers' optional hyphens use the same consumer; this is
+    /// independent of automatic dictionary hyphenation. Keep it separate from ordinary text
     /// and from a nonbreaking hyphen's always-visible glyph.
     #[serde(
         rename = "__optionalHyphen",
