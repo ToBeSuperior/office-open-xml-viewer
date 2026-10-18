@@ -58,6 +58,9 @@ struct ArchivePreflight {
     archive_base: u64,
     /// What the ZIP reader may see while it builds its index.
     index_view: IndexView,
+    /// (locator, record) offsets when the directory was validated through a
+    /// ZIP64 footer; `None` for a classic footer.
+    zip64_footer: Option<(usize, usize)>,
 }
 
 #[derive(Debug)]
@@ -286,15 +289,18 @@ fn inspect_zip64_candidates(
         if validate_central_directory_structure(data, directory).is_err() {
             continue;
         }
-        if resolved_directory.replace(directory).is_some() {
+        if resolved_directory.replace((directory, zip64)).is_some() {
             return Err("ambiguous ZIP64 end-of-central-directory records".to_string());
         }
     }
-    let Some(directory) = resolved_directory else {
+    let Some((directory, zip64)) = resolved_directory else {
         return Ok(None);
     };
     match inspect_central_directory(data, directory) {
-        Ok(preflight) => Ok(Some(preflight)),
+        Ok(mut preflight) => {
+            preflight.zip64_footer = Some((locator, zip64));
+            Ok(Some(preflight))
+        }
         Err(CandidateError::Malformed) => Ok(None),
         Err(CandidateError::Rejected(error)) => Err(error),
     }
@@ -864,27 +870,12 @@ fn inspect_central_directory(
         index_view: IndexView {
             range: directory.start..directory.start,
             patches: Vec::new(),
+            hidden: Vec::new(),
+            metadata_starts: Vec::new(),
             footers: Vec::new(),
         },
+        zip64_footer: None,
     })
-}
-
-/// Absolute offsets of the validated ZIP64 locator and EOCD record, if any.
-fn zip64_footer_positions(data: &[u8], eocd: usize, archive_base: u64) -> Vec<usize> {
-    let Some(locator) = eocd.checked_sub(20) else {
-        return Vec::new();
-    };
-    if le_u32(data, locator) != Some(ZIP64_LOCATOR_SIGNATURE) {
-        return Vec::new();
-    }
-    let mut positions = vec![locator];
-    if let Some(record) = le_u64(data, locator + 8)
-        .and_then(|relative| relative.checked_add(archive_base))
-        .and_then(|absolute| usize::try_from(absolute).ok())
-    {
-        positions.push(record);
-    }
-    positions
 }
 
 /// ZIP64 extended information extra field id (APPNOTE 4.5.3).
@@ -902,13 +893,20 @@ const OPAQUE_EXTRA_FIELD_ID: u16 = 0x7a7a;
 ///   sizes and offsets) is opaque. OPC never uses that metadata, and the
 ///   reader would otherwise reject some APPNOTE-valid encodings (an NTFS
 ///   attribute sequence, an empty timestamp) and then retry other footers.
+/// - Entry comments read as zero, so their bytes are never footer-like.
 /// - A fixed-size footer read (EOCD, ZIP64 locator or record) at any other
 ///   position than the validated ones fails, so the reader can never index an
-///   unvalidated directory.
+///   unvalidated directory. Reads that start at a record's name, extra or
+///   comment offset are metadata reads and exempt.
 #[derive(Debug, Clone)]
 pub struct IndexView {
     range: std::ops::Range<usize>,
     patches: Vec<(usize, u16)>,
+    /// Entry comments: metadata OPC never uses, read as zero while indexing.
+    hidden: Vec<std::ops::Range<usize>>,
+    /// Name, extra and comment offsets of every directory record (sorted):
+    /// reads starting there are metadata, never footer parsing.
+    metadata_starts: Vec<usize>,
     footers: Vec<usize>,
 }
 
@@ -923,6 +921,8 @@ impl IndexView {
         zip64_records: &[usize],
     ) -> Self {
         let mut patches = Vec::new();
+        let mut hidden = Vec::new();
+        let mut metadata_starts = Vec::new();
         let mut cursor = directory_start;
         while cursor + 46 <= eocd
             && le_u32(data, cursor) == Some(CENTRAL_DIRECTORY_HEADER_SIGNATURE)
@@ -934,8 +934,12 @@ impl IndexView {
             ) else {
                 break;
             };
-            let extra_start = cursor + 46 + name_len as usize;
+            let name_start = cursor + 46;
+            let extra_start = name_start + name_len as usize;
             let extra_end = (extra_start + extra_len as usize).min(eocd);
+            let comment_start = extra_start + extra_len as usize;
+            metadata_starts.extend([name_start, extra_start, comment_start]);
+            hidden.push(comment_start..comment_start + comment_len as usize);
             let mut field = extra_start;
             while field + 4 <= extra_end {
                 let id = le_u16(data, field).unwrap_or(0);
@@ -952,6 +956,8 @@ impl IndexView {
         Self {
             range: directory_start..eocd + 22,
             patches,
+            hidden,
+            metadata_starts,
             footers,
         }
     }
@@ -985,9 +991,21 @@ impl IndexView {
                 }
             }
         }
+        let first_hidden = self.hidden.partition_point(|range| range.end <= start);
+        for range in self.hidden[first_hidden..]
+            .iter()
+            .take_while(|range| range.start < end)
+        {
+            let hidden_start = range.start.max(start);
+            let hidden_end = range.end.min(end);
+            if hidden_start < hidden_end {
+                output[hidden_start - start..hidden_end - start].fill(0);
+            }
+        }
         // Judge what the reader would see: hidden bytes are never footers.
         if footer_block.is_some_and(|signature| le_u32(output, 0) == Some(signature))
             && !self.footers.contains(&start)
+            && self.metadata_starts.binary_search(&start).is_err()
         {
             return Err(std::io::Error::other("unvalidated ZIP footer record"));
         }
@@ -1087,7 +1105,11 @@ fn inspect_archive(data: &[u8]) -> Result<Option<ArchivePreflight>, String> {
     let Some((eocd, mut preflight)) = resolved else {
         return Ok(None);
     };
-    let footers = zip64_footer_positions(data, eocd, preflight.archive_base);
+    // Only records validated by the ZIP64 path are footers besides the EOCD.
+    let footers: Vec<usize> = preflight
+        .zip64_footer
+        .map(|(locator, record)| vec![locator, record])
+        .unwrap_or_default();
     preflight.index_view =
         IndexView::for_validated_directory(data, preflight.index_view.range.start, eocd, &footers);
     Ok(Some(preflight))
@@ -1898,6 +1920,41 @@ mod tests {
             bytes[central + 16..central + 20].copy_from_slice(&signature.to_le_bytes());
             let archive = open_validated_zip(bytes).expect("signature-valued CRC indexes");
             assert_eq!(archive.len(), 2);
+        }
+    }
+
+    #[test]
+    fn entry_comments_shaped_like_footer_records_still_open() {
+        for comment in [
+            [&b"PK\x05\x06"[..], &[b'x'; 18][..]].concat(),
+            [&b"PK\x06\x06"[..], &[b'x'; 52][..]].concat(),
+            [&b"PK\x06\x07"[..], &[b'x'; 16][..]].concat(),
+        ] {
+            let mut bytes = Vec::new();
+            {
+                let mut writer = zip::ZipWriter::new(Cursor::new(&mut bytes));
+                let stored = zip::write::SimpleFileOptions::default()
+                    .compression_method(zip::CompressionMethod::Stored);
+                writer.start_file("word/a.xml", stored).unwrap();
+                writer.write_all(b"a").unwrap();
+                writer.finish().unwrap();
+            }
+            // Splice an entry comment into the only central record.
+            let eocd = last_signature(&bytes, EOCD_SIGNATURE);
+            let central = le_u32(&bytes, eocd + 16).unwrap() as usize;
+            let name_len = le_u16(&bytes, central + 28).unwrap() as usize;
+            let extra_len = le_u16(&bytes, central + 30).unwrap() as usize;
+            let at = central + 46 + name_len + extra_len;
+            let mut out = bytes[..at].to_vec();
+            out.extend_from_slice(&comment);
+            out.extend_from_slice(&bytes[at..]);
+            out[central + 32..central + 34].copy_from_slice(&(comment.len() as u16).to_le_bytes());
+            let eocd = eocd + comment.len();
+            let size = le_u32(&out, eocd + 12).unwrap() + comment.len() as u32;
+            out[eocd + 12..eocd + 16].copy_from_slice(&size.to_le_bytes());
+            let mut archive = open_validated_zip(out.clone()).expect("entry comment is metadata");
+            assert_eq!(read_zip_bytes(&mut archive, "word/a.xml").unwrap(), b"a");
+            assert!(open_validated_slice(&out).is_ok());
         }
     }
 
