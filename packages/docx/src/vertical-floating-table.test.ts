@@ -515,7 +515,7 @@ describe('vertical outer floating tables retain the canonical logical paint doma
     expect(parentExclusion.bounds.heightPt).toBeCloseTo(retainedTable.advancePt, 6);
   });
 
-  it('finalizes a fitting outer float placed on a later page with its destination page identity', async () => {
+  it('finalizes a deferred fitting outer float with its destination page identity', async () => {
     const blocker = floatingTable([{ text: 'BLOCKER', heightPt: 30 }]);
     blocker.tblpPr = {
       ...blocker.tblpPr!,
@@ -545,9 +545,6 @@ describe('vertical outer floating tables retain the canonical logical paint doma
       { type: 'paragraph', ...pageAnchor },
     ] as unknown as DocTableCell['content'];
     const doc = documentWith(blocker);
-    // An authored page break places the outer table on page 2 (an
-    // overlap-permitted page-anchored table is not deferred over another).
-    doc.body.push({ type: 'paragraph', ...paragraph(''), pageBreakBefore: true } as unknown as BodyElement);
     doc.body.push({ type: 'table', ...relocated } as unknown as BodyElement);
     const measure = recordingCanvas();
     const pages = layoutPages(
@@ -560,7 +557,7 @@ describe('vertical outer floating tables retain the canonical logical paint doma
     const retained = destinationTable ? destinationTable : undefined;
     if (retained?.kind !== 'table'
       || !('resolvedFloatingTables' in retained)) {
-      throw new Error('expected the fitting outer fragment on page 2');
+      throw new Error('expected the deferred fitting outer fragment');
     }
     const fragment = retained as TableFragmentLayout;
     const [nested] = fragment.resolvedFloatingTables;

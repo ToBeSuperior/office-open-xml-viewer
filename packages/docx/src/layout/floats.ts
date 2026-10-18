@@ -1,3 +1,4 @@
+import { WORD_PAGE_ANCHORED_TABLE_COLLISION_DEFERRAL } from './compatibility.js';
 import {
   axisAlignedRectsOverlap,
   resolveAxisAlignedOverlap,
@@ -350,4 +351,35 @@ export function resolveBlockFlowAdmission(
       blocker.exclusionBounds.yPt + blocker.exclusionBounds.heightPt));
   }
   throw new Error('Block-flow float admission did not converge');
+}
+
+export interface ResolvePageAnchoredTableDeferralInput {
+  readonly bounds: LayoutRect;
+  readonly blockers: readonly FloatPlacementParticipant[];
+  readonly overlapEpsilonPt: number;
+}
+
+/** Established Word pagination behavior, deliberately separate from normative
+ * §17.4.56 raw table placement. The authored object band is admitted against
+ * already-reserved §17.4.57 floating-table text-exclusion bands. */
+export function resolvePageAnchoredTableDeferral(
+  input: ResolvePageAnchoredTableDeferralInput,
+): Readonly<{
+  defer: boolean;
+  appliedCompatibilityRuleIds: readonly string[];
+}> {
+  const moving = axisRect(input.bounds);
+  const defer = input.blockers.some((blocker) =>
+    blocker.kind === 'table'
+      && axisAlignedRectsOverlap(
+        moving,
+        axisRect(blocker.exclusionBounds),
+        input.overlapEpsilonPt,
+      ));
+  return Object.freeze({
+    defer,
+    appliedCompatibilityRuleIds: defer
+      ? Object.freeze([WORD_PAGE_ANCHORED_TABLE_COLLISION_DEFERRAL.id])
+      : Object.freeze([]),
+  });
 }

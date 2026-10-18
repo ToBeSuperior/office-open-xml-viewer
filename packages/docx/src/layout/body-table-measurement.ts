@@ -24,6 +24,7 @@ import {
 import {
   floatRegistryParticipant,
   resolveBlockFlowAdmission,
+  resolvePageAnchoredTableDeferral,
 } from './floats.js';
 import { ExactConvergenceError, convergeExactState } from './convergence.js';
 import { LayoutInvariantError } from './diagnostics.js';
@@ -870,6 +871,36 @@ function measurePositionedTable(
         ),
       })
     : sessionState.floatRegistry;
+  const pageAnchoredCollision =
+    request.cursor?.kind !== 'table' &&
+    (positioning.vertAnchor === 'page' || positioning.vertAnchor === 'margin') &&
+    resolvePageAnchoredTableDeferral({
+      bounds: {
+        xPt: raw.x,
+        yPt: raw.y,
+        widthPt: raw.w,
+        heightPt: raw.h,
+      },
+      blockers: sessionState.floatRegistry.entries
+        .filter((entry) => entry.occurrenceId !== ownPrescanOccurrenceId)
+        .map(floatRegistryParticipant),
+      overlapEpsilonPt: FLOAT_OVERLAP_EPS,
+    }).defer;
+  if (pageAnchoredCollision) {
+    // `word-page-anchored-table-collision-deferral`: a fresh page
+    // preserves the authored absolute anchor instead of converting
+    // the colliding table to a text continuation.
+    return Object.freeze({
+      layout: retained.layout,
+      blockExtentPt: 0,
+      nextCursor: Object.freeze({
+        kind: 'table' as const,
+        cursor,
+        floatingContinuationFrame: 'authored' as const,
+      }),
+      requiresFreshFlowRegion: true,
+    });
+  }
   const absoluteAnchorMustSplit =
     (positioning.vertAnchor === 'page' || positioning.vertAnchor === 'margin') &&
     retained.layout.advancePt > request.freshPageBlockExtentPt;

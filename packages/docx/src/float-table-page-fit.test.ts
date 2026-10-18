@@ -785,10 +785,24 @@ describe('canonical layout — floating-table page-fit / row-split (§17.4.57, W
     }
   });
 
-  // Windows Word 16.0.20430 (#1896 float controls D1-D3) keeps page-anchored
-  // floating tables at their authored position over another table, and the
-  // corpus document that used to defer here exports at Word's page count.
-  it('(g) keeps a page-anchored floating table on the page where its band meets another table', () => {
+  it('(g) DEFERS a page-anchored floating table when its raw band intersects an existing table float', () => {
+    // Two page-anchored floating tables whose raw bands collide (§17.4.56 and
+    // observed Word behavior).
+    // Content band is 100pt (pageH 140 − margins 20+20), bodyTop 20.
+    //
+    // Table A: vertAnchor="page", tblpY=10, 4 rows × 30pt = 120pt > 100pt ⇒ it
+    //   ROW-SPLITS (pageAnchoredOverflows). Slice 1 (A1–A3) fills page 1 from its
+    //   absolute page-y 10; the continuation A4 flows onto page 2 at the body top
+    //   (content-relative y 0 → 30).
+    // Table B: vertAnchor="page", tblpY=25, 3 rows × 30pt = 90pt ≤ 100pt ⇒ B alone
+    //   FITS the text region (single element, no split). Its raw absolute box is at
+    //   page-y 25 (content-relative y 5), height 90 ⇒ it would occupy content-y
+    //   5 → 95 on whatever page it lands on.
+    //
+    // If B is placed on page 2 (where A4's continuation band sits at content-y
+    // 0 → 30), B's raw band (content-y 5 → 95) INTERSECTS A4's band — two floating
+    // tables overlapping. Word defers the whole of B to the next page, where its
+    // absolute tblpY=25 no longer collides with another table float.
     const body = [
       para({ text: 'a' }),
       floatTableRows(tblp({ vertAnchor: 'page', tblpY: 10 }), 4, 30), // Table A → r1..r4
@@ -797,10 +811,31 @@ describe('canonical layout — floating-table page-fit / row-split (§17.4.57, W
       para({ text: 'end' }),
     ];
     const pages = layoutPages(body, section(), makeCtx());
-    const pageOfB = pages.findIndex((p) => floatRowsOn(p).includes('r3') && floatRowsOn(p).includes('r1')
-      && !floatRowsOn(p).includes('r4'));
-    expect(pageOfB).toBeGreaterThanOrEqual(0);
-    expect(pages[pageOfB]!.layers.body.filter(isFloatTable).length).toBeGreaterThanOrEqual(1);
-    expect(pages.length).toBeLessThanOrEqual(2);
+    // Page 2 (index 1) carries A's continuation (A4) but MUST NOT also carry any of
+    // Table B — B is deferred so it never overlaps A4's band.
+    const bandCollisionPage = pages[1];
+    const tableFloatsOnPage2 = bandCollisionPage.layers.body.filter(isFloatTable);
+    // Exactly one table float on page 2 (A's continuation slice), not two stacked.
+    expect(tableFloatsOnPage2.length).toBe(1);
+    // And it is A's continuation (a single row on that band), not B.
+    expect(floatRowsOn(bandCollisionPage)).toEqual(['r4']);
+
+    // Table B is deferred to a LATER page and lands there as ONE un-split element
+    // (its 90pt fits the 100pt region once it is on a clean page).
+    const bPageIdx = pages.findIndex(
+      (p, i) => i > 1 && p.layers.body.some(isFloatTable),
+    );
+    expect(bPageIdx).toBeGreaterThan(1);
+    const bPage = pages[bPageIdx];
+    const bFloats = bPage.layers.body.filter(isFloatTable);
+    expect(bFloats.length).toBe(1);
+    expect(floatRowsOn(bPage)).toEqual(['r1', 'r2', 'r3']);
+
+    // No page ever holds two DISTINCT table-float bands that vertically overlap:
+    // assert every page has at most one floating-table element (each table's slice
+    // owns its page's band alone here, since neither co-resident split occurs).
+    for (const p of pages) {
+      expect(p.layers.body.filter(isFloatTable).length).toBeLessThanOrEqual(1);
+    }
   });
 });
