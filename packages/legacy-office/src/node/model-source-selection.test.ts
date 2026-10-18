@@ -93,8 +93,8 @@ describe('Node openers and legacy model sources', () => {
   // Every valid value is admitted. The public direction is a display family:
   // 0 and 4 horizontal, 1 the established tbRl, 3 and 5 the all-rotated
   // clockwise btLr family (a display equivalence, not a Word export claim).
-  // The effective raw value is retained in the private placement wire, absent
-  // when the section has no sprmSTextFlow.
+  // Only BtoT (2) also sets the shared counter-clockwise section flow in the
+  // private placement wire; every other value, and absence, leaves it unset.
   const textFlow = (value: number) => concat(little16(0x5033), little16(value));
   type SectionFacts = { type?: string; textDirection?: string | null; __sectionPlacement?: Record<string, unknown> };
   const loadDoc = (bytes: Uint8Array) => materializeDocxDocument(bytes, { modelSources: [testDocSource()] });
@@ -105,9 +105,9 @@ describe('Node openers and legacy model sources', () => {
     return breaks[0]!;
   };
   const direction = (section: SectionFacts) => section.textDirection ?? null;
-  const rawFlow = (section: SectionFacts) => {
+  const frame = (section: SectionFacts) => {
     expect(section.__sectionPlacement).toBeTypeOf('object');
-    return section.__sectionPlacement!.nativeTextFlow;
+    return section.__sectionPlacement!.sectionFlow ?? null;
   };
   const oneSection = (properties: Uint8Array) => buildDocFixture({ text: 'Body\r', sectionProperties: properties });
   const twoSections = (first: Uint8Array, last: Uint8Array) =>
@@ -127,14 +127,15 @@ describe('Node openers and legacy model sources', () => {
     expect(direction(finalSection(sectioned))).toBeNull();
   });
 
-  it('retain the effective raw section text flow, distinguishing absence from an explicit 0', async () => {
-    expect(rawFlow(finalSection(await loadDoc(oneSection(none))))).toBeUndefined();
+  it('set the counter-clockwise section flow only for an effective BtoT', async () => {
+    expect(frame(finalSection(await loadDoc(oneSection(none))))).toBeNull();
     for (const flow of [0, 1, 2, 3, 4, 5]) {
-      expect(rawFlow(finalSection(await loadDoc(oneSection(textFlow(flow))))), `MSOTXFL ${flow}`).toBe(flow);
+      expect(frame(finalSection(await loadDoc(oneSection(textFlow(flow))))), `MSOTXFL ${flow}`)
+        .toBe(flow === 2 ? 'bottomToTop' : null);
     }
     const sectioned = await loadDoc(twoSections(textFlow(2), none));
-    expect(rawFlow(endingSection(sectioned))).toBe(2);
-    expect(rawFlow(finalSection(sectioned))).toBeUndefined();
+    expect(frame(endingSection(sectioned))).toBe('bottomToTop');
+    expect(frame(finalSection(sectioned))).toBeNull();
   });
 
   it('apply the last section text flow modifier', async () => {
@@ -142,22 +143,24 @@ describe('Node openers and legacy model sources', () => {
       { modifiers: [1, 3, 0], expected: null },
       { modifiers: [0, 3], expected: 'btLr' },
       { modifiers: [3, 1], expected: 'tbRl' },
+      { modifiers: [2, 3], expected: 'btLr' },
+      { modifiers: [3, 2], expected: 'btLr' },
     ]) {
       const section = finalSection(await loadDoc(oneSection(concat(...modifiers.map(textFlow)))));
       expect(direction(section), modifiers.join('->')).toBe(expected);
-      expect(rawFlow(section), modifiers.join('->')).toBe(modifiers.at(-1));
+      expect(frame(section), modifiers.join('->')).toBe(modifiers.at(-1) === 2 ? 'bottomToTop' : null);
     }
   });
 
   it('keep each section text flow with its own section', async () => {
     let sectioned = await loadDoc(twoSections(textFlow(2), textFlow(1)));
-    expect([rawFlow(endingSection(sectioned)), rawFlow(finalSection(sectioned))]).toEqual([2, 1]);
+    expect([frame(endingSection(sectioned)), frame(finalSection(sectioned))]).toEqual(['bottomToTop', null]);
     expect(direction(finalSection(sectioned))).toBe('tbRl');
     sectioned = await loadDoc(twoSections(textFlow(3), textFlow(0)));
     expect([direction(endingSection(sectioned)), direction(finalSection(sectioned))]).toEqual(['btLr', null]);
     sectioned = await loadDoc(twoSections(none, textFlow(5)));
     expect([direction(endingSection(sectioned)), direction(finalSection(sectioned))]).toEqual([null, 'btLr']);
-    expect(rawFlow(endingSection(sectioned))).toBeUndefined();
+    expect(frame(endingSection(sectioned))).toBeNull();
   });
 
   it('keep a value outside MSOTXFL invalid', async () => {

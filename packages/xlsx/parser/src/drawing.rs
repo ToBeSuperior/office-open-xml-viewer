@@ -594,7 +594,7 @@ fn resolve_xlsx_fill_ref(
     let StyleMatrixLookup::Entry(entry) = format_scheme.lookup_fill_ref(index) else {
         return None;
     };
-    let entry_xml = entry.to_xml();
+    let entry_xml = entry.to_xml().ok()?;
     let document = roxmltree::Document::parse(&entry_xml).ok()?;
     let fill = document
         .root_element()
@@ -628,7 +628,7 @@ fn resolve_xlsx_line_ref(
     let StyleMatrixLookup::Entry(entry) = format_scheme.lookup_line_ref(index) else {
         return None;
     };
-    let entry_xml = entry.to_xml();
+    let entry_xml = entry.to_xml().ok()?;
     let document = roxmltree::Document::parse(&entry_xml).ok()?;
     let line = document.root_element().children().find(|node| {
         node.is_element()

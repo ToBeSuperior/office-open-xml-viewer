@@ -480,9 +480,10 @@ fn project_table(
     Ok(table)
 }
 
-/// [MS-DOC] 2.4.3 supplies row identity, not a general nested-frame election
-/// rule. Native Word import controls with homogeneous margin/text, auto-size,
-/// around-wrapped cell paragraphs move the complete grid, borders and fills
+/// [MS-DOC] 2.4.3 supplies row identity and 2.6.2 the frame coordinates, not a
+/// general nested-frame election rule or AUTO width. Native Word import
+/// controls with homogeneous margin/text, auto-size, around-wrapped cell
+/// paragraphs move the complete grid, borders and fills
 /// together for left/center/right/absolute X and nonzero Y. This bounded owner
 /// requires every physical paragraph (including later discarded continuations)
 /// to agree with the source first-cell frame. Mixed frames, recursive children,
