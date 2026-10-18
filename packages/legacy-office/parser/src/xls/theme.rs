@@ -356,34 +356,6 @@ fn preflight(bytes: &[u8]) -> Result<(usize, usize), String> {
     {
         return Err(unsupported("unsupported BIFF theme ZIP directory"));
     }
-    // Walk the (count-bounded) directory once so the reader never re-hashes
-    // names/comments for repeated or invalid Info-ZIP Unicode fields.
-    let mut cursor = u32_at(bytes, end + 16)? as usize;
-    for _ in 0..count {
-        if bytes.get(cursor..cursor + 4) != Some(b"PK\x01\x02") {
-            return Err(unsupported("invalid BIFF theme ZIP directory"));
-        }
-        let name_len = usize::from(u16_at(bytes, cursor + 28)?);
-        let extra_len = usize::from(u16_at(bytes, cursor + 30)?);
-        let comment_len = usize::from(u16_at(bytes, cursor + 32)?);
-        let name_start = cursor + 46;
-        let extra_start = name_start + name_len;
-        let comment_start = extra_start + extra_len;
-        let next = comment_start + comment_len;
-        let (Some(name), Some(extra), Some(comment)) = (
-            bytes.get(name_start..extra_start),
-            bytes.get(extra_start..comment_start),
-            bytes.get(comment_start..next),
-        ) else {
-            return Err(unsupported("invalid BIFF theme ZIP directory"));
-        };
-        if next > end
-            || !ooxml_common::zip::central_unicode_extra_fields_are_valid(name, extra, comment)
-        {
-            return Err(unsupported("invalid BIFF theme ZIP directory"));
-        }
-        cursor = next;
-    }
     Ok((count, end))
 }
 
@@ -411,14 +383,15 @@ mod tests {
     const REL: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
 
     #[test]
-    fn repeated_unicode_path_fields_are_rejected_before_zip_indexing() {
+    fn repeated_unicode_path_fields_are_opaque_metadata() {
         let zip = test_zip(&[("a.xml", "a".into())]);
         let field = crate::opc_part::test_unicode_path_field("a.xml");
         let once = crate::opc_part::test_with_central_extra(&zip, &field);
         assert!(preflight(&once).is_ok());
         let twice =
             crate::opc_part::test_with_central_extra(&zip, &[field.clone(), field].concat());
-        assert!(preflight(&twice).is_err());
+        // Unicode metadata is opaque to the index (OPC names are raw ASCII).
+        assert!(preflight(&twice).is_ok());
     }
 
     fn package(theme: &str) -> Vec<u8> {

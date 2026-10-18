@@ -365,57 +365,6 @@ fn inspect_eocd_candidate(data: &[u8], eocd: usize) -> Result<Option<ArchivePref
     }
 }
 
-/// Info-ZIP Unicode Path (0x7075) and Unicode Comment (0x6375) extra fields
-/// (APPNOTE 4.6.8/4.6.9) carry a CRC-32 of the raw name/comment they restate.
-/// Accept at most one of each per entry, with a matching CRC, and a Unicode
-/// path equal to the raw (ASCII, OPC §7.3.3) item name. The ZIP reader
-/// re-hashes the name or comment for every such field it meets, so repeated
-/// fields would otherwise multiply opening work; an invalid or divergent
-/// field was already an opening error before the reader upgrade.
-fn validate_unicode_extra_fields(
-    name: &[u8],
-    extra: &[u8],
-    comment: &[u8],
-) -> Result<(), CandidateError> {
-    let mut seen_path = false;
-    let mut seen_comment = false;
-    let mut cursor = 0;
-    while cursor + 4 <= extra.len() {
-        let id = le_u16(extra, cursor).ok_or(CandidateError::Malformed)?;
-        let len = le_u16(extra, cursor + 2).ok_or(CandidateError::Malformed)? as usize;
-        let Some(body) = extra.get(cursor + 4..cursor + 4 + len) else {
-            // Truncated trailing metadata (Unicode fields included) was
-            // tolerated before; it stays opaque to the index.
-            break;
-        };
-        let (target, seen) = match id {
-            0x7075 => (name, &mut seen_path),
-            0x6375 => (comment, &mut seen_comment),
-            _ => {
-                cursor += 4 + len;
-                continue;
-            }
-        };
-        if std::mem::replace(seen, true) || body.len() < 5 || body[0] != 1 {
-            return Err(CandidateError::Malformed);
-        }
-        if le_u32(body, 1) != Some(crc32fast::hash(target)) {
-            return Err(CandidateError::Malformed);
-        }
-        if id == 0x7075 && &body[5..] != name {
-            return Err(CandidateError::Malformed);
-        }
-        cursor += 4 + len;
-    }
-    Ok(())
-}
-
-/// [`validate_unicode_extra_fields`] for ZIP readers outside this module
-/// (legacy embedded packages) that walk their own central directory.
-pub fn central_unicode_extra_fields_are_valid(name: &[u8], extra: &[u8], comment: &[u8]) -> bool {
-    validate_unicode_extra_fields(name, extra, comment).is_ok()
-}
-
 fn walk_central_directory<F>(
     data: &[u8],
     directory: CentralDirectory,
@@ -449,12 +398,6 @@ where
         name_bytes = name_bytes
             .checked_add(name_len as u64)
             .ok_or(CandidateError::Malformed)?;
-        let extra_start = name_start + name_len;
-        validate_unicode_extra_fields(
-            &data[name_start..extra_start],
-            &data[extra_start..extra_start + extra_len],
-            &data[extra_start + extra_len..next],
-        )?;
         visit(CentralEntry {
             header: cursor,
             name: NameRange {
@@ -2073,40 +2016,6 @@ mod tests {
         let size = le_u32(&out, eocd + 12).unwrap() + extra.len() as u32;
         out[eocd + 12..eocd + 16].copy_from_slice(&size.to_le_bytes());
         out
-    }
-
-    #[test]
-    fn repeated_or_invalid_unicode_extra_fields_are_rejected_before_indexing() {
-        let field = |id: u16, target: &[u8], text: &[u8]| {
-            let mut body = vec![1u8];
-            body.extend_from_slice(&crc32fast::hash(target).to_le_bytes());
-            body.extend_from_slice(text);
-            let mut field = id.to_le_bytes().to_vec();
-            field.extend_from_slice(&(body.len() as u16).to_le_bytes());
-            field.extend_from_slice(&body);
-            field
-        };
-        let name = b"word/a.xml";
-        let comment = b"note";
-        let path = field(0x7075, name, name);
-        let note = field(0x6375, comment, comment);
-        assert!(validate_unicode_extra_fields(
-            name,
-            &[path.clone(), note.clone()].concat(),
-            comment
-        )
-        .is_ok());
-        for extra in [
-            [note.clone(), note.clone()].concat(),
-            [path.clone(), path.clone()].concat(),
-            field(0x6375, b"other", comment),
-            field(0x7075, name, b"word/b.xml"),
-        ] {
-            assert!(matches!(
-                validate_unicode_extra_fields(name, &extra, comment),
-                Err(CandidateError::Malformed)
-            ));
-        }
     }
 
     #[test]
