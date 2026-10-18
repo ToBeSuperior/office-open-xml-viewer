@@ -414,7 +414,7 @@ export function performMarkMixedSpacesCompressed(operationState: PassOperationSt
  * advance still exceeds the band (a kinsoku retraction may have shortened it),
  * write each space-bearing segment once, and reset for the next line. */
 export function performSettleMixedSpaces(operationState: PassOperationState): void {
-  const { breakerState, availW, scale, strNaturalAdvance } = operationState;
+  const { breakerState, availW } = operationState;
   if (breakerState.mixedSpace.compressed) {
     const line = summaryLine(breakerState.mixedSpace);
     // Finalization walks the line once; every gap is written exactly once.

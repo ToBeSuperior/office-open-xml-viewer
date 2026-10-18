@@ -155,32 +155,6 @@ export class PptxFontPreloadAccumulator {
   }
 }
 
-/**
- * The font-family names to preload for a presentation: the theme major/minor
- * fonts, plus only the script-fallback Noto faces whose script the slide TEXT
- * actually contains ({@link PptxFontPreloadAccumulator}). The renderer's canvas
- * font stack still ends with the full Noto set, but eagerly fetching the
- * multi-MB CJK families for a deck with no CJK glyphs would block first paint
- * for nothing; an un-preloaded face loads lazily if it ever proves needed.
- *
- * Single source of truth shared by the main-thread `load()` and the render
- * worker. Both derive the set from the SAME parsed {@link Presentation}, so both
- * modes preload an identical set — worker/main rendering must stay
- * pixel-equivalent.
- */
-export function pptxFontPreloadNames(
-  pres: Presentation,
-  fallback?: CjkLang,
-): (string | null | undefined)[] {
-  const accumulator = new PptxFontPreloadAccumulator(
-    pres.majorFont,
-    pres.minorFont,
-    undefined, undefined, fallback,
-  );
-  for (const slide of pres.slides) accumulator.addSlide(slide);
-  return accumulator.names();
-}
-
 const CSS_GENERIC_FAMILY_NAMES = new Set(['serif', 'sans-serif', 'monospace', 'cursive', 'fantasy', 'system-ui']);
 
 /** Authored face tuples actually painted by this slide. DrawingML run properties

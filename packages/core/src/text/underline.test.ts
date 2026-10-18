@@ -139,20 +139,6 @@ describe('drawUnderline (core, DrawingML ST_TextUnderlineType §20.1.10.82)', ()
     );
   });
 
-  it('docx w:u val="thick" (mapped to DrawingML "heavy" by docxUnderlineToDrawingML) thickens the line weight ~1.8×', () => {
-    // Regression test for the docx thick → DrawingML heavy pipeline: the
-    // underline-map.ts mapping produces the lowercase 'heavy' token, which
-    // must be recognized here the same as the bare pptx 'heavy' value above.
-    const plain = makeCtx();
-    const heavy = makeCtx();
-    drawUnderline(plain.ctx, 10, 100, 50, 20, '#000', 'sng');
-    drawUnderline(heavy.ctx, 10, 100, 50, 20, '#000', 'heavy'); // docxUnderlineToDrawingML('thick') === 'heavy'
-    expect((heavy.ctx as unknown as { lineWidth: number }).lineWidth).toBeCloseTo(
-      (plain.ctx as unknown as { lineWidth: number }).lineWidth * 1.8,
-      6,
-    );
-  });
-
   it('uses the provided colour for strokeStyle', () => {
     drawUnderline(h.ctx, 10, 100, 50, 20, '#ff0000', 'sng');
     expect((h.ctx as unknown as { strokeStyle: string }).strokeStyle).toBe('#ff0000');

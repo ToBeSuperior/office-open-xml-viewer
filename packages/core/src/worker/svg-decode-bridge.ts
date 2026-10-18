@@ -174,7 +174,7 @@ export async function decodeSvgBlobOnMainThread(
   }
 }
 
-export function isWorkerSvgDecodeRequest(value: unknown): value is WorkerSvgDecodeRequest {
+function isWorkerSvgDecodeRequest(value: unknown): value is WorkerSvgDecodeRequest {
   return !!value && typeof value === 'object'
     && (value as { kind?: unknown }).kind === 'ooxmlDecodeSvg';
 }

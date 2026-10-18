@@ -39,7 +39,7 @@ export const WORD_ZERO_RELATIVE_SIZE_EXTENT_FALLBACK = defineCompatibilityRule({
     kind: 'regression-test',
     reference: 'packages/docx/src/layout/anchor-frame.test.ts#uses wp:extent when Word does not support an exact-zero relative size',
   },
-  description: 'Word 2010 accepts only positive wp14:pctWidth and wp14:pctHeight values under [MS-ODRAWXML] notes 125/126. Preserve an authored zero as acquisition evidence while resolving the object from wp:extent.',
+  description: 'Word 2010 accepts only positive wp14:pctWidth and wp14:pctHeight values under [MS-ODRAWXML] notes 125/126. Preserve an authored zero as acquisition evidence while resolving the object from wp:extent. Classification: Microsoft-note derived ([MS-ODRAWXML] notes 125/126). [MS-ODRAWXML] is not in the Microsoft evidence catalog yet, so the evidence stays a regression test.',
 });
 
 export const WORD_VERTICAL_SECTION_PHYSICAL_DRAWING_LAYER = defineCompatibilityRule({
@@ -48,7 +48,7 @@ export const WORD_VERTICAL_SECTION_PHYSICAL_DRAWING_LAYER = defineCompatibilityR
     kind: 'regression-test',
     reference: 'packages/docx/src/anchor-vertical-physical.test.ts#lands an upright-section anchor at the recorded physical centroid',
   },
-  description: 'Resolve anchored drawings in an upright vertical section against the physical page frame independently of the rotated text-flow coordinate space.',
+  description: 'Resolve anchored drawings in an upright vertical section against the physical page frame independently of the rotated text-flow coordinate space. Evidence (observed Office behaviour): Word output adjudicated in issue #988 (batch 3, item 2) and PR #999; origin PR #770.',
 });
 
 export const WORD_PAGE_LEVEL_FLOAT_PRESCAN = defineCompatibilityRule({
@@ -57,7 +57,7 @@ export const WORD_PAGE_LEVEL_FLOAT_PRESCAN = defineCompatibilityRule({
     kind: 'regression-test',
     reference: 'packages/docx/src/page-anchor-prescan.test.ts#pre-scan REGISTERS a page-level (relativeFrom="margin") wrap float on an earlier-scanned paragraph',
   },
-  description: 'A wrapping drawing whose vertical reference is page-level participates from page start so source-earlier paragraphs on that page see its exclusion.',
+  description: 'A wrapping drawing whose vertical reference is page-level participates from page start so source-earlier paragraphs on that page see its exclusion. Evidence (observed Office behaviour): Word PDF of a corpus document in PR #554; no synthetic control yet.',
 });
 
 export const WORD_PARAGRAPH_ANCHOR_PRE_SPACING_ORIGIN = defineCompatibilityRule({
@@ -66,7 +66,7 @@ export const WORD_PARAGRAPH_ANCHOR_PRE_SPACING_ORIGIN = defineCompatibilityRule(
     kind: 'regression-test',
     reference: 'packages/docx/src/anchor-paragraph-spacebefore.test.ts#anchors a wrapSquare paragraph float at the pre-spaceBefore paragraph top',
   },
-  description: 'Resolve a paragraph-relative anchored drawing from the paragraph top before applying the paragraph spaceBefore contribution.',
+  description: 'Resolve a paragraph-relative anchored drawing from the paragraph top before applying the paragraph spaceBefore contribution. Classification: normative, ECMA-376 §20.4.3.5 ST_RelFromV paragraph (offset from the paragraph that contains the anchor); Word comparison in PR #582.',
 });
 
 export const WORD_VERTICAL_SECTION_PHYSICAL_HEADER_FOOTER = defineCompatibilityRule({
@@ -75,16 +75,16 @@ export const WORD_VERTICAL_SECTION_PHYSICAL_HEADER_FOOTER = defineCompatibilityR
     kind: 'regression-test',
     reference: 'packages/docx/src/vertical-header-footer.test.ts#recovers the physical page box + margins from the logical (swapped) section',
   },
-  description: 'Paint a vertical section header and footer in the unrotated physical page frame rather than rotating them with the body text flow.',
+  description: 'Paint a vertical section header and footer in the unrotated physical page frame rather than rotating them with the body text flow. Evidence (observed Office behaviour): Word output adjudicated in issue #988 (item 3) and PR #996.',
 });
 
 export const WORD_FRAME_AUTO_WRAP_AROUND = defineCompatibilityRule({
   id: 'word-frame-auto-wrap-around',
   evidence: {
-    kind: 'regression-test',
+    kind: 'library-policy',
     reference: 'packages/docx/src/frame-geometry.test.ts#wrap="around" and "auto" → square float (auto ≡ around in Word)',
   },
-  description: 'Resolve an authored frame wrap value of auto through the same square side-wrap path as around.',
+  description: 'Resolve an authored frame wrap value of auto through the same square side-wrap path as around. Library policy, no Office measurement: ST_Wrap auto is application-defined (ECMA-376 §17.18.104), so it shares the around path (PR #520) until a Word control exists.',
 });
 
 export const WORD_LOWER_LAYER_SAME_PARAGRAPH_ANCHOR_COMPOSITION = defineCompatibilityRule({
@@ -114,10 +114,10 @@ export const WORD_TEXTBOX_VISIBLE_ANCHOR_EXTENT = defineCompatibilityRule({
 export const WORD_OVERLAPPING_LAYOUT_IN_CELL_OVERLAY = defineCompatibilityRule({
   id: 'word-overlapping-layout-in-cell-overlay',
   evidence: {
-    kind: 'regression-test',
+    kind: 'library-policy',
     reference: 'packages/docx/src/table-cell-anchor-reflow.test.ts#does not grow an automatic row for an overlapping layoutInCell wrapNone object',
   },
-  description: 'Word leaves an overlap-permitted, non-wrapping layoutInCell drawing as an overlay instead of growing its automatic table row. This is an Office compatibility exception to the general resize behavior in ECMA-376 §20.4.2.3 layoutInCell; non-overlap drawings retain normative cell containment.',
+  description: 'Word leaves an overlap-permitted, non-wrapping layoutInCell drawing as an overlay instead of growing its automatic table row. This is an Office compatibility exception to the general resize behavior in ECMA-376 §20.4.2.3 layoutInCell; non-overlap drawings retain normative cell containment. Library policy, no Office measurement: keeps an overlap-permitted, non-wrapping layoutInCell object from growing its row (PR #1141); the Office controls in that PR covered other features.',
 });
 
 /** Compatibility projection governed by

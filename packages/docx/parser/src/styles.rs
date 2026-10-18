@@ -1776,11 +1776,7 @@ fn normalized_string_attr(
 }
 
 fn parse_on_off_lexical(value: &str) -> Option<bool> {
-    match value.trim() {
-        "1" | "true" | "on" => Some(true),
-        "0" | "false" | "off" => Some(false),
-        _ => None,
-    }
+    ooxml_common::xml_node::parse_st_on_off(value.trim())
 }
 
 fn on_off_value(node: roxmltree::Node, name: &str) -> crate::types::TypographyValueWire<bool> {

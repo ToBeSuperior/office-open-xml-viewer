@@ -34,7 +34,6 @@ use ooxml_common::line::{
     parse_line_properties, LineDash, LineEnd, LineJoin, LinePaint, LineProperties,
 };
 use ooxml_common::ns::{is_diagram_uri, is_pml_ole_uri};
-use ooxml_common::rels::relationship_part_path;
 use ooxml_common::units::EMU_PER_PX_96DPI;
 use std::collections::HashMap;
 
@@ -47,84 +46,6 @@ use std::collections::HashMap;
 /// render, so a Choice requiring them yields the Fallback preview.
 pub(crate) fn pptx_understands_ns(ns: &str) -> bool {
     ns.contains("chartex") || ns == "http://schemas.microsoft.com/office/drawing/2010/main"
-}
-
-/// Read the chartStyle part (`styleN.xml`) associated with a chart part at
-/// `chart_path` (e.g. `ppt/charts/chart1.xml`), following that part's own
-/// relationships (`ppt/charts/_rels/chart1.xml.rels`) to the
-/// Office 2011 or MS-ODRAWXML 2012 `chartStyle` target. Returns `None` when the chart
-/// has no chartStyle relationship or the part cannot be read (the chartEx
-/// title then falls back to its inline size, or the renderer's default).
-struct ChartRelatedParts {
-    theme_override_xml: Option<String>,
-    style_xml: Option<String>,
-    color_style_xml: Option<String>,
-    image_relationships: ooxml_common::chart::ChartImageRelationships,
-}
-
-fn load_chart_related_parts(zip: &mut PptxZip, chart_path: &str) -> ChartRelatedParts {
-    let mut result = ChartRelatedParts {
-        theme_override_xml: None,
-        style_xml: None,
-        color_style_xml: None,
-        image_relationships: Default::default(),
-    };
-    let rels_path = relationship_part_path(chart_path);
-    let Ok(rels_xml) = read_zip_str(zip, &rels_path) else {
-        return result;
-    };
-    let relationships = ooxml_common::rels::parse_rels(&rels_xml);
-    result.image_relationships.insert_parsed_relationships(
-        ooxml_common::chart::ChartImageSource::Chart,
-        chart_path,
-        &relationships,
-    );
-    let internal_target = |suffix: &str| {
-        relationships.values().find(|relationship| {
-            relationship.mode == ooxml_common::rels::TargetMode::Internal
-                && relationship
-                    .relationship_type
-                    .as_deref()
-                    .is_some_and(|kind| kind.ends_with(suffix))
-        })
-    };
-    if let Some(relationship) = internal_target("/themeOverride") {
-        if let Some(path) = relationship.resolve_part(chart_path) {
-            result.theme_override_xml = read_zip_str(zip, &path).ok();
-        }
-    }
-    let style_relationship = relationships.values().find(|relationship| {
-        relationship.mode == ooxml_common::rels::TargetMode::Internal
-            && relationship
-                .relationship_type
-                .as_deref()
-                .is_some_and(ooxml_common::chart::is_chart_style_relationship_type)
-    });
-    if let Some(style_relationship) = style_relationship {
-        let style_path = style_relationship
-            .resolve_part(chart_path)
-            .unwrap_or_default();
-        result.style_xml = Some(read_zip_str(zip, &style_path).unwrap_or_else(|_| "\0".to_owned()));
-        let style_rels_path = relationship_part_path(&style_path);
-        if let Ok(style_rels_xml) = read_zip_str(zip, &style_rels_path) {
-            let style_relationships = ooxml_common::rels::parse_rels(&style_rels_xml);
-            result.image_relationships.insert_parsed_relationships(
-                ooxml_common::chart::ChartImageSource::Style,
-                &style_path,
-                &style_relationships,
-            );
-        }
-    }
-    if let Some(color_relationship) =
-        internal_target(ooxml_common::chart::CHART_COLOR_STYLE_REL_TYPE_SUFFIX)
-    {
-        let color_path = color_relationship
-            .resolve_part(chart_path)
-            .unwrap_or_default();
-        result.color_style_xml =
-            Some(read_zip_str(zip, &color_path).unwrap_or_else(|_| "\0".to_owned()));
-    }
-    result
 }
 
 #[cfg(test)]
@@ -225,26 +146,6 @@ mod chartex_sidecar_package_tests {
     }
 
     #[test]
-    fn pptx_chart_related_parts_preserve_missing_sidecar_relationships() {
-        let mut bytes = Vec::new();
-        {
-            let mut writer = zip::ZipWriter::new(Cursor::new(&mut bytes));
-            writer
-                .start_file(
-                    "ppt/charts/_rels/chart9.xml.rels",
-                    zip::write::SimpleFileOptions::default(),
-                )
-                .unwrap();
-            writer.write_all(br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rStyle" Type="http://schemas.microsoft.com/office/2011/relationships/chartStyle" Target="missing-style.xml"/><Relationship Id="rColors" Type="http://schemas.microsoft.com/office/2011/relationships/chartColorStyle" Target="missing-colors.xml"/></Relationships>"#).unwrap();
-            writer.finish().unwrap();
-        }
-        let mut archive = super::PptxZip::new(Cursor::new(bytes)).unwrap();
-        let related = super::load_chart_related_parts(&mut archive, "ppt/charts/chart9.xml");
-        assert_eq!(related.style_xml.as_deref(), Some("\0"));
-        assert_eq!(related.color_style_xml.as_deref(), Some("\0"));
-    }
-
-    #[test]
     fn pptx_package_loads_classic_chart_style_roles() {
         let content_types = r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/></Types>"#;
         let root_rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdOffice" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="ppt/presentation.xml"/></Relationships>"#;
@@ -336,34 +237,6 @@ mod chartex_sidecar_package_tests {
             }),
         );
     }
-}
-
-fn load_chart_user_shapes_xml(
-    zip: &mut PptxZip,
-    chart_path: &str,
-    chart_xml: &str,
-) -> Option<String> {
-    let chart_doc = crate::parse_preflighted_pptx_xml(chart_xml).ok()?;
-    let rid = chart_doc
-        .root_element()
-        .descendants()
-        .find(|node| node.is_element() && node.tag_name().name() == "userShapes")?
-        .attributes()
-        .find(|attribute| {
-            attribute.name() == "id"
-                && attribute
-                    .namespace()
-                    .is_some_and(|namespace| namespace.ends_with("/relationships"))
-        })?
-        .value();
-    let rels_path = relationship_part_path(chart_path);
-    let rels_xml = read_zip_str(zip, &rels_path).ok()?;
-    let target = ooxml_common::rels::parse_rels(&rels_xml)
-        .get(rid)?
-        .target
-        .clone();
-    let user_shapes_path = resolve_path(chart_path, &target);
-    read_zip_str(zip, &user_shapes_path).ok()
 }
 
 /// OOXML spec default positions for common placeholder types.
@@ -3450,7 +3323,10 @@ fn parse_graphic_frame(
                         .position(|candidate| candidate.id() == node.id())
                         .unwrap_or(0);
                     let retention_site = format!("graphicFrame:{graphic_frame_ordinal}");
-                    let related_parts = load_chart_related_parts(zip, &chart_path);
+                    let related_parts = ooxml_common::chart::load_chart_related_parts(
+                        |part| read_zip_str(zip, part).ok(),
+                        &chart_path,
+                    );
                     let chart_theme = related_parts.theme_override_xml.as_deref().map(|xml| {
                         let mut theme = crate::theme::PptxTheme::from_source(theme_source);
                         crate::theme::apply_theme_override(&mut theme, xml);
@@ -3498,8 +3374,15 @@ fn parse_graphic_frame(
                                 )
                             })
                     } else {
-                        let user_shapes_xml =
-                            load_chart_user_shapes_xml(zip, &chart_path, &chart_xml);
+                        let user_shapes_xml = crate::parse_preflighted_pptx_xml(&chart_xml)
+                            .ok()
+                            .and_then(|chart_doc| {
+                                ooxml_common::chart::load_chart_user_shapes_xml(
+                                    |part| read_zip_str(zip, part).ok(),
+                                    &chart_path,
+                                    &chart_doc,
+                                )
+                            });
                         parse_legacy_chart_with_style_parts_and_images(
                             &chart_xml,
                             related_parts.style_xml.as_deref(),
@@ -3810,11 +3693,6 @@ pub(crate) fn parse_connector(
         .unwrap_or_else(|| "line".to_owned());
 
     // Pull connector adjust values from avLst (e.g. bentConnector3 adj1 = bend %).
-    let parse_gd_val = |gd: roxmltree::Node<'_, '_>| -> Option<f64> {
-        attr(&gd, "fmla")
-            .and_then(|f| f.strip_prefix("val ").map(|s| s.to_owned()))
-            .and_then(|s| s.parse::<f64>().ok())
-    };
     let av_node = prst_geom_node.and_then(|n| child(n, "avLst"));
     let gd_nodes: Vec<_> = av_node
         .map(|av| {
@@ -3823,26 +3701,8 @@ pub(crate) fn parse_connector(
                 .collect()
         })
         .unwrap_or_default();
-    let adj: Option<f64> = gd_nodes
-        .iter()
-        .find(|n| matches!(attr(n, "name").as_deref(), Some("adj") | Some("adj1")))
-        .or_else(|| gd_nodes.first())
-        .and_then(|n| parse_gd_val(*n));
-    let adj2: Option<f64> = gd_nodes
-        .iter()
-        .find(|n| attr(n, "name").as_deref() == Some("adj2"))
-        .or_else(|| gd_nodes.get(1))
-        .and_then(|n| parse_gd_val(*n));
-    let adj3: Option<f64> = gd_nodes
-        .iter()
-        .find(|n| attr(n, "name").as_deref() == Some("adj3"))
-        .or_else(|| gd_nodes.get(2))
-        .and_then(|n| parse_gd_val(*n));
-    let adj4: Option<f64> = gd_nodes
-        .iter()
-        .find(|n| attr(n, "name").as_deref() == Some("adj4"))
-        .or_else(|| gd_nodes.get(3))
-        .and_then(|n| parse_gd_val(*n));
+    let [adj, adj2, adj3, adj4] =
+        std::array::from_fn(|index| crate::master::preset_adjustment(&gd_nodes, index));
 
     Some(ShapeElement {
         math_fallback: None,

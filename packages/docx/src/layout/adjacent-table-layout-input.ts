@@ -246,6 +246,7 @@ export function combineAdjacentTableLayoutInputs(
 ): AdjacentTableGroupLayoutInput {
   if (groupId.length === 0) throw new RangeError('Adjacent table group id must not be empty');
   if (inputs.length === 0) throw new RangeError('Adjacent table group requires at least one table');
+  // `word-positioned-table-adjacency-exclusion`
   if (inputs.some((input) => !input.ordinaryFlow)) {
     throw new Error('An absolutely positioned table cannot join an adjacent table group');
   }

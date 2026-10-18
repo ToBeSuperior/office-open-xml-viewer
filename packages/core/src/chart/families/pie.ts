@@ -121,11 +121,10 @@ export function renderOfPieChart(
   }
 
   const legendChart: ChartModel = { ...chart, chartType: 'pie' };
-  const legend = measuredLegendReserve(ctx, legendChart, r.w, r.h, 0.28, ptToPx);
+  const legend = measuredLegendReserve(ctx, legendChart, r.w, r.h, ptToPx);
   const frame = computeChartFrame(chart, r.x, r.y, r.w, r.h, ptToPx, {
     titleTopPadFrac: 0.035,
     titleBottomPadFrac: 0.035,
-    legendSideReserveFrac: 0.28,
     legendReserve: legend,
     radialGapFrac: 0.02,
     honorPlotAreaManualLayout: true,
@@ -140,6 +139,9 @@ export function renderOfPieChart(
   const options = chart.ofPie;
   const sizeRatio = Math.max(0.05, Math.min(2, (options?.secondPieSizePercent ?? 75) / 100));
   const gapUnits = Math.max(0, options?.gapWidthPercent ?? 150) / 100;
+  // The split, secondPieSize and gapWidth follow §21.2.2.126 ofPieChart; the
+  // 44 % height / 90 % width fit is library policy (radial geometry is
+  // application-defined; connector and gap geometry are under audit, C-OFPIE-001).
   const mainRadius = Math.min(ph * 0.44, (pw * 0.9) / (2 + 2 * sizeRatio + gapUnits));
   const detailRadius = mainRadius * sizeRatio;
   if (!(mainRadius > 0) || !(detailRadius > 0)) return;
@@ -309,11 +311,10 @@ export function renderPieChart(
   // labels categories (one row per slice) so it reserves a wider 0.28 side band
   // (vs the default 0.22). The h*0.02 gap below the title/legend before centring
   // is the shared radial gap. Params keep pixels unchanged.
-  const pieLeg = measuredLegendReserve(ctx, legendChart, w, h, 0.28, ptToPx);
+  const pieLeg = measuredLegendReserve(ctx, legendChart, w, h, ptToPx);
   const frame = computeChartFrame(chart, x, y, w, h, ptToPx, {
     titleTopPadFrac: 0.035,
     titleBottomPadFrac: 0.035,
-    legendSideReserveFrac: 0.28,
     legendReserve: pieLeg,
     radialGapFrac: 0.02,
     honorPlotAreaManualLayout: true,
@@ -328,6 +329,7 @@ export function renderPieChart(
   );
   const cx2 = frame.center.cx;
   const cy2 = frame.center.cy;
+  // Pie radius (42 % of the plot): library policy from the initial renderer (#11).
   const outerR = Math.min(pw, ph) * 0.42;
 
   // §21.2.2.52 firstSliceAng: the first slice begins `firstSliceAngle` degrees
@@ -1527,7 +1529,7 @@ function drawPieCalloutLabels(
   ctx.restore();
 }
 
-export function paintClassicPiePointOutline(
+function paintClassicPiePointOutline(
   ctx: CanvasRenderingContext2D,
   chart: ChartModel,
   series: ChartSeries,
@@ -1572,7 +1574,7 @@ export function paintClassicPiePointOutline(
   ctx.restore();
 }
 
-export function dataLabelRectIntersection(a: DataLabelRect, b: DataLabelRect): DataLabelRect | null {
+function dataLabelRectIntersection(a: DataLabelRect, b: DataLabelRect): DataLabelRect | null {
   const x = Math.max(a.x, b.x);
   const y = Math.max(a.y, b.y);
   const right = Math.min(a.x + a.w, b.x + b.w);

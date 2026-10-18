@@ -22,7 +22,6 @@ import type {
   DocParagraph,
   DocRun,
   DocxTextRun,
-  FieldRun,
   ShapeTextRun,
   TabStop,
 } from '../types.js';

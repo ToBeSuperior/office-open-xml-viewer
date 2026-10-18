@@ -17,10 +17,8 @@ import type {
   DocxTextRun,
   FieldRun,
   HeadersFooters,
-  ImageRun,
   NumberingInfo,
   LineNumbering,
-  ChartRun,
   ShapeRun,
   DocTable,
   TextPath,
@@ -303,7 +301,7 @@ export interface DocumentPageLayoutSettingsInput {
   readonly printTwoOnOne: boolean;
 }
 
-export function documentPageLayoutSettingsInput(
+function documentPageLayoutSettingsInput(
   doc: DocxDocumentModel,
 ): DocumentPageLayoutSettingsInput {
   const settings = (doc as InternalDocxDocumentModel).__pageLayoutSettings;
@@ -434,7 +432,7 @@ function noteNumberingInput(
   };
 }
 
-export function documentNoteLayoutSettingsInput(
+function documentNoteLayoutSettingsInput(
   doc: DocxDocumentModel,
 ): DocumentNoteLayoutSettingsInput {
   const settings = (doc as InternalDocxDocumentModel).__noteLayoutSettings;
@@ -717,6 +715,7 @@ function publicTableRowHeight(row: TableLayoutSource['rows'][number]): TableRowH
   // compatibility fallback at the model boundary, never in the layout solver.
   const normalized = normalizedTableHeightRule(row.rowHeightRule);
   return {
+    // `word-authored-auto-row-height-floor`: an authored auto height is a floor.
     rule: normalized === 'auto' ? 'atLeast' : normalized,
     valuePt: row.rowHeight,
   };
@@ -747,6 +746,7 @@ function wordTableMarginPt(
 ): number | null {
   if (!width) return null;
   const kind = effectiveTableWidthKind(width);
+  // `word-table-margin-scope-shadow`
   return wordTableMarginValuePt({
     kind,
     dxaValuePt: kind === 'dxa' ? tableTwipsValuePt(width.value ?? '0') : null,
@@ -904,6 +904,7 @@ export function tableFormatInput(table: TableLayoutSource): TableFormatInput {
     // Only the producer elects a grid owner; individual paragraph frame facts
     // never elect a nested OOXML table. Preserve authored TAP presence and
     // acquire bounded grid-frame policy at the table compatibility boundary.
+    // `word-cell-owned-grid-frame`: a cell-owned TAP frame positions the table.
     positioning: ordinaryFlow ? null : cellFrame ? cellOwnedGridFramePosition(cellFrame)
       : table.tblpPr == null ? null : floatingTablePositionInput(table.tblpPr),
     rows,
@@ -2169,15 +2170,15 @@ export function normalizeDocxDocumentModel(doc: DocxDocumentModel): DocxDocument
   return normalizeInternalDocumentModel(doc).document;
 }
 
-export function internalNumberingInfo(numbering: NumberingInfo): InternalNumberingInfo {
+function internalNumberingInfo(numbering: NumberingInfo): InternalNumberingInfo {
   return numbering as InternalNumberingInfo;
 }
 
-export function internalParagraph(paragraph: ParagraphLayoutSource): InternalDocParagraph {
+function internalParagraph(paragraph: ParagraphLayoutSource): InternalDocParagraph {
   return paragraph as unknown as InternalDocParagraph;
 }
 
-export function internalDocumentModel(doc: DocxDocumentModel): InternalDocxDocumentModel {
+function internalDocumentModel(doc: DocxDocumentModel): InternalDocxDocumentModel {
   return doc as InternalDocxDocumentModel;
 }
 

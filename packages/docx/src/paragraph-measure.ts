@@ -19,7 +19,6 @@ import {
   type WrapLayoutCtx,
 } from './line-layout.js';
 import type { ParagraphLayoutSource } from './layout/text.js';
-import type { DocParagraph } from './types.js';
 import type { WrapOracle } from './layout/float-wrap-oracle.js';
 import type { NumberingMarkerShapeInput, WritingMode } from './layout/types.js';
 import { wordEmptyMarkMinimumStartWidthPx } from './layout/compatibility.js';
@@ -328,6 +327,7 @@ export function measureParagraph(
   // reserve cannot determine either a probe band or the next physical origin.
   const specifiedParagraph = specifiedTextParagraphIsHomogeneous(paragraph);
   const allocateLines = (lines: readonly LayoutLine[]) => {
+    // `word-ruby-paragraph-uniform-line-advance`
     let uniformRubyAdvancePt = context.hasRuby
       ? snapParagraphLineToGrid(
           lines.reduce((heightPt, line) => Math.max(heightPt, lineBoxHeight(

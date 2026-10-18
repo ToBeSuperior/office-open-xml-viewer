@@ -455,17 +455,6 @@ pub(crate) fn parse_shadow(
     parse_shadow_node(child(effect_lst, "outerShdw")?, theme)
 }
 
-/// Parse spPr > effectLst > innerShdw into a Shadow. ECMA-376 §20.1.8.21
-/// (CT_InnerShadowEffect) — same field shape as outerShdw, semantics differ
-/// at render time (cast inward).
-#[cfg(test)]
-pub(crate) fn parse_inner_shadow(
-    effect_lst: roxmltree::Node<'_, '_>,
-    theme: &HashMap<String, String>,
-) -> Option<Shadow> {
-    parse_shadow_node(child(effect_lst, "innerShdw")?, theme)
-}
-
 /// Shared field reader for innerShdw / outerShdw. Both elements expose
 /// blurRad, dist, dir, and a color child with optional alphaModFix.
 pub(crate) fn parse_shadow_node(
@@ -487,39 +476,6 @@ fn parse_shadow_node_with_resolver<R: ThemeResolver + ?Sized>(
     Some(ooxml_common::effect::parse_shadow_effect(
         n, resolver, tint_mode,
     ))
-}
-
-/// Parse spPr > effectLst > glow into a Glow effect — ECMA-376 §20.1.8.17
-/// (CT_GlowEffect): a coloured halo with a blur radius, no offset.
-#[cfg(test)]
-pub(crate) fn parse_glow(
-    effect_lst: roxmltree::Node<'_, '_>,
-    theme: &HashMap<String, String>,
-) -> Option<Glow> {
-    let g = child(effect_lst, "glow")?;
-    parse_glow_node_with_resolver(
-        g,
-        &PptxSchemeResolver { theme },
-        ooxml_common::color::TintMode::PowerPointLinear,
-    )
-}
-
-#[cfg(test)]
-fn parse_glow_node_with_resolver<R: ThemeResolver + ?Sized>(
-    g: roxmltree::Node<'_, '_>,
-    resolver: &R,
-    tint_mode: ooxml_common::color::TintMode,
-) -> Option<Glow> {
-    Some(ooxml_common::effect::parse_glow_effect(
-        g, resolver, tint_mode,
-    ))
-}
-
-/// Parse spPr > effectLst > softEdge into a SoftEdge — ECMA-376 §20.1.8.31.
-#[cfg(test)]
-pub(crate) fn parse_soft_edge(effect_lst: roxmltree::Node<'_, '_>) -> Option<SoftEdge> {
-    let n = child(effect_lst, "softEdge")?;
-    Some(ooxml_common::effect::parse_soft_edge_effect(n))
 }
 
 /// Parse spPr > effectLst > reflection — ECMA-376 §20.1.8.27. Defaults

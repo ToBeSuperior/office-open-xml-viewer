@@ -6,21 +6,9 @@
 //! parsers from drifting on defaults, units, or colour resolution.
 
 use crate::color::{parse_color_node, ThemeResolver, TintMode};
+use crate::xml_node::{attr_f64, attr_i64, child};
 use roxmltree::Node;
 use serde::{Deserialize, Serialize};
-
-fn child<'a>(node: Node<'a, 'a>, name: &str) -> Option<Node<'a, 'a>> {
-    node.children()
-        .find(|candidate| candidate.is_element() && candidate.tag_name().name() == name)
-}
-
-fn attr_i64(node: Node<'_, '_>, name: &str) -> Option<i64> {
-    node.attribute(name)?.parse().ok()
-}
-
-fn attr_f64(node: Node<'_, '_>, name: &str) -> Option<f64> {
-    node.attribute(name)?.parse().ok()
-}
 
 /// ECMA-376 §20.1.8.45/40 outer or inner shadow.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -124,13 +112,13 @@ pub fn parse_shadow_effect<R: ThemeResolver + ?Sized>(
     Shadow {
         color,
         alpha,
-        blur: attr_i64(node, "blurRad").unwrap_or(0),
-        dist: attr_i64(node, "dist").unwrap_or(0),
-        dir: attr_f64(node, "dir").unwrap_or(0.0) / 60_000.0,
-        sx: attr_f64(node, "sx").map(|value| value / 100_000.0),
-        sy: attr_f64(node, "sy").map(|value| value / 100_000.0),
-        kx: attr_f64(node, "kx").map(|value| value / 60_000.0),
-        ky: attr_f64(node, "ky").map(|value| value / 60_000.0),
+        blur: attr_i64(&node, "blurRad").unwrap_or(0),
+        dist: attr_i64(&node, "dist").unwrap_or(0),
+        dir: attr_f64(&node, "dir").unwrap_or(0.0) / 60_000.0,
+        sx: attr_f64(&node, "sx").map(|value| value / 100_000.0),
+        sy: attr_f64(&node, "sy").map(|value| value / 100_000.0),
+        kx: attr_f64(&node, "kx").map(|value| value / 60_000.0),
+        ky: attr_f64(&node, "ky").map(|value| value / 60_000.0),
         algn: node.attribute("algn").map(ToOwned::to_owned),
         rot_with_shape: node
             .attribute("rotWithShape")
@@ -193,28 +181,28 @@ pub fn parse_glow_effect<R: ThemeResolver + ?Sized>(
     Glow {
         color,
         alpha,
-        radius: attr_i64(node, "rad").unwrap_or(0),
+        radius: attr_i64(&node, "rad").unwrap_or(0),
     }
 }
 
 /// Parse one `<a:softEdge>` element.
 pub fn parse_soft_edge_effect(node: Node<'_, '_>) -> SoftEdge {
     SoftEdge {
-        radius: attr_i64(node, "rad").unwrap_or(0),
+        radius: attr_i64(&node, "rad").unwrap_or(0),
     }
 }
 
 /// Parse one `<a:reflection>` element with the CT_ReflectionEffect defaults.
 pub fn parse_reflection_effect(node: Node<'_, '_>) -> Reflection {
     let pct = |name: &str, default: f64| {
-        attr_f64(node, name)
+        attr_f64(&node, name)
             .map(|value| value / 100_000.0)
             .unwrap_or(default)
     };
     Reflection {
-        blur: attr_i64(node, "blurRad").unwrap_or(0),
-        dist: attr_i64(node, "dist").unwrap_or(0),
-        dir: attr_f64(node, "dir").unwrap_or(0.0) / 60_000.0,
+        blur: attr_i64(&node, "blurRad").unwrap_or(0),
+        dist: attr_i64(&node, "dist").unwrap_or(0),
+        dir: attr_f64(&node, "dir").unwrap_or(0.0) / 60_000.0,
         st_a: pct("stA", 1.0),
         st_pos: pct("stPos", 0.0),
         end_a: pct("endA", 0.0),
