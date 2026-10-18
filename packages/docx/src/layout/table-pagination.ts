@@ -716,8 +716,8 @@ function layoutNestedWholeAt(
   context: TableFragmentContext,
 ): TableLayout {
   const sourceRows = nested.input.rows;
-  const layoutRows = (rows: readonly TableRowLayoutInput[]) => layoutTable(
-    { ...nested.input, rows }, context.placement, context.services,
+  const layoutRows = (rows: readonly TableRowLayoutInput[]) => layoutTableFragment(
+    nested, { ...nested.input, rows }, context.placement, context.services,
   ).layout;
   const placedWhole: PlacedWholeLayouts = new Map();
   const placements: readonly (RowPagePlacement | null)[] = needsNestedPageOrigins(nested)
@@ -1865,7 +1865,7 @@ function materializeFragment(
     id: `${source.input.id}:fragment:${context.page.occurrenceId}`,
     rows: selected.map((row) => row.input),
   };
-  const laidOut = layoutTableFragment(fragmentInput, context.placement, context.services);
+  const laidOut = layoutTableFragment(source, fragmentInput, context.placement, context.services).layout;
   const rows = laidOut.rows.map((row, rowIndex): TableRowFragmentLayout => {
     const selection = selected[rowIndex]!;
     return Object.freeze({

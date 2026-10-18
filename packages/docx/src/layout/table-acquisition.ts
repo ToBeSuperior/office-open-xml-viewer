@@ -304,11 +304,21 @@ interface RotatedCellAcquisition {
 
 type TableCellLayoutInput = TableLayoutInput['rows'][number]['cells'][number];
 
-/** Each retained rotated cell's acquisition, keyed by its cell in the
- * retained input, so a page-local fragment of the table can acquire its lines
- * again at that fragment's length (relayoutRotatedFragmentLines). Same-realm
- * only: the closure re-enters this acquisition's paragraph services. */
-const rotatedCellReacquisitions = new WeakMap<TableCellLayoutInput, RotatedCellAcquisition>();
+/** Each retained table's rotated cell acquisitions by cell id, so a
+ * page-local fragment or owner segment of the table can acquire their lines
+ * again at its own length (layoutTableFragment). Keyed by the acquisition's
+ * retained input; a projection with its own input (an owner segment) shares
+ * them through shareRotatedCellReacquisition. Cell ids survive the
+ * per-occurrence cell copies pagination makes. Same-realm only: the closures
+ * re-enter this acquisition's paragraph services. */
+const rotatedCellReacquisitions = new WeakMap<TableLayoutInput, ReadonlyMap<string, RotatedCellAcquisition>>();
+
+/** Let a projection of a retained table (its rows re-sliced into a new input)
+ * re-acquire the retained table's rotated cells. */
+export function shareRotatedCellReacquisition(from: TableLayoutInput, to: TableLayoutInput): void {
+  const rotated = rotatedCellReacquisitions.get(from);
+  if (rotated) rotatedCellReacquisitions.set(to, rotated);
+}
 
 /**
  * A rotated cell's lines run along its final height. When other cells or a
@@ -323,12 +333,13 @@ const rotatedCellReacquisitions = new WeakMap<TableCellLayoutInput, RotatedCellA
  */
 function relayoutRotatedCellLines(
   input: TableLayoutInput,
-  layout: TableLayout,
+  laidOut: ReturnType<typeof layoutTable>,
   placement: Parameters<typeof layoutTable>[1],
   services: Parameters<typeof layoutTable>[2],
   rotatedOf: (cell: TableCellLayoutInput) => RotatedCellAcquisition | undefined,
   label: string,
-): { input: TableLayoutInput; layout: TableLayout } {
+): { input: TableLayoutInput; laidOut: ReturnType<typeof layoutTable> } {
+  const { layout } = laidOut;
   let ruleInsets: ReturnType<typeof tableRowRuleInsetsPt> | null = null;
   const tableBottomPt = layout.flowBounds.yPt + layout.advancePt;
   const replacements = new Map<string, Pick<TableCellLayoutInput, 'blocks' | 'verticalText'>>();
@@ -357,7 +368,7 @@ function relayoutRotatedCellLines(
       });
     }
   }));
-  if (replacements.size === 0) return { input, layout };
+  if (replacements.size === 0) return { input, laidOut };
   const finalInput = snapshotPlainData<TableLayoutInput>({
     ...input,
     rows: input.rows.map((row, rowIndex) => ({
@@ -368,7 +379,7 @@ function relayoutRotatedCellLines(
       }),
     })),
   }, label) as TableLayoutInput;
-  return { input: finalInput, layout: layoutTable(finalInput, placement, services).layout };
+  return { input: finalInput, laidOut: layoutTable(finalInput, placement, services) };
 }
 
 /**
@@ -378,18 +389,22 @@ function relayoutRotatedCellLines(
  * acquired again at the fragment's length.
  */
 export function layoutTableFragment(
+  source: RetainedTableAcquisition,
   input: TableLayoutInput,
   placement: Parameters<typeof layoutTable>[1],
   services: Parameters<typeof layoutTable>[2],
-): TableLayout {
+): ReturnType<typeof layoutTable> {
+  const laidOut = layoutTable(input, placement, services);
+  const rotated = rotatedCellReacquisitions.get(source.input);
+  if (!rotated) return laidOut;
   return relayoutRotatedCellLines(
     input,
-    layoutTable(input, placement, services).layout,
+    laidOut,
     placement,
     services,
-    (cell) => rotatedCellReacquisitions.get(cell),
+    (cell) => rotated.get(cell.id),
     'TableFragment.input',
-  ).layout;
+  ).laidOut;
 }
 
 /**
@@ -825,18 +840,20 @@ export function acquireRetainedTable<State>(
     input.rows[rotated.rowIndex]!.cells[rotated.cellIndex]!,
     rotated,
   ]));
-  const { input: finalInput, layout } = relayoutRotatedCellLines(
+  const { input: finalInput, laidOut: { layout } } = relayoutRotatedCellLines(
     input,
-    layoutTable(input, placement, services).layout,
+    layoutTable(input, placement, services),
     placement,
     services,
     (cell) => rotatedByCell.get(cell),
     'RetainedTableAcquisition.input',
   );
-  finalInput.rows.forEach((row, rowIndex) => row.cells.forEach((cell, cellIndex) => {
-    const rotated = rotatedByCell.get(input.rows[rowIndex]!.cells[cellIndex]!);
-    if (rotated) rotatedCellReacquisitions.set(cell, rotated);
-  }));
+  if (rotatedCells.length > 0) {
+    rotatedCellReacquisitions.set(finalInput, new Map(rotatedCells.map((rotated) => [
+      input.rows[rotated.rowIndex]!.cells[rotated.cellIndex]!.id,
+      rotated,
+    ])));
+  }
   return Object.freeze({
     input: finalInput,
     layout,

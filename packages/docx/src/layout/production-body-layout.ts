@@ -124,7 +124,9 @@ import { buildFont, fontClassesWithPitches, getDefaultFontSize, paragraphMarkLin
 import type { DocGridCtx } from '../line-layout.js';
 import {
   acquireRetainedTable,
+  layoutTableFragment,
   type RetainedTableAcquisition,
+  shareRotatedCellReacquisition,
   retainedTableAcquisitionIsReusableAcrossPages,
 } from './table-acquisition.js';
 import { combineAdjacentTableLayoutInputs } from './adjacent-table-layout-input.js';
@@ -943,6 +945,7 @@ function layoutBodyStory(
     }
     return segments.map((segment) => {
       const projected = ownerSegmentInput(input, segment);
+      shareRotatedCellReacquisition(input, projected);
       storyTableAcquisitions.set(projected.id, Object.freeze({ ...acquisition, input: projected }));
       return projected;
     });
@@ -1204,8 +1207,11 @@ function layoutBodyStory(
     toPage: Readonly<{ xPt: number; yPt: number }> | undefined,
   ): BlockLayoutResult<TableLayout> {
     const acquisition = storyTableAcquisitions.get(input.id);
-    if (!toPage || !acquisition || !hasPagePlacedTableContent(acquisition)) {
-      return layoutRetainedTableInput(input, placement, storyServices);
+    if (!acquisition) return layoutRetainedTableInput(input, placement, storyServices);
+    if (!toPage || !hasPagePlacedTableContent(acquisition)) {
+      // An owner segment is a slice of the table: its rotated cells' lines
+      // follow the segment's own rules.
+      return layoutTableFragment(acquisition, input, placement, storyServices);
     }
     // Laid out whole at its page position, as a nested table placed by its
     // parent's pagination is: §17.4.57 positioned tables at any depth given
