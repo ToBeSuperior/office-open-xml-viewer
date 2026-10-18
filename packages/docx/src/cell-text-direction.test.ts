@@ -344,6 +344,7 @@ describe('ECMA-376 §17.4.72 cell text direction', () => {
   });
 
   it('re-runs a rotated line against the rules of a header owner segment', async () => {
+    for (const nestedPositioned of [false, true]) {
     // The second row's framePr carrier makes it its own frame-positioned
     // owner segment at y=100, where it takes the 6pt table top rule: its line
     // spans 106..180pt and right-aligned text still ends at y=180.
@@ -353,10 +354,21 @@ describe('ECMA-376 §17.4.72 cell text direction', () => {
       dropCap: 'none', lines: 1, wrap: 'notBeside', hAnchor: 'page', vAnchor: 'page',
       hRule: 'auto', hSpace: 0, vSpace: 0, x: 0, y: 100,
     };
+    // A positioned nested table makes the segment lay out whole at its page
+    // position, through a normalized copy of the segment input.
+    const nested = {
+      type: 'table', ...tableOf([row([cell('n'), cell('m')])]),
+      tblpPr: {
+        leftFromText: 0, rightFromText: 0, topFromText: 0, bottomFromText: 0,
+        horzAnchor: 'page', horzSpecified: true, vertAnchor: 'page', tblpX: 250, tblpY: 300,
+      },
+    } as unknown as CellElement;
     const ruled = tableOf([
       row([cell('AB', { textDirection: 'tbRl', alignment: 'right' }), cell('x')], 80, 'exact'),
       row([
-        cell('y', { content: [carrier as unknown as CellElement] }),
+        cell('y', {
+          content: [carrier as unknown as CellElement, ...(nestedPositioned ? [nested, paraOf('z')] : [])],
+        }),
         cell('CD', { textDirection: 'tbRl', alignment: 'right' }),
       ], 80, 'exact'),
     ]);
@@ -373,6 +385,8 @@ describe('ECMA-376 §17.4.72 cell text direction', () => {
     await renderDocumentToCanvas(model, canvas, 0, { dpr: 1, width: 400 });
     const text = calls.find((call) => call.text.includes('CD'))!;
     expect(text.y).toBeCloseTo(160, 0);
+    if (nestedPositioned) expect(calls.some((call) => call.text.includes('n'))).toBe(true);
+    }
   });
 
   it('re-runs rotated lines laid out as one adjacent table group', async () => {

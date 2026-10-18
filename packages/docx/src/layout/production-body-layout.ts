@@ -1218,6 +1218,7 @@ function layoutBodyStory(
     // final frames on the page (a story table resolves no other way; before
     // this they were never placed). Their resolutions avoid only each other:
     // a story keeps no page float registry.
+    shareRotatedCellReacquisition(acquisition.input, input);
     const layout = layoutWholeTableOnPage({ ...acquisition, input }, {
       availableHeightPt: placement.availableBounds.heightPt,
       freshPageHeightPt: placement.availableBounds.heightPt,
