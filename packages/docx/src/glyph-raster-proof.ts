@@ -96,6 +96,9 @@ export function sameGlyphRaster(request: Readonly<GlyphRasterComparisonRequest>)
 // Bounded per realm: a grapheme's ownership by one registration never changes.
 const ownership = new Map<string, boolean>();
 const OWNERSHIP_LIMIT = 16384;
+/** Longer graphemes (long combining sequences) are proved but not cached, so
+ * the realm-wide cache stays bounded in bytes as well as entries. */
+const OWNERSHIP_KEY_UNITS = 16;
 let graphemes: Intl.Segmenter | null | undefined;
 
 /**
@@ -131,8 +134,10 @@ export function ownsGlyphs(request: Readonly<GlyphOwnershipRequest>): boolean {
       const inkHeight = (metrics.actualBoundingBoxAscent ?? 0) + (metrics.actualBoundingBoxDescent ?? 0);
       owned = metrics.width === 0 && Number.isFinite(inkWidth) && Number.isFinite(inkHeight)
         && inkWidth <= 0 && inkHeight <= 0;
-      if (ownership.size >= OWNERSHIP_LIMIT) ownership.clear();
-      ownership.set(key, owned);
+      if (part.length <= OWNERSHIP_KEY_UNITS) {
+        if (ownership.size >= OWNERSHIP_LIMIT) ownership.clear();
+        ownership.set(key, owned);
+      }
     }
     if (!owned) return false;
   }

@@ -1514,26 +1514,35 @@ function textPlacement(
         measure: true,
       })
     : undefined;
-  // Each guide grapheme is painted alone at its contextual prefix offset.
-  // Those offsets already carry the shaping decision (including
-  // WORD_ARABIC_PAIR_KERNING), and a single grapheme has no pair to kern, so
-  // the paint operations need no kerning state of their own.
+  // Guide graphemes paint alone at their contextual prefix offsets. A
+  // pair-kerned span (WORD_ARABIC_PAIR_KERNING) paints whole instead: a prefix
+  // excludes the pair adjustment with its following glyph, and Arabic joins
+  // across graphemes, so only the contextual span reproduces its acquisition.
   const rubySpans = segment.ruby && rubyShape
-    ? (rubyShape.clusters ?? []).map((cluster) => {
-        const span = rubyShape.spans.find((candidate) =>
-          candidate.start <= cluster.range.start && candidate.end >= cluster.range.end)
-          ?? rubyShape.spans[0];
-        if (!span) throw new Error('Ruby shaping produced no selected-face span');
-        return {
-          text: segment.ruby!.text.slice(cluster.range.start, cluster.range.end),
-          offsetPt: cluster.offsetPt,
-          fontRoute: span.fontRoute,
-          fontSizePt: segment.ruby!.fontSizePt,
-          fontWeight: span.font.weight,
-          fontStyle: span.font.style,
-          color,
-        };
-      })
+    ? (() => {
+        const ruby = segment.ruby!;
+        const contextual = new Set<object>();
+        return (rubyShape.clusters ?? []).flatMap((cluster) => {
+          const span = rubyShape.spans.find((candidate) =>
+            candidate.start <= cluster.range.start && candidate.end >= cluster.range.end)
+            ?? rubyShape.spans[0];
+          if (!span) throw new Error('Ruby shaping produced no selected-face span');
+          const kerned = wordArabicTextKerned(span.text);
+          if (kerned && contextual.has(span)) return [];
+          if (kerned) contextual.add(span);
+          return [{
+            text: kerned ? ruby.text.slice(span.start, span.end)
+              : ruby.text.slice(cluster.range.start, cluster.range.end),
+            offsetPt: cluster.offsetPt,
+            fontRoute: span.fontRoute,
+            fontSizePt: ruby.fontSizePt,
+            fontWeight: span.font.weight,
+            fontStyle: span.font.style,
+            color,
+            ...(kerned ? { kerning: 'normal' as const } : {}),
+          }];
+        });
+      })()
     : [];
   const rubyRaisePt = typography?.ruby?.raisePt.status === 'valid'
     ? typography.ruby.raisePt.value ?? undefined
