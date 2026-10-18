@@ -65,6 +65,9 @@ export default defineConfig({
         '@silurus/ooxml-core/internal/office-auto-line': fileURLToPath(
           new URL('../packages/core/src/fonts/office-auto-line.ts', import.meta.url),
         ),
+        '@silurus/ooxml-core/internal/font-decoration': fileURLToPath(
+          new URL('../packages/core/src/text/font-decoration.ts', import.meta.url),
+        ),
         '@silurus/ooxml-core/internal/bounded-async-lru-cache': fileURLToPath(
           new URL('../packages/core/src/internal/bounded-async-lru-cache.ts', import.meta.url),
         ),

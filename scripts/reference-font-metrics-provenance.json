@@ -4,15 +4,15 @@
   "sources": [
     {
       "id": "office-mac",
-      "version": "16.113.2 (16.113.26092012)"
+      "version": "16.114 (16.114.26101123)"
     },
     {
       "id": "macos-system",
-      "version": "27.0 (26A428)"
+      "version": "27.0.1 (26A434)"
     },
     {
       "id": "macos-supplemental",
-      "version": "27.0 (26A428)"
+      "version": "27.0.1 (26A434)"
     }
   ],
   "faces": [

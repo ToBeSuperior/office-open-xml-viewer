@@ -878,6 +878,11 @@ export interface ShapeRun {
   /** ECMA-376 §20.4.2.8 — true when the shape is hosted by `<wp:inline>` and
    * therefore advances the paragraph pen like an inline drawing object. */
   inline?: boolean;
+  /** Paint offset (pt) of an inline shape from its pen position — a VML
+   * position:relative shape's left/top (ECMA-376 Part 4 §19.1.2.19). The line
+   * advance is unchanged. */
+  inlineOffsetXPt?: number;
+  inlineOffsetYPt?: number;
   widthPt: number;
   heightPt: number;
   /** X offset in pt */

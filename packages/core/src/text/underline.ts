@@ -1,16 +1,15 @@
 import { crispOffset } from '../canvas/crisp.js';
 import { pptxUnderlineDashArray } from '../draw/dash.js';
 
-// ── Decoration geometry (library policy) ────────────────────────────────────
+// ── Decoration geometry ─────────────────────────────────────────────────────
 // ECMA-376 names the underline / strike style (§20.1.10.82 ST_TextUnderlineType,
 // §20.1.10.79 ST_TextStrikeType, §17.18.99 ST_Underline) but not its position or
-// thickness. The font-level rule is OpenType `post.underlinePosition /
-// underlineThickness` and `OS/2.yStrikeoutPosition / yStrikeoutSize`; the
-// generated reference-font-metrics table does not carry those fields yet and
-// the Canvas API does not expose them, so these em fractions stand in for every
-// face. No Office measurement backs the values (they date from the initial pptx
-// renderer); replacing them with the font fields is a rendering change that
-// needs the metrics table extended first.
+// thickness. A catalogued face supplies its own rule (OpenType post
+// underlinePosition / underlineThickness, OS/2 yStrikeoutPosition /
+// yStrikeoutSize; see `font-decoration.ts`), which Windows Word and PowerPoint
+// 16.0.20430 draw (#1896 controls). The em fractions below are library policy
+// for faces the reference table does not catalogue (the Canvas API exposes no
+// font tables).
 
 /** Decoration stroke width as a fraction of the font size (minimum 1 px). */
 export const DECORATION_LINE_WIDTH_EM = 0.05;
@@ -53,16 +52,26 @@ export function drawUnderline(
   style: string | undefined,
   dpr = 1,
   authoredLineWidthPx?: number,
+  fontRule?: Readonly<{ topPx: number; thicknessPx: number }>,
 ): void {
   const baseLineW = authoredLineWidthPx != null
-    ? Math.max(0, authoredLineWidthPx) : Math.max(1, sizePx * DECORATION_LINE_WIDTH_EM);
+    ? Math.max(0, authoredLineWidthPx)
+    : fontRule ? fontRule.thicknessPx : Math.max(1, sizePx * DECORATION_LINE_WIDTH_EM);
   // ST_TextUnderlineType (§20.1.10.82) has two distinct "heavy" spellings:
   // the bare `heavy` value itself, and the `*Heavy` suffix on the dotted/dash/
   // wavy families (`dottedHeavy`, `dashHeavy`, …). Both denote the same ~1.8×
   // weight class ({@link HEAVY_WEIGHT_FACTOR}), so both must be recognized here.
   const heavy = style === 'heavy' || (style?.endsWith('Heavy') ?? false);
-  const lineW = heavy ? baseLineW * HEAVY_WEIGHT_FACTOR : baseLineW;
-  const y = baseline + Math.max(2, lineW);
+  // With the face's own rule (post underlinePosition / underlineThickness),
+  // Windows PowerPoint 16.0.20430 draws the single rule there and a heavy
+  // rule 1.5x as thick with its bottom at the single rule's centre (#1896
+  // controls: Arial, Times New Roman, Calibri at 48pt). Other styles centre on
+  // the single rule. Without it, the library geometry below applies.
+  const lineW = heavy ? baseLineW * (fontRule ? 1.5 : HEAVY_WEIGHT_FACTOR) : baseLineW;
+  const singleCentre = fontRule ? baseline + fontRule.topPx + baseLineW / 2 : undefined;
+  const y = singleCentre === undefined
+    ? baseline + Math.max(2, lineW)
+    : heavy ? singleCentre - lineW / 2 : singleCentre;
   // Crispness nudge (see crispOffset): a horizontal underline whose device-pixel
   // width is odd straddles two device rows on a DPR=1 display (blurry). Snapping
   // the line's y onto the nearest crisp device position centers an odd-width
