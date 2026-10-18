@@ -4157,7 +4157,7 @@ mod tests {
             let options = zip::write::SimpleFileOptions::default();
             for index in 0..source.len() {
                 let mut entry = source.by_index(index).unwrap();
-                let name = entry.name().to_owned();
+                let name = entry.name().unwrap().into_owned();
                 let mut body = Vec::new();
                 entry.read_to_end(&mut body).unwrap();
                 writer.start_file(name, options).unwrap();
