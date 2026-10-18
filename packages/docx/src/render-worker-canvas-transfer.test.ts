@@ -154,6 +154,8 @@ class LoopbackWorker implements WorkerLike {
 async function loadWorker(parse = true) {
   vi.resetModules();
   const scope = {
+    // A realm FontFaceSet; registrations themselves are mocked above.
+    fonts: {} as FontFaceSet,
     onmessage: null as ((event: MessageEvent) => Promise<void>) | null,
     postMessage: (message: unknown) => worker.receive(message),
   };

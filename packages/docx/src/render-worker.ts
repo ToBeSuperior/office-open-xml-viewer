@@ -300,7 +300,11 @@ self.onmessage = async (e: MessageEvent<RenderWorkerWireRequest | WorkerSvgDecod
       // sentinel registrations. A realm that cannot register them would lay out
       // differently from main mode, which can; such a document continues on
       // the main thread instead, exactly like DOM-dependent vertical text.
-      const nativeSentinels = await loadNativeRouteSentinels(activeFontSet());
+      // A realm without any FontFaceSet (a headless host) registers no font
+      // at all, embedded or local, and declines every measured line as main
+      // mode in that host does; it keeps laying out here.
+      const workerFontSet = activeFontSet();
+      const nativeSentinels = workerFontSet ? await loadNativeRouteSentinels(workerFontSet) : [];
       if (requestedGeneration !== parseGeneration) {
         if (nativeSentinels) unloadOfficeFontFallbacks(nativeSentinels);
         throw new Error('render-worker parse was superseded');

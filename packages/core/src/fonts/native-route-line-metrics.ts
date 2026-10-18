@@ -209,9 +209,12 @@ function sentinelsWork(context: CanvasFontBoxProbeContext): boolean {
   }
 }
 
-/** Register both sentinels in `fontSet` (refcounted) and validate them in the
- * realm whose canvases use that set. Returns the retained faces for the
- * caller's release list, or null (nothing retained) when unavailable. */
+/** Register both sentinels in `fontSet` (refcounted). Returns the retained
+ * faces for the caller's release list, or null (nothing retained) when this
+ * realm cannot register or load them. Registration is not proof that a realm
+ * applies them: every consumer (measurement, verification, ownership)
+ * validates the sentinel geometry itself before relying on it, and declines
+ * otherwise. */
 export async function loadNativeRouteSentinels(fontSet: FontFaceSet | null): Promise<FontFace[] | null> {
   if (!fontSet || typeof FontFace === 'undefined') return null;
   const faces: FontFace[] = [];
@@ -226,11 +229,9 @@ export async function loadNativeRouteSentinels(fontSet: FontFaceSet | null): Pro
         return face;
       }).face);
     }
-    await withFontCeiling(Promise.all(faces.map((face) => face.load())));
-    const owner = typeof document !== 'undefined' && document.fonts === fontSet ? document : null;
-    const context = newProbeContext(owner);
-    if (faces.every((face) => face.status === 'loaded') && context && sentinelsWork(context)) return faces;
-  } catch { /* Unavailable sentinels decline every native route. */ }
+    const loaded = await withFontCeiling(Promise.all(faces.map((face) => face.load())));
+    if (loaded) return faces;
+  } catch { /* Unregistrable sentinels decline every native route. */ }
   releaseFaces(faces);
   return null;
 }
