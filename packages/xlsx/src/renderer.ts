@@ -89,6 +89,25 @@ function effectOutsetRect(
   return { x: x - frame.x * sx, y: y - frame.y * sy, width: size.width * sx, height: size.height * sy };
 }
 
+/** Axis-aligned bounds of `rect` after the picture's flips and rotation
+ *  about the authored frame centre (cx, cy) — the transform paint applies,
+ *  so an asymmetric effect outset is culled where it is actually painted. */
+function transformedBoundsAbout(
+  rect: { x: number; y: number; width: number; height: number },
+  cx: number, cy: number, rotationDeg: number, flipH: boolean, flipV: boolean,
+): { x: number; y: number; width: number; height: number } {
+  const r = rotationDeg * Math.PI / 180, cos = Math.cos(r), sin = Math.sin(r);
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const [px, py] of [[rect.x, rect.y], [rect.x + rect.width, rect.y],
+    [rect.x, rect.y + rect.height], [rect.x + rect.width, rect.y + rect.height]] as const) {
+    const dx = (px - cx) * (flipH ? -1 : 1), dy = (py - cy) * (flipV ? -1 : 1);
+    const x = cx + dx * cos - dy * sin, y = cy + dx * sin + dy * cos;
+    minX = Math.min(minX, x); minY = Math.min(minY, y);
+    maxX = Math.max(maxX, x); maxY = Math.max(maxY, y);
+  }
+  return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+}
+
 export function imageCacheKey(
   imagePath: string,
   transform?: Duotone | BlipPixelEffects | null,
@@ -4597,10 +4616,10 @@ function renderImages(
     // A prepared CT_Blip effect can extend beyond the authored frame (blur
     // grow, glow, shadow); cull by the painted extent, not the frame alone.
     const outset = img && !anchor.srcRect ? effectOutsetRect(img, canvasX, canvasY, imgW, imgH) : null;
-    const bounds = rotatedImageBounds(
-      outset ?? { x: canvasX, y: canvasY, width: imgW, height: imgH },
-      anchor.rotation,
-    );
+    const bounds = outset
+      ? transformedBoundsAbout(outset, canvasX + imgW / 2, canvasY + imgH / 2,
+        anchor.rotation ?? 0, anchor.flipH ?? false, anchor.flipV ?? false)
+      : rotatedImageBounds({ x: canvasX, y: canvasY, width: imgW, height: imgH }, anchor.rotation);
     if (bounds.x + bounds.width < clipX || bounds.x > clipX + scrollAreaW) continue;
     if (bounds.y + bounds.height < scrollAreaY || bounds.y > scrollAreaY + scrollAreaH) continue;
 
@@ -4694,7 +4713,7 @@ function renderShapeGroups(
 
     // A picture leaf with a CT_Blip chain may paint an effect outset beyond
     // the group rectangle; such groups are not culled by that rectangle.
-    const effectLeaf = anchor.shapes.some(shape => shape.geom.type === 'image' && Boolean(shape.geom.blipEffects?.length));
+    const effectLeaf = anchor.shapes.some(shape => shape.geom?.type === 'image' && Boolean(shape.geom.blipEffects?.length));
     if (!effectLeaf && (canvasX + w < clipX || canvasX > clipX + scrollAreaW)) continue;
     if (!effectLeaf && (canvasY + h < scrollAreaY || canvasY > scrollAreaY + scrollAreaH)) continue;
 

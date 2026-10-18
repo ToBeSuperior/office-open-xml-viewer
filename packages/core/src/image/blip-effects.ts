@@ -723,7 +723,8 @@ function evaluateBlipPixels(buf: EffectBuffer, value: BlipPixelEffects, runtime:
  * Effect fills use a rectangular outline, bounding their edge work too. */
 function fillWork(fill: BlipEffectFill, grid: EffectGrid, value: BlipPixelEffects, runtime?: BlipEffectRuntime): number {
   const pixels = grid.width * grid.height;
-  let work = pixels > 0 ? effectFillWork(fill, grid, value.emuPerPixelX ?? 9525, value.emuPerPixelY ?? 9525, runtime)
+  let work = pixels > 0 ? effectFillWork(fill, grid, value.emuPerPixelX ?? 9525, value.emuPerPixelY ?? 9525, runtime,
+    value.hostRotation ?? 0)
     + fillPaintWorkspaceBytes(fill) : 0;
   if (fill.fillType === 'gradient') work += 2 * fill.stops.length * (1 + Math.max(1, Math.ceil(Math.log2(fill.stops.length))));
   return work;

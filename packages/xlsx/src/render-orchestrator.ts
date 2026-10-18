@@ -497,7 +497,7 @@ export async function prefetchImages(
         opts?.viewport,
         geometry,
         frame,
-        grp.shapes.some(shape => shape.geom.type === 'image' && Boolean(shape.geom.blipEffects?.length)),
+        grp.shapes.some(shape => shape.geom?.type === 'image' && Boolean(shape.geom.blipEffects?.length)),
       )) continue;
       for (const shape of grp.shapes) {
         if (shape.geom.type === 'image') {

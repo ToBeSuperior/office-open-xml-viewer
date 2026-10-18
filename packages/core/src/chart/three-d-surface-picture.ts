@@ -4,7 +4,7 @@ import type { ChartThreeDSurface } from '../types/chart.js';
 import { createAuxCanvasForContext, type AuxCanvas, type AuxContext } from '../canvas/aux-canvas.js';
 import { MAX_CANVAS_AREA, MAX_CANVAS_DIMENSION } from '../canvas/clamp.js';
 import { cropSourceMapping, drawImageCropped, imageNaturalSize, checkedImageCropProjection } from '../image/crop.js';
-import { imageEffectFrame } from '../image/image-effect-frame.js';
+import { imageEffectFrame, imageEffectOutsetPeriods } from '../image/image-effect-frame.js';
 import { drawProjected, projectQuadPoint } from '../shape/scene3d-draw.js';
 import { chartImageTileMetrics, chartImageTileOrigin } from './image-fill.js';
 import {
@@ -220,10 +220,13 @@ export function paintChartThreeDSurfacePicture(
       if (![width, height].every(Number.isFinite)) rejectChartImageGeometry();
       if (!(width > 0) || !(height > 0)) continue;
       const origin = chartImageTileOrigin(tileMetrics, width, height);
-      const firstColumn = Math.floor(-origin.x / tileMetrics.tileW);
-      const firstRow = Math.floor(-origin.y / tileMetrics.tileH);
-      const lastColumn = Math.ceil((width - origin.x) / tileMetrics.tileW);
-      const lastRow = Math.ceil((height - origin.y) / tileMetrics.tileH);
+      // Neighbouring tiles whose CT_Blip effect outset reaches the face are
+      // drawn and charged as well; the authored period is unchanged.
+      const reach = imageEffectOutsetPeriods(image, fill.srcRect != null);
+      const firstColumn = Math.floor(-origin.x / tileMetrics.tileW) - reach.x;
+      const firstRow = Math.floor(-origin.y / tileMetrics.tileH) - reach.y;
+      const lastColumn = Math.ceil((width - origin.x) / tileMetrics.tileW) + reach.x;
+      const lastRow = Math.ceil((height - origin.y) / tileMetrics.tileH) + reach.y;
       // Resource policy: safe work counts alone do not prove that shifted
       // indices advance or retain alternate-tile parity in IEEE-754.
       if (![firstColumn, firstRow, lastColumn, lastRow].every(Number.isSafeInteger)) {

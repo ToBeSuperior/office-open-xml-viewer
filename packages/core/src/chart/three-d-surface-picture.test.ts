@@ -467,3 +467,14 @@ it('maps only the authored frame of an effect-grown picture onto a stretched fac
     expect(sy + sh).toBeLessThanOrEqual(75.5 + 1e-9);
   }
 });
+
+it('draws neighbouring 3-D tiles whose effect outset reaches the face', () => {
+  const tiled = { ...imageFill, stretch: false, dpi: 96,
+    tile: { tx: 0, ty: 0, sx: 1, sy: 1, flip: 'none', algn: 'tl' } } satisfies ImageFill;
+  const options = { imageWidth: 20, imageHeight: 10, faceWidth: 20, faceHeight: 10 };
+  const plain = paint(tiled, options);
+  // A 5 px outset each side of a 10 px frame reaches one more period.
+  const grown = paint(tiled, { ...options, effectFrame: { x: 5, y: 0, width: 10, height: 10 } });
+  expect(plain.painted && grown.painted).toBe(true);
+  expect(grown.sourceDraws.length).toBeGreaterThan(plain.sourceDraws.length);
+});

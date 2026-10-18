@@ -50,7 +50,8 @@ function finiteGeometry(...values: number[]): void {
 
 /** Same finite grid used by planning and painting; no authored tile can escape
  * the graph's cumulative work ledger through a separate local draw loop. */
-function effectTilePlan(fill: Extract<BlipEffectFill, { fillType: 'image' }>, image: CanvasImageSource, w: number, h: number) {
+function effectTilePlan(fill: Extract<BlipEffectFill, { fillType: 'image' }>, image: CanvasImageSource, w: number, h: number,
+  hostRotation = 0) {
   const tile = fill.tile as NonNullable<typeof fill.tile>, natural = imageNaturalSize(image);
   finiteGeometry(fill.dpi ?? 96);
   // §20.1.8.58. Missing placement facts use the shared image painter's
@@ -75,8 +76,19 @@ function effectTilePlan(fill: Extract<BlipEffectFill, { fillType: 'image' }>, im
   // outset. Reflected tiles swap the two edges, so bound both with the larger
   // support, measured in tile periods. These exact support bounds also govern
   // preflight draw work.
-  const padX = Math.ceil(Math.max(0, frame.x, natural.w - frame.x - frame.width) / periodW);
-  const padY = Math.ceil(Math.max(0, frame.y, natural.h - frame.y - frame.height) / periodH);
+  // rotWithShape="0" counter-rotates the brush about the box centre (see
+  // effectFillPixels); the clip then spans the inverse-rotated box, whose
+  // bounding box exceeds w×h. Enumerate (and charge) the tiles covering it,
+  // keeping the phase anchored to the authored box.
+  let marginX = 0, marginY = 0;
+  if (fill.rotWithShape === false && hostRotation !== 0) {
+    finiteGeometry(hostRotation);
+    const r = hostRotation * Math.PI / 180, c = Math.abs(Math.cos(r)), sn = Math.abs(Math.sin(r));
+    marginX = Math.max(0, (w * c + h * sn - w) / 2);
+    marginY = Math.max(0, (w * sn + h * c - h) / 2);
+  }
+  const padX = Math.ceil(Math.max(0, frame.x, natural.w - frame.x - frame.width) / periodW) + Math.ceil(marginX / tw);
+  const padY = Math.ceil(Math.max(0, frame.y, natural.h - frame.y - frame.height) / periodH) + Math.ceil(marginY / th);
   const cols = Math.ceil(w / tw) + 2 + 2 * padX, rows = Math.ceil(h / th) + 2 + 2 * padY;
   const work = cols * rows;
   if (!Number.isSafeInteger(work) || work > MAX_IMAGE_EFFECT_PIXEL_WORK) {
@@ -112,7 +124,7 @@ function effectTilePlan(fill: Extract<BlipEffectFill, { fillType: 'image' }>, im
  * separately). Before decode, omit source-dependent tiles; the complete plan
  * is mandatory once nested sources are prepared, before any effect paints. */
 export function effectFillWork(fill: BlipEffectFill, input: Omit<EffectBuffer, 'data'>,
-  emuX: number, emuY: number, runtime?: BlipEffectRuntime): number {
+  emuX: number, emuY: number, runtime?: BlipEffectRuntime, hostRotation = 0): number {
   const pixels = input.width * input.height;
   if (fill.fillType === 'none') return 0;
   if (fill.fillType === 'solid') return pixels;
@@ -121,7 +133,7 @@ export function effectFillWork(fill: BlipEffectFill, input: Omit<EffectBuffer, '
     const image = runtime.images?.get(fill);
     if (!image) throw new OoxmlError('unsupported-image-effect', 'Image fill source unavailable for work planning');
     const f = input.frame ?? { x: 0, y: 0, width: input.width, height: input.height };
-    const plan = effectTilePlan(fill, image, f.width / (12700 / emuX), f.height / (12700 / emuY));
+    const plan = effectTilePlan(fill, image, f.width / (12700 / emuX), f.height / (12700 / emuY), hostRotation);
     if (plan) work += plan.work + pixels * plan.overlap;
   }
   return work;
@@ -170,7 +182,7 @@ export function effectFillPixels(
       if (fill.alpha != null) ctx.globalAlpha *= fill.alpha;
       if (fill.tile) {
         const tile = fill.tile;
-        const plan = effectTilePlan(fill, image, w, h);
+        const plan = effectTilePlan(fill, image, w, h, hostRotation);
         const { cols, rows, x0, y0, px, py, tw, th } = plan ?? { cols: 0, rows: 0, x0: 0, y0: 0, px: 0, py: 0, tw: 0, th: 0 };
         for (let row = 0; row < rows; row++) for (let col = 0; col < cols; col++) {
           const flipX = (tile.flip === 'x' || tile.flip === 'xy') && Math.abs((x0 % 2 + col) % 2) === 1;

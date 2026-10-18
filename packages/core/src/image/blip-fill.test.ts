@@ -84,3 +84,21 @@ it('tiles nothing for a crop with no positive extent', () => {
   p.run();
   expect(p.ctx.drawImage).not.toHaveBeenCalled();
 });
+
+it('covers the inverse-rotated box of a counter-rotated (rotWithShape=0) tiled brush', () => {
+  const draws = (rotation: number) => {
+    const fill = { ...image({}), rotWithShape: false } as BlipEffectFill;
+    const ctx = {
+      translate: vi.fn(), rotate: vi.fn(), scale: vi.fn(), save() {}, restore() {}, beginPath() {}, rect() {}, clip() {},
+      drawImage: vi.fn(),
+      getImageData: () => ({ data: new Uint8ClampedArray(8 * 2 * 4), width: 8, height: 2 }),
+    };
+    const surface = { width: 8, height: 2, getContext: () => ctx };
+    effectFillPixels(fill, { data: new Uint8ClampedArray(8 * 2 * 4), width: 8, height: 2 }, 12700, 12700,
+      { offscreenFactory: (() => surface) as unknown as OffscreenFactory, images: new Map([[fill, { width: 1, height: 1 } as CanvasImageSource]]) },
+      rotation);
+    return ctx.drawImage.mock.calls.length;
+  };
+  // An 8×2 box turned 90° spans 2×8 in brush space: more rows must be tiled.
+  expect(draws(90)).toBeGreaterThan(draws(0));
+});
