@@ -210,7 +210,8 @@ test('kerning and Arabic joining preserve whole-run paint with character spacing
       expected.textBaseline = 'alphabetic';
       expected.direction = 'ltr';
       expected.font = fills[0].font;
-      expected.fontKerning = kerning === 20 ? 'normal' : 'none';
+      // WORD_ARABIC_PAIR_KERNING: Arabic text is pair-kerned whatever w:kern says.
+      expected.fontKerning = kerning === 20 || cs ? 'normal' : 'none';
       // Measure the whole string with zero tracking, then add authored pitch.
       // Measuring individual glyphs would lose the pair/joining advance.
       const advance = expected.measureText(text).width + [...text].length * charSpacing;
@@ -220,7 +221,7 @@ test('kerning and Arabic joining preserve whole-run paint with character spacing
       expected.fontKerning = 'none';
       expected.letterSpacing = '0px';
       expected.fillText('|', advance, fills[0].y);
-      results.push({ text, kerning, charSpacing, fills, advance,
+      results.push({ text, kerning, charSpacing, cs, fills, advance,
         bitmapMatches: canvas.toDataURL() === reference.toDataURL() });
     }
     return results;
@@ -233,7 +234,7 @@ test('kerning and Arabic joining preserve whole-run paint with character spacing
       ({ text, x, y, letterSpacing: letterSpacing || '0px', fontKerning }))).toEqual([
       { text: result.text, x: 0, y: result.fills[0].y,
         letterSpacing: `${result.charSpacing}px`,
-        fontKerning: result.kerning === 20 ? 'normal' : 'none' },
+        fontKerning: result.kerning === 20 || result.cs ? 'normal' : 'none' },
       { text: '|', x: result.advance, y: result.fills[0].y,
         letterSpacing: '0px', fontKerning: 'none' },
     ]);
