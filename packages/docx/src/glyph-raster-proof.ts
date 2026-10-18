@@ -109,7 +109,7 @@ let graphemes: Intl.Segmenter | null | undefined;
  */
 export function ownsGlyphs(request: Readonly<GlyphOwnershipRequest>): boolean {
   const text = request.text;
-  if (!text.trim()) return false;
+  if (!text) return false;
   if (graphemes === undefined) {
     graphemes = typeof Intl !== 'undefined' && 'Segmenter' in Intl
       ? new Intl.Segmenter(undefined, { granularity: 'grapheme' }) : null;
@@ -118,7 +118,6 @@ export function ownsGlyphs(request: Readonly<GlyphOwnershipRequest>): boolean {
   const font = `${request.style} ${request.weight} 100px ${quoteCssFontFamily(request.coverageProbeFamily)}`;
   let context: RasterContext | null | undefined;
   for (const part of parts) {
-    if (!part.trim()) continue;
     const key = `${font}\u0000${part}`;
     let owned = ownership.get(key);
     if (owned === undefined) {

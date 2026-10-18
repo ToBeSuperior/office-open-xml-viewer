@@ -127,8 +127,9 @@ export function specifiedTextLineMetrics(
     if (paragraphMark.fontSizePt !== first.fontSize) return null;
   }
   // The #1884 controls that admitted numbered lines and marks of another face
-  // had no document grid; grid paragraphs keep the homogeneous admission.
-  if (context.lineGrid.active) {
+  // were mode 15 without a document grid; other paragraphs keep the
+  // homogeneous admission.
+  if (context.lineGrid.active || mode !== 15) {
     if ('numbering' in mark && (mark as { numbering?: unknown }).numbering) return null;
     if (mark.defaultFontFamily !== authoredFamily) return null;
     if (paragraphMark) {

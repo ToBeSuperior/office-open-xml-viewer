@@ -76,10 +76,13 @@ function textRun(hpsRaisePt?: number): DocxTextRun {
   };
 }
 
-function documentWithRuby(hpsRaisePt?: number): DocxDocumentModel {
+function documentWithRuby(
+  hpsRaisePt?: number,
+  lineSpacing: DocParagraph['lineSpacing'] = null,
+): DocxDocumentModel {
   const paragraph: DocParagraph = {
     alignment: 'left', indentLeft: 0, indentRight: 0, indentFirst: 0,
-    spaceBefore: 0, spaceAfter: 0, lineSpacing: null, numbering: null, tabStops: [],
+    spaceBefore: 0, spaceAfter: 0, lineSpacing, numbering: null, tabStops: [],
     runs: [{ type: 'text', ...textRun(hpsRaisePt) }],
     defaultFontSize: 12, defaultFontFamily: 'NotInMetrics', widowControl: false,
   };
@@ -127,6 +130,18 @@ describe('ruby line ascent (WORD_RUBY_LINE_ASCENT, #1885)', () => {
     const expectedAscent = Math.max(12 * 0.8, ascent);
     expect(line.advancePt).toBeCloseTo(expectedAscent + 12 * 0.2, 6);
     expect(line.baselinePt - line.bounds.yPt).toBeCloseTo(expectedAscent, 6);
+  });
+
+  it('leaves the unmeasured absent-hpsRaise class on its previous baseline', () => {
+    const model = documentWithRuby(undefined, { value: 1.5, rule: 'auto', explicit: true });
+    const { canvas } = makeRecordingCanvas();
+    const layout = layoutDocument(model, createLayoutServices(model, { measureContext: canvas.getContext('2d') }));
+    const retained = layout.pages[0].layers.body[0];
+    if (retained.kind !== 'paragraph') throw new Error('expected ruby test paragraph');
+    const line = retained.lines[0];
+    // The values main produced before the hpsRaise class was measured.
+    expect(line.advancePt).toBeCloseTo(34.8, 6);
+    expect(line.baselinePt - line.bounds.yPt).toBeCloseTo(26.6, 6);
   });
 });
 

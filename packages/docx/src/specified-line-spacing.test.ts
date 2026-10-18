@@ -90,6 +90,19 @@ describe('Word specified spacing for numbered lines (#1884)', () => {
   });
 });
 
+describe('numbered specified lines outside compatibility mode 15 (#1884)', () => {
+  it.each([
+    { empty: false, rule: 'exact' as const }, { empty: true, rule: 'exact' as const },
+    { empty: false, rule: 'atLeast' as const }, { empty: true, rule: 'atLeast' as const },
+  ])('keeps the established $rule line, empty=$empty', ({ empty, rule }) => {
+    // The values main produced before the mode-15 numbered class was measured.
+    const paragraph = render('Arial', 10, { rule, value: 18, explicit: true },
+      false, undefined, 14, false, 10, false, false, false, undefined, { markerSize: 30, empty });
+    expect(paragraph.lines[0].baselinePt - paragraph.lines[0].bounds.yPt).toBe(11);
+    expect(paragraph.lines[0].advancePt).toBe(18);
+  });
+});
+
 describe('atLeast with a raised marker outside the specified class (#1884)', () => {
   it('takes the larger of the minimum and the raised box', () => {
     // Underlined text leaves WORD_SPECIFIED_TEXT_LINE_BOX; the stub's 30pt
