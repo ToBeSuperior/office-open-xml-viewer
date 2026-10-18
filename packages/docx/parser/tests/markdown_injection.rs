@@ -110,7 +110,7 @@ const INLINE_TEXT: &str = "<img src=x onerror=alert(1)> [x](javascript:alert(1))
 /// Line-level document text: a code fence, a GFM table with a
 /// colon-aligned delimiter row, and line-start block markers, separated by
 /// lone CRs (XML character references survive parsing).
-const LINES: &str = "alpha&#13;&#13;```&#13;| a | b |&#13;| :-- | --: |&#13;forged | row&#13;# h&#13;&#160;# nbsp&#13;&#xFEFF;# bom&#13;&gt; q&#13;- item&#13;1. item&#13;===&#13;    Cost: 50% &amp; tax&#13;&#9;Tabbed: 2";
+const LINES: &str = "alpha&#13;&#13;```&#13;| a | b |&#13;| :-- | --: |&#13;forged | row&#13;# h&#13;&#160;# nbsp&#13;&#xFEFF;# bom&#13;&gt; q&#13;- item&#13;1. item&#13;===&#13;    Cost: 50% &amp; tax&#13;&#9;Tabbed: 2&#13;&#160;&#160;Kept nbsp&#13;&#x3000;Kept ideographic&#13;&#x2003;# Kept em";
 
 /// The Markdown, parsed as GFM (tables, strikethrough, extended autolinks),
 /// contains only the structure the converter emits: document text in
@@ -156,6 +156,23 @@ fn document_text_forms_no_markdown_structure() {
             "{}<w:r><w:br/></w:r><w:r><w:tab/></w:r>{}",
             r("intro"),
             r("Body tab: 2")
+        )),
+        p(&format!(
+            "{}<w:r><w:br/></w:r>{}",
+            r("First"),
+            r("&#160;&#160;Second nbsp")
+        )),
+        p(&format!(
+            "{}<w:r><w:br/></w:r>{}{}",
+            r("First"),
+            r("&#x3000;"),
+            r("# Second ideographic")
+        )),
+        p(&format!(
+            "{}<w:r><w:br/></w:r>{}{}",
+            r("First"),
+            r("  "),
+            r("&#x2003;Second em")
         )),
         p(&format!("{}{}", r("ww"), r("w.split.example"))),
         p(r#"<w:fldSimple w:instr=" PAGE "><w:r><w:t xml:space="preserve">&#160;# forged field</w:t></w:r></w:fldSimple>"#),
@@ -231,9 +248,15 @@ fn document_text_forms_no_markdown_structure() {
         "===",
         "Cost: 50% & tax",
         "Tabbed: 2",
+        "\u{a0}\u{a0}Kept nbsp",
+        "\u{3000}Kept ideographic",
+        "\u{2003}# Kept em",
         "Body cost: 50% & tax",
         "Split indent: 1",
         "Body tab: 2",
+        "\u{a0}\u{a0}Second nbsp",
+        "\u{3000}# Second ideographic",
+        "\u{2003}Second em",
     ] {
         assert!(gfm.text.contains(literal), "{literal:?} in {markdown}");
     }

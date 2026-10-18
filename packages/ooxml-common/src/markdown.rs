@@ -99,9 +99,10 @@ pub enum TextContext {
     TableCell,
 }
 
-/// Indentation for the line-start block-marker scan: all Unicode whitespace
-/// plus U+FEFF, a superset of what `str::trim` removes and of what Markdown
-/// renderers strip, so trimming or stripping can never expose a marker.
+/// Spacing the line-start block-marker scan looks past: all Unicode
+/// whitespace plus U+FEFF, a superset of what `str::trim` removes and of what
+/// Markdown renderers strip, so trimming or stripping can never expose a
+/// marker. Only its ASCII spaces and tabs are ever dropped.
 fn is_indentation(c: char) -> bool {
     c.is_whitespace() || c == '\u{feff}'
 }
@@ -118,10 +119,12 @@ fn is_indentation(c: char) -> bool {
 ///   [`is_indentation`]) is escaped, so the text cannot open an ATX heading
 ///   (`#`), block quote (`>`), list item (`-`, `+`, `1.`, `1)`), setext
 ///   underline or thematic break (`=`, `-`);
-/// - in [`TextContext::Inline`], indentation at a projected line start is
-///   dropped: four or more spaces (or a tab) would open an indented code
-///   block, in which the escapes would render literally, and CommonMark
-///   ignores up to three leading spaces of a paragraph line anyway;
+/// - in [`TextContext::Inline`], ASCII spaces and tabs at a projected line
+///   start are dropped: four or more spaces (or a tab) would open an indented
+///   code block, in which the escapes would render literally, and CommonMark
+///   ignores up to three leading spaces of a paragraph line anyway. Other
+///   Unicode spacing (NBSP, U+3000, EM SPACE, a BOM) is visible text that
+///   cannot indent, so it is kept; a block marker after it is still escaped;
 /// - [`TextContext::Heading`] also escapes `#` and folds line breaks into
 ///   spaces; [`TextContext::TableCell`] turns line breaks into `<br>`.
 ///
@@ -159,10 +162,18 @@ pub fn escape_fragment(text: &str, context: TextContext, line_start: &mut bool) 
     while let Some(c) = rest.chars().next() {
         if scan {
             scan = false;
+            if drop_indent {
+                // CommonMark indentation is ASCII spaces and tabs only; other
+                // Unicode spacing is visible text and is kept.
+                rest = rest.trim_start_matches([' ', '\t']);
+            }
             let body = rest.trim_start_matches(|c| is_indentation(c) && !matches!(c, '\r' | '\n'));
-            if body.len() != rest.len() && !drop_indent {
+            if body.len() != rest.len() {
                 out.push_str(&rest[..rest.len() - body.len()]);
                 (w_run, only_ws) = (0, false);
+                // The line has begun with visible spacing: later ASCII
+                // spaces are no longer indentation.
+                drop_indent = false;
             }
             if body.is_empty() {
                 // Indentation only: the line start (if any) carries over.
@@ -419,9 +430,10 @@ mod tests {
     #[test]
     fn unicode_indentation_cannot_hide_a_line_start_marker() {
         for (line, escaped) in [
-            ("\u{a0}# forged", "\\# forged"),
-            ("\u{2003}> forged", "\\> forged"),
-            ("\u{feff}# forged", "\\# forged"),
+            ("\u{a0}# forged", "\u{a0}\\# forged"),
+            ("\u{2003}> forged", "\u{2003}\\> forged"),
+            ("\u{feff}# forged", "\u{feff}\\# forged"),
+            ("  \u{3000}  - x", "\u{3000}  \\- x"),
             ("#\u{a0}forged", "\\#\u{a0}forged"),
             ("-\u{3000}item", "\\-\u{3000}item"),
         ] {
@@ -436,7 +448,7 @@ mod tests {
                 "    Cost: 1\n\tTab\r\n  \u{a0}x\r    y",
                 TextContext::Inline
             ),
-            "Cost\\: 1\nTab\r\nx\ry"
+            "Cost\\: 1\nTab\r\n\u{a0}x\ry"
         );
         // Cells and headings are inline-only: nothing is dropped there.
         assert_eq!(escape_text("    a", TextContext::TableCell), "    a");
