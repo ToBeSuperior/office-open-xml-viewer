@@ -238,4 +238,3 @@ describe('block flow admission around floating-table exclusions', () => {
     expect(admitInBand(frame('topAndBottom'), 40)).toBe(0);
   });
 });
-
