@@ -39,6 +39,7 @@ import {
 import {
   RESET_SLICED_TEXT_MEASUREMENT,
   charScaleFactor,
+  leadingAutoSpacePx,
   segLetterSpacingPx,
   charSpacingDeltaPx,
   protectedNoBreakOffsets,
@@ -933,6 +934,13 @@ export function performAddToLine(
   } = operationState;
 
   let committedWidth = w;
+  if ('text' in s && s.autoSpaceBeforePt !== undefined) {
+    const delta = resolveAutoSpaceAtPlacement(operationState, s);
+    if (delta !== 0) {
+      w += delta;
+      committedWidth = w;
+    }
+  }
   if ('text' in s) {
     const kind = snapToCharsClass(s, characterGrid);
     const naturalWidth = s.snapGridNaturalWidthPx ?? w;
@@ -1153,7 +1161,32 @@ export function performSegNaturalAdvance(
     measureText(s).width + verticalInkExtra(s, s.text),
     characterGrid,
     scale,
-  );
+  ) + leadingAutoSpacePx(operationState, s);
+}
+
+/** The committed line's last item is text: a following segment's automatic
+ * gap is then on the same line as its partner (assignment already requires
+ * the partner to be the immediately preceding text). */
+export function lineEndsWithText(line: readonly LayoutSeg[]): boolean {
+  const last = line.at(-1);
+  return last !== undefined && 'text' in last;
+}
+
+/** Resolve the gap a segment applies at placement: the same-line value after
+ * text, nothing at a line start. Keeps the committed width and the retained
+ * glyph shift in agreement. Returns the width change. */
+function resolveAutoSpaceAtPlacement(
+  operationState: Pick<PassOperationState, 'characterGrid' | 'scale' | 'breakerState'>,
+  s: LayoutTextSeg,
+): number {
+  if (s.autoSpaceBeforePt === undefined) return 0;
+  const applied = leadingAutoSpacePx(operationState, s);
+  const sameLine = lineEndsWithText(operationState.breakerState.currentLine);
+  const desired = sameLine && operationState.characterGrid?.type !== 'snapToChars'
+    ? (s.autoSpaceLeadingPx ?? s.autoSpaceBeforePt * operationState.scale)
+    : 0;
+  s.autoSpaceLeadingPx = desired;
+  return desired - applied;
 }
 
 export function performStandaloneSnapAdvance(
@@ -1196,6 +1229,7 @@ export function performStrNaturalAdvance(
       Math.max(0, start) + text.length,
     ),
   };
+  const leading = start <= 0 && text.length > 0 ? leadingAutoSpacePx(operationState, s) : 0;
   if (s.textLayoutService && s.textShapeRequest) {
     const shaped = s.textLayoutService.shape({
       ...sliceTextShapeRequest(s.textShapeRequest, Math.max(0, start), Math.max(0, start) + text.length),
@@ -1208,7 +1242,7 @@ export function performStrNaturalAdvance(
       shaped.advancePt + verticalInkExtra(s, text),
       characterGrid,
       scale,
-    );
+    ) + leading;
   }
   const natural = measurement.measureRunText(s, text).width;
   return segAdvanceWidth(
@@ -1216,7 +1250,7 @@ export function performStrNaturalAdvance(
     natural + verticalInkExtra(s, text),
     characterGrid,
     scale,
-  );
+  ) + leading;
 }
 
 export function performEastAsianSnapCellCount(
@@ -1404,9 +1438,11 @@ function gapSegment(state: Pick<PassOperationState, 'strAdvance' | 'scale' | 'ch
     const spacePx = spaceWidths.values().next().value ?? (start >= 0 && !segment.ruby
       ? state.strAdvance({ ...segment, text: ' ', ...slicedTextMetadata(segment, start, start + 1) }, ' ')
       : 0);
+    const leadingGapPx = leadingAutoSpacePx(state, segment);
     return {
       text: segment.metricOnly ? '' : segment.ruby ? undefined : segment.text,
       widthPx: segment.measuredWidth, spacePx, spaceWidths,
+      ...(leadingGapPx > 0 ? { leadingGapPx } : {}),
     };
   }
   return { widthPx: segment.measuredWidth, spacePx: 0 };
@@ -1505,7 +1541,7 @@ export function performTextSegmentBox(
     measured.width + verticalInkExtra(s, s.text),
     characterGrid,
     scale,
-  );
+  ) + leadingAutoSpacePx(operationState, s);
   s.snapGridNaturalWidthPx = width;
   // Max-content uses the unbroken native context, as its ordinary intrinsic
   // text merge already does. Registered physical units must stay intact;

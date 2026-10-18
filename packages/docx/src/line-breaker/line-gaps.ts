@@ -10,6 +10,9 @@ export interface GapSegment {
   spacePx: number;
   /** Contextual per-space advances, indexed in code points. */
   spaceWidths?: ReadonlyMap<number, number>;
+  /** WORD_EAST_ASIAN_AUTO_SPACE gap included in `widthPx` before the first
+   * character; a gap of the same family as U+0020. */
+  leadingGapPx?: number;
 }
 
 export const textCellGapOptions: DistributeOptions = {
@@ -53,6 +56,7 @@ export function lineGapModel(
     prefix: prefix?.scan,
     collect,
     gapWidth: (si, cpOffset) => segments[si - offset].spaceWidths?.get(cpOffset) ?? segments[si - offset].spacePx,
+    leadingGapWidth: (si) => segments[si - offset]?.leadingGapPx ?? 0,
   });
   let naturalWidthPx = prefix?.naturalWidthPx ?? 0;
   let lineEndSeparatorPx = prefix?.lineEndSeparatorPx ?? 0;

@@ -207,6 +207,8 @@ function mergeCompatibleTextSegments(segments: readonly LayoutSeg[]): LayoutSeg[
       // A compound grapheme owns one shape/paint unit; extending it here
       // would lose that proof when the shaper rejects a multi-grapheme probe.
       && !previous.semanticSlotSpans && !segment.semanticSlotSpans
+      // A WORD_EAST_ASIAN_AUTO_SPACE seam owns its gap.
+      && segment.autoSpaceBeforePt === undefined
       && compatibleText(previous, segment)
       // Included and excluded spans depend on the full run. Losing a Latin
       // base can turn its attached Arabic mark into standalone proof; losing

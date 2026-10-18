@@ -25,6 +25,7 @@ import {
   RESET_SLICED_TEXT_MEASUREMENT,
   charScaleFactor,
   charSpacingDeltaPx,
+  leadingAutoSpacePx,
   legalTextSplitAtOrBefore,
   segAdvanceWidth,
   segmentCharacterGridDeltaPx,
@@ -45,7 +46,7 @@ import {
   rebaseSeaBreaks,
 } from './text-runs.js';
 import { fitCJKPrefix, hasEastAsianVisiblePredecessor } from './fit-search.js';
-import { LineGapRejection, fitJustifiedCompression, justifiedCompressionApplies, type PassOperationState } from './pass-operations.js';
+import { LineGapRejection, fitJustifiedCompression, justifiedCompressionApplies, lineEndsWithText, type PassOperationState } from './pass-operations.js';
 
 /** The iterator reads only its declared slice of the explicit pass state. */
 export type BreakOpportunityIteratorContext = Pick<
@@ -248,6 +249,11 @@ function processTextSegment(context: BreakOpportunityIteratorContext, seg: Layou
     sameLatinSpaceFace,
   } = context;
   const s = seg as LayoutTextSeg;
+  // WORD_EAST_ASIAN_AUTO_SPACE: a segment fitted after text on this line owes
+  // its gap; one that starts the line does not.
+  if (s.autoSpaceBeforePt !== undefined) {
+    s.autoSpaceLeadingPx = lineEndsWithText(breakerState.currentLine) ? undefined : 0;
+  }
   const segmentBox = textSegmentBox(s);
   const w = segmentBox.width;
   const prospectiveWidth = prospectiveSnapAdvance(s, w);
@@ -453,7 +459,7 @@ function processTextSegment(context: BreakOpportunityIteratorContext, seg: Layou
   // WORD_COMPRESSED_SPACE_LINE_FIT: once a mixed line's spaces are shrunk, a
   // following unit (such as a closing mark split into its own source run) is
   // judged by the same reduction rule; joined and split runs must agree.
-  if (breakerState.mixedSpace.compressed && mixedCandidateMayShrink(breakerState, s.text)) {
+  if (breakerState.mixedSpace.compressed && mixedCandidateMayShrink(breakerState, s.text, s)) {
     const required = context.mixedSpaceRequirement(mixedSeamCandidate(context, s, s.text, wForFit));
     if (required !== undefined) {
       s.measuredWidth = w;
@@ -942,7 +948,7 @@ function fitMixedSpaces(
   segment: LayoutTextSeg,
   fitWidth: number,
 ): boolean {
-  if (!mixedCandidateMayShrink(context.breakerState, segment.text)) return false;
+  if (!mixedCandidateMayShrink(context.breakerState, segment.text, segment)) return false;
   const required = context.mixedSpaceRequirement(
     mixedSeamCandidate(context, segment, segment.text, fitWidth),
   );
@@ -960,7 +966,24 @@ function prefersWholeWordAtScriptBoundary(context: BreakOpportunityIteratorConte
     && hasCJKBreakOpportunity(previousChar) && !hasCJKBreakOpportunity(s.text);
 }
 
-function placeOrSplitText(context: BreakOpportunityIteratorContext, frame: TextFitFrame): void {
+/** A pre-flush (an atomic group or a SEA chunk moved to a fresh line) can
+ * leave a segment fitted with its WORD_EAST_ASIAN_AUTO_SPACE gap at a line
+ * start; release the gap before the line-start fit. */
+function settleLineStartAutoSpace(
+  context: BreakOpportunityIteratorContext,
+  frame: TextFitFrame,
+): TextFitFrame {
+  const { s } = frame;
+  if (s.autoSpaceBeforePt === undefined || lineEndsWithText(context.breakerState.currentLine)) {
+    return frame;
+  }
+  const leading = leadingAutoSpacePx(context, s);
+  s.autoSpaceLeadingPx = 0;
+  return leading === 0 ? frame : { ...frame, w: frame.w - leading, wForFit: frame.wForFit - leading };
+}
+
+function placeOrSplitText(context: BreakOpportunityIteratorContext, inputFrame: TextFitFrame): void {
+  const frame = settleLineStartAutoSpace(context, inputFrame);
   const {
     breakerState,
     flush,
@@ -1165,7 +1188,7 @@ function prepareAtomicTextFit(
       breakerState.currentWidth + groupFitWidth > availW() &&
       // WORD_COMPRESSED_SPACE_LINE_FIT judges a joined unit as one candidate,
       // so a source-run seam inside it cannot change the decision.
-      !(mixedCandidateMayShrink(breakerState, group.pieces.map((piece) => piece.text).join(''))
+      !(mixedCandidateMayShrink(breakerState, group.pieces.map((piece) => piece.text).join(''), group.pieces[0]?.segment)
         && context.mixedSpaceRequirement({ pieces: group.pieces, fitWidth: groupFitWidth }) !== undefined)
     ) {
       flush(undefined, false, s.src);
@@ -1352,7 +1375,7 @@ function splitCjkOverflow(context: BreakOpportunityIteratorContext, frame: TextF
   };
   let mixedSpaceExtended = false;
   const naturalRawSplit = [...rawPrefix].length;
-  if (breakerState.currentLine.length > 0 && mixedCandidateMayShrink(breakerState, s.text)) {
+  if (breakerState.currentLine.length > 0 && mixedCandidateMayShrink(breakerState, s.text, s)) {
     const characters = [...s.text];
     const admitted = (count: number): boolean => {
       const candidate = characters.slice(0, count).join('');

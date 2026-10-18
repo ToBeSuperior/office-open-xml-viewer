@@ -578,6 +578,36 @@ export const WORD_LATIN_INTERWORD_XAVG_FLOOR = defineCompatibilityRule({
   description: 'For left-aligned homogeneous Latin words using one U+0020 separator and characterSpacingControl=compressPunctuation, Word reduces each natural inter-word space only as far as half the selected static face\'s positive OS/2 xAvgCharWidth. First-fit and beta-origin controls varied only U+0020 hmtx, then only xAvg, with fixed outlines and non-space advances at 8/11/16pt; a distinct Carlito outline provided a counterexample where natural U+0020 was narrower than the floor. Two-gap controls showed equal required-deficit allocation. A one-twip linesAndChars control preserved the xAvg-dependent deficit while moving both control and natural boundaries by the separate character-grid pitch. [MS-OE376] §2.1.472 documents lineWrapLikeWord6 as an explicit uncompressed-fit override. Mixed faces, explicit run spacing or scaling, justification, and snapToChars remain outside the observed scope.',
 });
 
+export const WORD_EAST_ASIAN_AUTO_SPACE = defineCompatibilityRule({
+  id: 'word-east-asian-auto-space',
+  evidence: {
+    kind: 'office-observation',
+    syntheticFixtureId: 'east-asian-latin-autospace-1851-matrix',
+    application: 'Microsoft Word',
+    version: '16.0',
+    platform: 'Windows (build 16.0.20430)',
+  },
+  description: 'TODO',
+});
+
+/** Gap of {@link WORD_EAST_ASIAN_AUTO_SPACE} for an East Asian character of
+ * `eastAsianFontSize` points. */
+export function wordEastAsianAutoSpacePt(eastAsianFontSize: number): number {
+  return eastAsianFontSize / 4;
+}
+
+/** Narrowest a {@link WORD_EAST_ASIAN_AUTO_SPACE} gap of `naturalPt` becomes
+ * under {@link WORD_COMPRESSED_SPACE_LINE_FIT}. */
+export function wordCompressedAutoSpaceFloorPt(naturalPt: number): number {
+  return naturalPt / 2;
+}
+
+/** Widest a {@link WORD_EAST_ASIAN_AUTO_SPACE} gap grows under justification
+ * before the remaining slack reaches the ordinary opportunities. */
+export function wordEastAsianAutoSpaceJustifiedMaximumPt(naturalPt: number): number {
+  return naturalPt * 2;
+}
+
 export const WORD_COMPRESSED_SPACE_LINE_FIT = defineCompatibilityRule({
   id: 'word-compressed-space-line-fit',
   evidence: {

@@ -1,5 +1,5 @@
 import { calcEffectiveFontPx, EAST_ASIAN_RE } from '../layout/text.js';
-import { wordCompressedSpaceFloor } from '../layout/line-compatibility.js';
+import { wordCompressedAutoSpaceFloorPt, wordCompressedSpaceFloor } from '../layout/line-compatibility.js';
 import { COMPRESSIBLE_TRAILING_FULL_WIDTH_PUNCTUATION } from '../line-breaker/text-runs.js';
 import type { LayoutSeg, LayoutTextSeg } from '../line-breaker/model.js';
 import type { PassOperationState } from '../line-breaker/pass-operations.js';
@@ -9,6 +9,7 @@ const EMPTY_TAIL: LineTail = { tailPx: 0, coreLast: undefined };
 interface LineSpaces {
   valid: boolean; eastAsian: boolean; face: LayoutTextSeg | undefined;
   perSpaceCapacity: number; gaps: { segment: LayoutTextSeg; count: number }[]; count: number;
+  autoSpaceCapacity: number;
 }
 type MixedSpaceMeasure = (segment: LayoutTextSeg, text: string) => number;
 
@@ -51,14 +52,22 @@ function perSpaceCapacity(segment: LayoutTextSeg, count: number, scale: number):
   );
 }
 
+function autoSpaceRoom(segment: LayoutTextSeg, scale: number): number {
+  if (segment.autoSpaceCompressible !== true || segment.autoSpaceBeforePt === undefined) return 0;
+  return Math.max(0, (segment.autoSpaceLeadingPx ?? 0)
+    - wordCompressedAutoSpaceFloorPt(segment.autoSpaceBeforePt) * scale);
+}
+
 function scanLine(line: readonly LayoutSeg[], scale: number): LineSpaces {
   let eastAsian = false;
+  const autoSpaceCapacity = line.reduce((sum, item) =>
+    sum + ('text' in item && !inkless(item) ? autoSpaceRoom(item, scale) : 0), 0);
   let face: LayoutTextSeg | undefined;
   let capacity = 0;
   let count = 0;
   const gaps: { segment: LayoutTextSeg; count: number }[] = [];
   const invalid = (): LineSpaces => ({
-    valid: false, eastAsian, face, perSpaceCapacity: 0, gaps: [], count: 0,
+    valid: false, eastAsian, face, perSpaceCapacity: 0, gaps: [], count: 0, autoSpaceCapacity,
   });
   for (const item of line) {
     if (inkless(item)) continue;
@@ -83,7 +92,7 @@ function scanLine(line: readonly LayoutSeg[], scale: number): LineSpaces {
       return invalid();
     }
   }
-  return { valid: true, eastAsian, face, perSpaceCapacity: capacity, gaps, count };
+  return { valid: true, eastAsian, face, perSpaceCapacity: capacity, gaps, count, autoSpaceCapacity };
 }
 
 function clusterCore(text: string): string {
@@ -126,6 +135,7 @@ function assertSummary({ breakerState, scale, strNaturalAdvance }: PassOperation
     && state.visibleItems === line.filter(item => 'text' in item && /\S/u.test(item.text)).length
     && (!cached || (Math.abs(cached.tailPx - tail.tailPx) <= 1e-9 && cached.coreLast === tail.coreLast))
     && valid === full.valid
+    && Math.abs(state.autoSpaceCapacity - full.autoSpaceCapacity) <= 1e-9
     && (!valid || ((state.eastAsianItems > 0) === full.eastAsian
       && first?.item === full.face && state.spaceCount === full.count
       && Math.abs((first?.capacity ?? 0) - full.perSpaceCapacity) <= 1e-9));

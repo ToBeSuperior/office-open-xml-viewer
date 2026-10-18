@@ -164,6 +164,21 @@ export interface LayoutTextSeg extends LayoutSegSource {
   }>[];
   /** Same-line native boundary advance; also shifts retained glyph origins. */
   leadingWordBoundaryPx?: number;
+  /** WORD_EAST_ASIAN_AUTO_SPACE gap (pt) owed before this segment's first
+   * character when its partner across a §17.3.1.2-3 boundary precedes it on
+   * the same line. Assigned once from the paragraph's text; kept only by a
+   * slice that starts at offset 0. */
+  autoSpaceBeforePt?: number;
+  /** The gap (layout px) this placement applies, resolved by the line breaker:
+   * 0 at a line start, otherwise the scaled `autoSpaceBeforePt`, possibly
+   * compressed by a line-fit rule or widened by justification. Absent means
+   * not yet placed; measurement then assumes the same-line value. Included in
+   * `measuredWidth`; shifts retained glyph origins like
+   * {@link leadingWordBoundaryPx}. */
+  autoSpaceLeadingPx?: number;
+  /** The gap may shrink under WORD_COMPRESSED_SPACE_LINE_FIT (its document
+   * gate holds for this paragraph). */
+  autoSpaceCompressible?: true;
   /** Sparse, contextual U+0020 cluster geometry used only during gap fitting. */
   shapedSpaceClusters?: LayoutTextSeg['shapedClusters'];
   /** Tight selected-face ink retained by the authoritative shape call that
@@ -680,8 +695,7 @@ export interface LineLayoutEnvironment {
    * WORD_COMPRESSED_SPACE_LINE_FIT. */
   readonly compatibilityMode?: number;
   /** Paragraph §17.3.1.2-3 automatic East Asian/Latin and East Asian/number
-   * spacing (absent means on). The renderer does not model that spacing;
-   * WORD_COMPRESSED_SPACE_LINE_FIT stays out of a paragraph it applies to. */
+   * spacing (absent means on), applied as WORD_EAST_ASIAN_AUTO_SPACE. */
   readonly autoSpaceDE?: boolean;
   readonly autoSpaceDN?: boolean;
   /** See WORD_KERN_THRESHOLD_AUTHORITY for absent `w:kern`. */
