@@ -10,7 +10,7 @@ import {
   isStructuralTrailingParagraph,
 } from './table-cell-blocks.js';
 import type { ParagraphBorderEdges } from './paragraph-border-adjacency.js';
-import { layoutTable, measureTableCellBlockFlowHeightPt } from './table.js';
+import { layoutTable, measureTableCellBlockFlowHeightPt, tableRowRuleInsetsPt } from './table.js';
 import { tableCellHorizontalSpacingInsets } from './table-columns.js';
 import { unmeasuredTableMemberDecision, type LogicalTableDecision, type TableMemberDecision } from './table-layout-decision.js';
 import { snapshotPlainData } from './plain-data.js';
@@ -736,16 +736,28 @@ export function acquireRetainedTable<State>(
   // A rotated cell's lines run along its final height. When other cells or a
   // merge make that height larger than the acquired line length, acquire the
   // lines again at the final length so paragraph alignment uses it; the row
-  // requirement stays the natural length, so row heights cannot change.
+  // requirement stays the natural length, so row heights cannot change. The
+  // final length excludes the cell's collapsed rules
+  // (WORD_COLLAPSED_BORDER_ROW_TRACK_FOOTPRINT), which only an exact row's
+  // authored line length did not already leave out: that fixed row is
+  // re-acquired shorter as well.
+  const ruleInsets = rotatedCells.length > 0 ? tableRowRuleInsetsPt(input) : null;
+  const tableBottomPt = layout.flowBounds.yPt + layout.advancePt;
   const grown = rotatedCells.flatMap((rotated) => {
     const laidOut = layout.rows[rotated.rowIndex]?.cells[rotated.cellIndex];
     const current = input.rows[rotated.rowIndex]?.cells[rotated.cellIndex]?.verticalText;
-    if (!laidOut || !current) return [];
+    if (!laidOut || !current || !ruleInsets) return [];
+    const reachesTableBottom =
+      laidOut.flowBounds.yPt + laidOut.flowBounds.heightPt >= tableBottomPt - ROTATED_LINE_LENGTH_EPSILON_PT;
     const finalLengthPt = Math.max(
       0,
-      laidOut.flowBounds.heightPt - rotated.margins.top - rotated.margins.bottom,
+      laidOut.flowBounds.heightPt - rotated.margins.top - rotated.margins.bottom
+        - (ruleInsets.top[rotated.rowIndex] ?? 0)
+        - (reachesTableBottom ? ruleInsets.bottom[input.rows.length - 1] ?? 0 : 0),
     );
+    const exact = input.rows[rotated.rowIndex]?.heightRule === 'exact';
     return finalLengthPt > current.lineLengthPt + ROTATED_LINE_LENGTH_EPSILON_PT
+      || (exact && finalLengthPt < current.lineLengthPt - ROTATED_LINE_LENGTH_EPSILON_PT)
       ? [{ rotated, finalLengthPt, current }]
       : [];
   });

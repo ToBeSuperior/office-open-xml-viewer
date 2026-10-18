@@ -683,7 +683,7 @@ function collapsedHorizontalBoundaryWidthsPt(
 /** The collapsed horizontal rules each row's content sits inside
  * (WORD_COLLAPSED_BORDER_ROW_TRACK_FOOTPRINT): the full rule above the row
  * and, for the last row, the full bottom rule below it. */
-interface RowRuleInsets {
+export interface RowRuleInsets {
   readonly top: readonly number[];
   readonly bottom: readonly number[];
 }
@@ -710,6 +710,11 @@ function rowBoundaryFootprintsPt(
     insets.top[rowIndex] ?? 0,
     insets.bottom[rowIndex] ?? 0,
   ));
+}
+
+/** The collapsed rule insets of each row (WORD_COLLAPSED_BORDER_ROW_TRACK_FOOTPRINT). */
+export function tableRowRuleInsetsPt(input: TableLayoutInput): RowRuleInsets {
+  return rowRuleInsetsPt(input, resolvedBoundaries(input));
 }
 
 /** Resolve the page-local collapsed-rule footprint charged to each row track.
@@ -994,17 +999,23 @@ function materializeBorders(
       ));
     }
   });
-  // Vertical rules meet the table's top and bottom rules at their centre
+  // Vertical rules meet the adjacent top and bottom rules at their centre
   // lines, which sit inside the table box (see the horizontal rules above).
-  const horizontalRuleWidthsPt = collapsedHorizontalBoundaryWidthsPt(input, boundaries);
   const lastRow = input.rows.length - 1;
+  const adjacentRuleWidthPt = (horizontalBoundary: number, columnBoundary: number): number =>
+    [columnBoundary - 1, columnBoundary].reduce((maximumPt, column) => {
+      const segment = boundaries.horizontal[horizontalBoundary]?.[column];
+      if (!segment) return maximumPt;
+      const winner = resolveBoundary(segment.above.border, segment.below.border, segment.edge);
+      return Math.max(maximumPt, winner?.border.widthPt ?? 0);
+    }, 0);
   boundaries.vertical.forEach((rows, boundary) => {
     rows.forEach((resolved, row) => {
       if (effectiveCellSpacingPt(input.rows[row]) > 0) return;
       if (!resolved) return;
-      const topPt = rowY(row) + (row === 0 ? (horizontalRuleWidthsPt[0] ?? 0) / 2 : 0);
+      const topPt = rowY(row) + (row === 0 ? adjacentRuleWidthPt(0, boundary) / 2 : 0);
       const bottomPt = rowY(row + 1)
-        - (row === lastRow ? (horizontalRuleWidthsPt[lastRow + 1] ?? 0) / 2 : 0);
+        - (row === lastRow ? adjacentRuleWidthPt(lastRow + 1, boundary) / 2 : 0);
       segments.push(borderSegment(
         resolved,
         { xPt: columnX(row, boundary), yPt: topPt },
@@ -1297,6 +1308,7 @@ function rotatedCellLayout(
   input: TableLayoutInput,
   exactOwnedSpan: boolean,
   placement: FlowBlockPlacement,
+  exactClipHeightPt = cellFlowBounds.heightPt,
 ): TableCellLayout {
   const verticalText = cell.verticalText!;
   const physicalContent = {
@@ -1317,7 +1329,7 @@ function rotatedCellLayout(
   // Rotated lines can exceed the physical cell on either axis; clip them to
   // the cell like an exact row so they never paint over neighbours.
   const clipBounds = exactOwnedSpan
-    ? wordExactRowVerticalClipBounds(cellFlowBounds, placement.availableBounds)
+    ? wordExactRowVerticalClipBounds({ ...cellFlowBounds, heightPt: exactClipHeightPt }, placement.availableBounds)
     : cellFlowBounds;
   return {
     kind: 'table-cell',
@@ -1540,6 +1552,7 @@ function materializeTableRow(
         input,
         exactOwnedSpan,
         placement,
+        Math.max(0, cellHeightPt - (ruleInsetsPt.bottom[lastRowIndex] ?? 0)),
       );
     }
     const availableContentHeightPt = physicalContentHeightPt;
@@ -1867,11 +1880,13 @@ export function tablePrefixTracks(input: TableLayoutInput): TablePrefixTracks {
     raiseContentHeight() {},
   };
   // The collapsed-rule footprint of `row`, between `above` and `next`.
-  const footprintOf = (
+  // The rows around `row` with the merges it continues restored to their
+  // owners, so a merge's terminal rule takes part in `row`'s boundaries.
+  const neighbourhood = (
     above: Readonly<{ row: TableRowLayoutInput; covered: ReadonlySet<TableCellLayoutInput> }> | null,
     row: TableRowLayoutInput,
     next: TableRowLayoutInput | undefined,
-  ): number => {
+  ): Readonly<{ rows: TableRowLayoutInput[]; index: number }> => {
     const owners = above && above.covered.size > 0
       ? {
           ...above.row,
@@ -1880,8 +1895,15 @@ export function tablePrefixTracks(input: TableLayoutInput): TablePrefixTracks {
           )),
         }
       : above?.row;
-    const rows = [...(owners ? [owners] : []), row, ...(next ? [next] : [])];
-    return tableRowBoundaryFootprintsPt({ ...input, rows })[owners ? 1 : 0] ?? 0;
+    return { rows: [...(owners ? [owners] : []), row, ...(next ? [next] : [])], index: owners ? 1 : 0 };
+  };
+  const footprintOf = (
+    above: Readonly<{ row: TableRowLayoutInput; covered: ReadonlySet<TableCellLayoutInput> }> | null,
+    row: TableRowLayoutInput,
+    next: TableRowLayoutInput | undefined,
+  ): number => {
+    const { rows, index } = neighbourhood(above, row, next);
+    return tableRowBoundaryFootprintsPt({ ...input, rows })[index] ?? 0;
   };
   const commitNext = (rows: readonly TableRowLayoutInput[]) => {
     const rowIndex = tracks.heights.length;
@@ -1986,6 +2008,8 @@ export function tablePrefixTracks(input: TableLayoutInput): TablePrefixTracks {
     );
     if (!regular) return null;
     const candidateFootprintPt = footprintOf(above, candidate, undefined);
+    const candidateNeighbourhood = neighbourhood(above, candidate, undefined);
+    const candidateInsets = tableRowRuleInsetsPt({ ...input, rows: candidateNeighbourhood.rows });
     const footprintAt = (rowIndex: number) => (
       rowIndex >= base ? lastFootprintPt : tracks.footprints[rowIndex]!
     );
@@ -2002,6 +2026,8 @@ export function tablePrefixTracks(input: TableLayoutInput): TablePrefixTracks {
       topOffsetPt,
       heightPt: heightAt(count) + candidateFootprintPt,
       contentHeightPt,
+      ruleTopPt: candidateInsets.top[candidateNeighbourhood.index] ?? 0,
+      ruleBottomPt: candidateInsets.bottom[candidateNeighbourhood.index] ?? 0,
     };
   };
   const prefixTracks: TablePrefixTracks = {
@@ -2032,7 +2058,10 @@ export function tablePrefixTracks(input: TableLayoutInput): TablePrefixTracks {
         widthPt,
         columnOffsetsPt: columnOffsetsOf(input),
         flows: new Map(candidate.cells.map((cell) => [cell.id, flowOf(cell)] as const)),
-        ruleInsetsPt: rowRuleInsetsPt(localInput, resolvedBoundaries(localInput)),
+        ruleInsetsPt: {
+          top: local.map((_row, index) => index === local.length - 1 ? resolved.ruleTopPt : 0),
+          bottom: local.map((_row, index) => index === local.length - 1 ? resolved.ruleBottomPt : 0),
+        },
       }, placement);
     },
   };

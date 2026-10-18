@@ -278,6 +278,20 @@ describe('ECMA-376 §17.4.72 cell text direction', () => {
     expect(text.y).toBeCloseTo(60, 0);
   });
 
+  it('runs an exact rotated line between its top rule and the authored box end', async () => {
+    // WORD_COLLAPSED_BORDER_ROW_TRACK_FOOTPRINT: the 80pt exact box holds its
+    // 6pt top rule; the 6pt bottom rule is appended below it. The line spans
+    // 6..80pt (74pt), so right-aligned text still ends at y=80.
+    const rule = { style: 'single', width: 6, color: null };
+    const ruled = tableOf([
+      row([cell('AB', { textDirection: 'tbRl', alignment: 'right' }), cell('x')], 80, 'exact'),
+    ]);
+    ruled.borders = { ...ruled.borders, top: rule, bottom: rule } as DocTable['borders'];
+    const calls = await render(ruled);
+    const text = calls.find((call) => call.text.includes('AB'))!;
+    expect(text.y).toBeCloseTo(60, 0);
+  });
+
   it('lets a taller neighbour lengthen the line and centres text along it', async () => {
     const calls = await render(tableOf([
       row([

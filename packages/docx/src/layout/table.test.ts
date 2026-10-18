@@ -299,6 +299,61 @@ describe('retained table layout', () => {
     expect((result.layout as TableLayout).rows[0]?.advancePt).toBeCloseTo(20.9, 8);
   });
 
+  it('meets each vertical rule with the adjacent top and bottom rules', async () => {
+    // Nonuniform horizontal rules: each vertical edge starts and ends at the
+    // centre line of the rule in its own column, not the table-wide widest.
+    const thin = { widthPt: 0.5, color: '#000000', authoredStyle: 'single' };
+    const thick = { widthPt: 6, color: '#000000', authoredStyle: 'single' };
+    const input = tableInput([{
+      id: 'row-0',
+      source: { story: 'body', storyInstance: 'body', path: [0, 0] },
+      heightPt: 20,
+      heightRule: 'exact',
+      cells: [
+        cellInput('cell-0', 0, [], { borders: { ...noBorderInputs, top: thin, bottom: thin, left: thin } }),
+        cellInput('cell-1', 1, [], { borders: { ...noBorderInputs, top: thick, bottom: thick, right: thick } }),
+      ],
+    }], [40, 60]);
+    const services = createLayoutServices(document([]), { measureContext: measuringContext() });
+    const { layoutTable } = await import('./table.js');
+    const { layout } = layoutTable(input, placement(), services);
+    const edge = (name: 'left' | 'right') => layout.borders.find((border) => border.edge === name)!;
+    const topPt = layout.flowBounds.yPt;
+    const bottomPt = topPt + layout.advancePt;
+    expect([edge('left').from.yPt, edge('left').to.yPt]).toEqual([topPt + 0.25, bottomPt - 0.25]);
+    expect([edge('right').from.yPt, edge('right').to.yPt]).toEqual([topPt + 3, bottomPt - 3]);
+  });
+
+  it('insets a prefix candidate below a merge by the merge terminal rule', async () => {
+    // A vertical merge ending above the candidate ends in its 6pt bottom rule
+    // (on its last cell); the 1pt insideH is only the fallback. The prefix
+    // must resolve that boundary as the whole table does.
+    const owner = { widthPt: 6, color: '#000000', authoredStyle: 'single' };
+    const inside = { widthPt: 1, color: '#000000', authoredStyle: 'single' };
+    const rowAt = (index: number, cell: Record<string, unknown>) => ({
+      id: `row-${index}`,
+      source: { story: 'body', storyInstance: 'body', path: [0, index] },
+      logicalRowIndex: index,
+      heightPt: 20,
+      heightRule: 'atLeast',
+      cells: [cell],
+    });
+    const rows = [
+      rowAt(0, cellInput('cell-0', 0, [], { verticalMerge: 'restart' })),
+      rowAt(1, cellInput('cell-1', 0, [], { verticalMerge: 'continue', borders: { ...noBorderInputs, bottom: owner } })),
+      rowAt(2, cellInput('cell-2', 0, [])),
+    ];
+    const input = tableInput(rows, [100], { ...noBorderInputs, insideH: inside });
+    const services = createLayoutServices(document([]), { measureContext: measuringContext() });
+    const { layoutTable, tablePrefixTracks } = await import('./table.js');
+    const full = layoutTable(input, placement(), services).layout as TableLayout;
+    const prefix = tablePrefixTracks(input).row(input.rows.slice(0, 2), input.rows[2]!, placement())!;
+    const inset = (rowLayout: TableLayout['rows'][number]) =>
+      rowLayout.cells[0]!.contentBounds.yPt - rowLayout.cells[0]!.flowBounds.yPt;
+    expect(inset(full.rows[2]!)).toBeCloseTo(6, 9);
+    expect(inset(prefix)).toBeCloseTo(6, 9);
+  });
+
   it('acquires each ordinary and nested cell paragraph final geometry once', () => {
     const nested = table([row([textCell('nested-only')])], [80]);
     const outer = table([row([

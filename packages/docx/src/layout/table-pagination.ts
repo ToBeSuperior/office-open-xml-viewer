@@ -339,12 +339,32 @@ function paginationRowHeightForOccurrence(
   context: TableFragmentContext,
 ): number {
   if (row === source.input.rows[rowIndex]) return paginationRowHeight(source, rowIndex);
-  const occurrence = layoutTable({
+  const occurrenceInput = {
     ...source.input,
     id: `${source.input.id}:row-occurrence:${context.page.occurrenceId}:${row.logicalRowIndex}`,
     rows: [row],
-  }, context.placement, context.services).layout;
-  return Math.max(0, occurrence.rows[0]?.heightPt ?? occurrence.advancePt);
+  };
+  const occurrence = layoutTable(occurrenceInput, context.placement, context.services).layout;
+  // Measured alone, the row carries the table's own top and bottom rules;
+  // in the table it carries its own collapsed footprint instead
+  // (WORD_COLLAPSED_BORDER_ROW_TRACK_FOOTPRINT).
+  const aloneFootprintPt = tableRowBoundaryFootprintsPt(occurrenceInput)[0] ?? 0;
+  const inTableFootprintPt = sourceRowFootprintsPt(source)[rowIndex] ?? 0;
+  return Math.max(
+    0,
+    (occurrence.rows[0]?.heightPt ?? occurrence.advancePt) - aloneFootprintPt + inTableFootprintPt,
+  );
+}
+
+const sourceRowFootprints = new WeakMap<RetainedTableAcquisition, readonly number[]>();
+
+function sourceRowFootprintsPt(source: RetainedTableAcquisition): readonly number[] {
+  let footprints = sourceRowFootprints.get(source);
+  if (!footprints) {
+    footprints = tableRowBoundaryFootprintsPt(source.input);
+    sourceRowFootprints.set(source, footprints);
+  }
+  return footprints;
 }
 
 function paginationRowTrackHeightForOccurrence(

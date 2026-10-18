@@ -603,6 +603,37 @@ describe('retained table pagination contracts', () => {
     expect(fragments.map((fragment) => fragment.inkBounds.heightPt)).toEqual([46, 34]);
   });
 
+  it('charges a re-acquired exact row its in-table rule footprint, not a one-row table\'s', () => {
+    // Two 20pt exact rows with 6pt rules: 20 + 20 + the 6pt bottom rule fills
+    // a 46pt band exactly. A PAGE field makes the first row re-acquired per
+    // page; measured alone it would carry the table's bottom rule as well.
+    const rule = singleBorder(6);
+    const field = paragraph('');
+    (field.runs as unknown[]).push({
+      type: 'field', fieldType: 'page', instruction: 'PAGE', fallbackText: '1',
+      bold: false, italic: false, underline: false, strikethrough: false,
+      fontSize: 10, color: null, fontFamily: 'Times New Roman', background: null,
+    });
+    const source = table(
+      [
+        row([cell([{ type: 'paragraph', ...field } as unknown as CellElement])], {
+          rowHeight: 20, rowHeightRule: 'exact',
+        }),
+        row([cell(Array.from({ length: 4 }, () => (
+          { type: 'paragraph', ...paragraph('line') } as unknown as CellElement)))], {
+          rowHeight: 20, rowHeightRule: 'exact',
+        }),
+      ],
+      [120],
+      { borders: { top: rule, bottom: rule, left: null, right: null, insideH: rule, insideV: null } },
+    );
+    const layout = layoutDocument(documentModel([source as unknown as BodyElement], 66));
+    const fragments = retainedTopLevelTables(layout);
+    expect(layout.pages).toHaveLength(1);
+    expect(fragments).toHaveLength(1);
+    expect(fragments[0]!.rows.map((fragmentRow) => fragmentRow.heightPt)).toEqual([20, 26]);
+  });
+
   it('re-resolves repeated atLeast header boundaries and row tracks on every slice', () => {
     const outer = singleBorder(4);
     const inside = singleBorder(1);
