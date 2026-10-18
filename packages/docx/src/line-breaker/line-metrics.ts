@@ -9,7 +9,7 @@ import { wordDegenerateLineSpacingIsSingle, wordEastAsianGridLineCells, wordFarE
 import { type DocGridCtx, type LayoutLine } from './model.js';
 import { isGridLineRule } from './advance.js';
 import { buildFont, getDefaultFontFamily, getDefaultFontSize } from './font-routes.js';
-import { allowsReferenceFontMetric, indexedFontMetrics, mayUseAuthoredReferenceVerticalMetric, selectResourceMetric } from './font-metrics.js';
+import { allowsReferenceFontMetric, authoredReferenceVerticalMetric, indexedFontMetrics, mayUseAuthoredReferenceVerticalMetric, selectResourceMetric } from './font-metrics.js';
 
 /**
  * ECMA-376 §17.6.5 docGrid line grid — number of whole grid CELLS a
@@ -411,11 +411,7 @@ export function paragraphMarkLineMetrics(
       && allowsReferenceFontMetric(indexedFontMetrics(
         textLayoutService.fontMetrics ?? textLayoutService.localMetrics ?? {},
       ), selectedFont)
-      ? referenceFontLineMetrics(
-          selectedFont.requestedFamily,
-          selectedFont.weight,
-          selectedFont.style,
-        )
+      ? authoredReferenceVerticalMetric(selectedFont, { text: textLayoutService, probe: markProbe })
       : undefined;
     if (naturalMetricAllowed && !resolvedLocalFont && !referenceMarkMetric
       && selectedFont?.source === 'native' && ctx) {

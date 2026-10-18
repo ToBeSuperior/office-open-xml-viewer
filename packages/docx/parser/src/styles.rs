@@ -223,6 +223,11 @@ pub struct ParaFmt {
     pub num_level: Option<u32>,
     /// Explicit tab stops (pos_pt, alignment, leader). None = inherit from parent style chain.
     pub tab_stops: Option<Vec<(f64, String, String)>>,
+    /// Positions a merged layer cleared (`w:tab w:val="clear"`) and no later
+    /// layer set again. `merge_tab_stops` drops clears from `tab_stops`; a
+    /// numbering level's tabs entering beneath this chain must still honour
+    /// them (§17.7.2 precedence, §17.9.6 level pPr).
+    pub tab_clears: Vec<f64>,
     /// merged run defaults from pPr/rPr
     pub run: RunFmt,
     /// Paragraph background hex color (w:shd fill on paragraph)
@@ -856,6 +861,25 @@ impl StyleMap {
     /// properties need this provenance because §17.7.2 places style-origin
     /// numbering below the paragraph style, while direct `numPr` and its
     /// associated properties are applied in the final direct-formatting layer.
+    /// The paragraph layers beneath the paragraph style (§17.7.2): document
+    /// defaults, the whole-table style and its conditional formatting.
+    pub(crate) fn resolve_para_below_style(
+        &self,
+        table_style_id: Option<&str>,
+        cond: Option<&CondFmt>,
+    ) -> ParaFmt {
+        let mut para = ParaFmt::default();
+        let mut run = RunFmt::default();
+        apply_para(&mut para, &self.defaults_para);
+        if let Some(tid) = table_style_id {
+            self.apply_style_chain(tid, &mut para, &mut run);
+        }
+        if let Some(p) = cond.and_then(|c| c.para.as_ref()) {
+            apply_para(&mut para, p);
+        }
+        para
+    }
+
     pub(crate) fn resolve_paragraph_style_layer(&self, style_id: Option<&str>) -> ParaFmt {
         let mut paragraph = ParaFmt::default();
         let mut run = RunFmt::default();
@@ -1115,6 +1139,13 @@ pub(crate) fn apply_para(dst: &mut ParaFmt, src: &ParaFmt) {
         // TOC leader tab). `dst` empty ⇒ merge is just the sorted src.
         let base = dst.tab_stops.take().unwrap_or_default();
         dst.tab_stops = Some(merge_tab_stops(&base, src_tabs));
+        for (pos, val, _) in src_tabs {
+            dst.tab_clears
+                .retain(|cleared| (cleared - pos).abs() > 0.05);
+            if val == "clear" {
+                dst.tab_clears.push(*pos);
+            }
+        }
     }
     if src.shading.is_some() {
         dst.shading = src.shading.clone();

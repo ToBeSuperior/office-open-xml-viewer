@@ -4,6 +4,7 @@ import type { CjkLang, OfficeFontFallbackRequest } from '@silurus/ooxml-core';
 import {
   classifyCjkFont,
   cjkLangFromLanguage,
+  findReferenceFontMetrics,
   scriptPreloadNamesForText,
   substituteEntryCoversText,
 } from '@silurus/ooxml-core';
@@ -165,6 +166,17 @@ export function docxOfficeFontFallbackRequests(
       // authored face. The inherited bold/italic axes need their own resource.
       add(doc.minorFont, usage.bold, usage.italic);
     }
+  }
+  // LIBRARY_SYNTHESIZED_FACE_LINE_GEOMETRY compares a styled run against the
+  // regular face it may be synthesized from, so a styled tuple the catalog
+  // lacks also loads its family's catalogued regular face.
+  for (const request of [...tuples.values()]) {
+    const weight = request.weight ?? 400;
+    const style = request.style ?? 'normal';
+    if (weight === 400 && style === 'normal') continue;
+    if (findReferenceFontMetrics(request.family, { weight, style }).length > 0) continue;
+    if (findReferenceFontMetrics(request.family, { weight: 400, style: 'normal' }).length === 0) continue;
+    add(request.family);
   }
   // Every authored family is checked for installation as a family, independent
   // of the styles the document uses: an installed family paints every tuple

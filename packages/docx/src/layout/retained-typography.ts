@@ -79,6 +79,7 @@ export function rubyPaintOperations(input: Readonly<{
     fontWeight: span.fontWeight,
     fontStyle: span.fontStyle,
     color: span.color,
+    ...(span.kerning ? { kerning: span.kerning } : {}),
   }));
 }
 

@@ -109,6 +109,8 @@ function paintRetainedGlyph(
     operation.fontWeight,
     operation.fontStyle,
   );
+  const previousKerning = ctx.fontKerning;
+  if (operation.kerning) ctx.fontKerning = operation.kerning;
   if (upright) {
     ctx.save();
     ctx.translate(operation.origin.xPt, operation.origin.yPt);
@@ -118,6 +120,7 @@ function paintRetainedGlyph(
   } else {
     ctx.fillText(operation.text, operation.origin.xPt, operation.origin.yPt);
   }
+  if (operation.kerning) ctx.fontKerning = previousKerning;
 }
 
 function paintRetainedMarkPath(

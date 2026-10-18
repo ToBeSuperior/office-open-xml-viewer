@@ -98,6 +98,18 @@ it('collects the distinct authored font tuples used by rendered text', () => {
     .toEqual(['Aptos', 'Calibri', 'Calibri Light']);
 });
 
+it('also requests the catalogued regular face of a styled tuple the catalog lacks', () => {
+  // LIBRARY_SYNTHESIZED_FACE_LINE_GEOMETRY: main and worker share this list,
+  // so both load the regular face a synthesized bold run is compared with.
+  const doc = docWith('body', 'Arial', 'Arial');
+  (doc.body[0] as { runs: object[] }).runs = [
+    { type: 'text', text: '見出し', fontFamily: 'MS Mincho', bold: true, italic: false },
+  ];
+  const requests = docxOfficeFontFallbackRequests(doc);
+  expect(requests).toContainEqual({ family: 'MS Mincho', weight: 700, style: 'normal' });
+  expect(requests).toContainEqual({ family: 'MS Mincho', weight: 400, style: 'normal' });
+});
+
 it('preloads every registered rendered family without theme names and omits unregistered ones', () => {
   const doc = docWith('body');
   doc.majorFont = undefined;
@@ -119,10 +131,13 @@ it('checks substitute family presence independent of the styles used', () => {
   (doc.body[0] as { runs: object[] }).runs = [
     { type: 'text', text: 'Bold only', fontFamily: 'Franklin Gothic Book', bold: true },
   ];
-  // Only the bold tuple is a style request; presence is asked for the family.
+  // The bold tuple, plus the catalogued regular face the uncatalogued bold
+  // is compared with (LIBRARY_SYNTHESIZED_FACE_LINE_GEOMETRY), are style
+  // requests; presence is asked for the family.
   const requests = docxOfficeFontFallbackRequests(doc, { useGoogleFonts: true });
   expect(requests.filter((request) => request.family === 'Franklin Gothic Book')).toEqual([
     { family: 'Franklin Gothic Book', weight: 700, style: 'normal' },
+    { family: 'Franklin Gothic Book', weight: 400, style: 'normal' },
     { family: 'Franklin Gothic Book', presenceOnly: true },
   ]);
   // Without web fonts the family is still probed once (layout's installed

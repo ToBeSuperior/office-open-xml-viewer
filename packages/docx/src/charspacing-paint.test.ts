@@ -406,8 +406,9 @@ describe('character spacing preserves main kerning and joining paint', () => {
     ]);
     const advance = 68 + 4 * charSpacing;
     expect(advances).toEqual([['سلام', advance], ['|', 20]]);
+    // Windows Word kerns Arabic text without w:kern (WORD_ARABIC_PAIR_KERNING).
     expect(fills).toEqual([
-      call('سلام', 0, charSpacing), call('|', advance, 0, 'none', 'bold '),
+      call('سلام', 0, charSpacing, 'normal'), call('|', advance, 0, 'none', 'bold '),
     ]);
   });
 
@@ -428,7 +429,7 @@ describe('character spacing preserves main kerning and joining paint', () => {
       call('a\u030Ab', 40, 0),
       call('cooperate', 80, 0, 'none', 'bold '),
       call('To', 260, 2, 'normal', 'italic '),
-      call('سلام', 300, 2),
+      call('سلام', 300, 2, 'normal'),
     ]);
   });
 });
