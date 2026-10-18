@@ -38,7 +38,6 @@ import { projectDocumentSnapshotResources } from './layout/production-paint-reso
 import { sourceKey } from './layout/source-key.js';
 import type { BodyElement, DocNote } from './types.js';
 import type { SourceRef } from './layout/types.js';
-import type { ParagraphLayoutSource } from './layout/text.js';
 import { documentRequiresDomVerticalGlyphLayout } from './vertical-render-capability.js';
 import { defaultSectionGeometry } from './layout/context.js';
 
@@ -577,15 +576,6 @@ function buildLayoutSourceModelAdapter(
     });
     return { source, body: body as unknown as readonly LayoutStoryBlock[] };
   });
-  const projections: BodyAcquisitionInputProjections = Object.freeze({
-    ...privateProjections,
-    paragraphAcquisitionInput(_paragraph: ParagraphLayoutSource, source: SourceRef) {
-      const retained = paragraphInputs.get(sourceKey(source));
-      if (!retained) throw new Error(`Unknown paragraph acquisition source: ${sourceKey(source)}`);
-      return retained;
-    },
-  });
-
   const canonicalizeBody = ownsPrivateGraph ? canonicalOwnedLayoutBody : canonicalLayoutBody;
   const canonicalizeFinalParts = ownsPrivateGraph ? canonicalOwnedFinalParts : canonicalFinalParts;
   const canonicalDocument = {

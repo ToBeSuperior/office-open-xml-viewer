@@ -256,12 +256,6 @@ export function buildWarpEnvelope(
   };
 }
 
-/** True when a preset has a single boundary curve (arch/circle baseline). */
-export function isSingleEdgeWarp(preset: string): boolean {
-  const def = ownValue(WARP_PRESETS, preset.toLowerCase());
-  return !!def && def.paths.length === 1;
-}
-
 /**
  * Sample a polyline at fraction `u ∈ [0,1]` of its ARC LENGTH. Returns the point
  * and the local unit tangent (direction of travel along the curve). Even

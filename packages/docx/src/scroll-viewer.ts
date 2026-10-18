@@ -1,5 +1,5 @@
 import { openExternalHyperlink, PT_TO_PX } from '@silurus/ooxml-core';
-import type { FindHighlightColors, FindMatch, FindMatchesOptions, HyperlinkTarget, OoxmlResourceMetrics, ViewerContextMenuEvent, ZoomableViewer } from '@silurus/ooxml-core';
+import type { FindMatch, FindMatchesOptions, HyperlinkTarget, OoxmlResourceMetrics, ZoomableViewer } from '@silurus/ooxml-core';
 import {
   computeVisibleWindow,
   createVirtualScrollGeometry,
@@ -40,7 +40,6 @@ import type { DocxScrollSlot as PageSlot } from './scroll-slot';
 import { buildDocxTextLayer } from './text-layer';
 import { DocxFindController, type DocxMatchLocation } from './find';
 import { buildDocxHighlightLayer } from './find-highlight-layer';
-import type { RenderPageOptions } from './types';
 import {
   createDocxCommentSelectionContext,
   readDocxTextSelectionContext,
@@ -56,7 +55,6 @@ import type { DocxCommentsOptions } from './comment-margin';
 import type { DocxScrollViewerOptions } from './scroll-viewer-options';
 import { DocxScrollCommentNavigation } from './scroll-comment-navigation';
 import { renderDocxFocusedPage } from './focused-view-runtime';
-import type { DocxLayoutPublication } from './document-layout-events.js';
 import { DocxScrollLayoutController } from './scroll-layout-controller';
 
 const COMMENT_MARGIN_GAP_PX = 12;
@@ -398,9 +396,6 @@ export class DocxScrollViewer implements ZoomableViewer {
     },
     selectionChanged: () => this._selection.emitChange(),
   });
-  private _layoutUnsubscribe: (() => void) | null = null;
-  /** Page prefix currently represented by the native scroll extent. */
-  private _presentedPageCount = 0;
   private _activeCommentId: string | null = null;
   private _activeCommentPage: number | null = null;
   private _commentUi: DocxCommentUiRuntime | null = null;
@@ -922,7 +917,6 @@ export class DocxScrollViewer implements ZoomableViewer {
 
     const dpr = this._viewport.dpr();
     const widthPx = this._pageWidthPx(i);
-    const epoch = this._renderEpoch;
     const scale = this._scale;
     const dispatcher = slot.dispatcher;
     const generation = dispatcher.begin();
@@ -1057,7 +1051,6 @@ export class DocxScrollViewer implements ZoomableViewer {
     const dpr = this._viewport.dpr();
     const widthPx = this._pageWidthPx(i);
     const scale = this._scale;
-    const epoch = this._renderEpoch;
 
     if (this._mode === 'worker') {
       void this._renderSlotBitmap(i, slot, widthPx, dpr, scale);

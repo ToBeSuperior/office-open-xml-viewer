@@ -8,9 +8,9 @@ from fontTools.feaLib.builder import addOpenTypeFeaturesFromString
 from fontTools.ttLib import TTFont, newTable
 from fontTools.ttLib.tables._c_m_a_p import CmapSubtable
 
-stacked_vertical_glyphs = runpy.run_path(
-    str(Path(__file__).with_name('generate-font-reference-metrics.py'))
-)['stacked_vertical_glyphs']
+generator = runpy.run_path(str(Path(__file__).with_name('generate-font-reference-metrics.py')))
+stacked_vertical_glyphs = generator['stacked_vertical_glyphs']
+stacked_vrt2_only_glyphs = generator['stacked_vrt2_only_glyphs']
 
 
 class StackedVerticalCoverageTest(unittest.TestCase):
@@ -50,12 +50,18 @@ class StackedVerticalCoverageTest(unittest.TestCase):
                 lookup Extended;
                 sub square from [square.alt];
             } vert;
-            feature vrt2 { sub parallel by parallel.vert; } vrt2;
+            feature vrt2 {
+                sub parallel by parallel.vert;
+                sub bracket by bracket.vert;
+            } vrt2;
         ''')
         self.assertEqual(stacked_vertical_glyphs(font), '()…「')
+        # vrt2 coverage is recorded apart, minus what vert already covers.
+        self.assertEqual(stacked_vrt2_only_glyphs(font), '∥')
 
     def test_missing_gsub_has_no_coverage(self):
         self.assertEqual(stacked_vertical_glyphs(TTFont()), '')
+        self.assertEqual(stacked_vrt2_only_glyphs(TTFont()), '')
 
 
 if __name__ == '__main__':

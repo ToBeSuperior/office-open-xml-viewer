@@ -302,7 +302,7 @@ export function blipGrayLevel(r: number, g: number, b: number): number {
 /** Evaluated primitive/control steps, including recursive branches and
  * compound-effect lowering. Convolution taps and definition lookup visits
  * additionally consume the independent pixel-work budget. */
-export function blipPixelEffectPasses(value: BlipPixelEffects): number {
+function blipPixelEffectPasses(value: BlipPixelEffects): number {
   return effectPlan(value, 0).count;
 }
 
@@ -884,7 +884,7 @@ function evaluateContainer(parent: EffectBuffer, container: BlipEffectContainer,
 
 /** Per-channel lookup table for `<a:lum>` (see the evidence above): bright
  *  and contrast are signed fractions in [-1, 1]. */
-export function luminanceTable(bright: number, contrast: number): Uint8ClampedArray {
+function luminanceTable(bright: number, contrast: number): Uint8ClampedArray {
   const table = new Uint8ClampedArray(256);
   const b = Math.max(-1, Math.min(1, bright));
   const c = Math.max(-1, Math.min(1, contrast));

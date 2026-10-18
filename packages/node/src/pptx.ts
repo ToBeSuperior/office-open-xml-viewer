@@ -30,6 +30,9 @@ import { InProcessPullTransport } from '@silurus/ooxml-core/internal/in-process-
 import type { OoxmlNodeSessionOptions } from './session-options.ts';
 import type { NodeCanvasFactory, NodeCanvasLike } from './render.ts';
 import { createLazyWasmModule, resolveWasm } from './wasm-loader.ts';
+import { throwIfAborted } from '@silurus/ooxml-core/internal/abort';
+
+const ABORT_MESSAGE = 'PPTX presentation session was aborted';
 
 const getPptxWasmModule = createLazyWasmModule(() => resolveWasm(
     import.meta.url,
@@ -196,7 +199,7 @@ export class PptxPresentationSessionImpl implements PptxPresentationSession {
   ): Promise<void> {
     this.assertOpen();
     return this.enqueueRender(async () => {
-      throwIfAborted(this.signal);
+      throwIfAborted(this.signal, ABORT_MESSAGE);
       const { renderSlideNode } = await import('./render.ts');
       const presentation: Presentation = {
         slideWidth: this.slideWidth,
@@ -214,7 +217,7 @@ export class PptxPresentationSessionImpl implements PptxPresentationSession {
         fetchImage: this.fetchImage,
         fetchMedia: this.fetchMedia,
       });
-      throwIfAborted(this.signal);
+      throwIfAborted(this.signal, ABORT_MESSAGE);
     }).catch((error: unknown) => this.failOperation(error));
   }
 
@@ -229,7 +232,7 @@ export class PptxPresentationSessionImpl implements PptxPresentationSession {
     let operationError: unknown;
     try {
       for (let index = 0; index < this.slideCount; index += 1) {
-        throwIfAborted(this.signal);
+        throwIfAborted(this.signal, ABORT_MESSAGE);
         const slide = await this.slideClient.load(index);
         if (!slide) throw new Error(`PPTX slide ${index} was not decoded`);
         this.usage ??= await this.slidePull.run(() => readPptxSlideCursorUsage(
@@ -297,7 +300,7 @@ export class PptxPresentationSessionImpl implements PptxPresentationSession {
     extract: (archive: PptxNodeArchive) => Uint8Array,
   ): Promise<Blob> {
     return this.rawParts.get(path, mimeType, () => {
-      throwIfAborted(this.signal);
+      throwIfAborted(this.signal, ABORT_MESSAGE);
       const bytes = extract(this.archive);
       this.refreshResourceUsage();
       return new Blob([bytes as BlobPart], { type: mimeType });
@@ -349,10 +352,4 @@ function toUint8(buffer: ArrayBuffer | Uint8Array): Uint8Array {
   return buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer as ArrayBuffer);
 }
 
-function throwIfAborted(signal: AbortSignal | undefined): void {
-  if (!signal?.aborted) return;
-  const error = new Error('PPTX presentation session was aborted');
-  error.name = 'AbortError';
-  throw error;
-}
 declare const __OOXML_MODEL_SOURCES__: boolean;

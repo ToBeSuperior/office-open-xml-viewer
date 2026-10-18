@@ -15,7 +15,7 @@ export type WorkerSvgDecodeResponse =
 
 type WorkerPost = (message: unknown, transfer?: Transferable[]) => void;
 
-export function isWorkerSvgDecodeRequest(value: unknown): value is WorkerSvgDecodeRequest {
+function isWorkerSvgDecodeRequest(value: unknown): value is WorkerSvgDecodeRequest {
   return !!value && typeof value === 'object'
     && (value as { kind?: unknown }).kind === 'ooxmlDecodeSvg';
 }

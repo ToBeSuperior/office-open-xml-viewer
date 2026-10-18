@@ -9,7 +9,6 @@ import {
   lightDirFromRig,
   applyBevelShading,
   applyExtrusion,
-  materialClass,
   type BevelShadeParams,
   type BevelCtx,
 } from './bevel-shading';

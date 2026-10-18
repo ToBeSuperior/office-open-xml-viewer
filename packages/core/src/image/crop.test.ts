@@ -1,7 +1,6 @@
 import { setImageEffectFrame } from './image-effect-frame.js';
 import { describe, it, expect, vi } from 'vitest';
 import {
-  cropSourceRect,
   drawImageCropped,
   imageNaturalSize,
   metafileRasterSize,
@@ -38,26 +37,6 @@ describe('imageNaturalSize', () => {
   });
   it('returns 0×0 when no size is reported', () => {
     expect(imageNaturalSize({} as unknown as CanvasImageSource)).toEqual({ w: 0, h: 0 });
-  });
-});
-
-describe('cropSourceRect', () => {
-  it('returns null for no crop, an all-zero crop, or no native size', () => {
-    expect(cropSourceRect(fakeImg(100, 100), undefined)).toBeNull();
-    expect(cropSourceRect(fakeImg(100, 100), { l: 0, t: 0, r: 0, b: 0 })).toBeNull();
-    expect(cropSourceRect(fakeImg(0, 0), { l: 0.1, t: 0, r: 0.1, b: 0 })).toBeNull();
-  });
-  it('computes the source sub-rectangle from fractional insets', () => {
-    const c = cropSourceRect(fakeImg(2860, 1368), { l: 0.3256, t: 0, r: 0.03829, b: 0 });
-    expect(c).not.toBeNull();
-    expect(c!.sx).toBeCloseTo(0.3256 * 2860, 3);
-    expect(c!.sy).toBe(0);
-    expect(c!.sw).toBeCloseTo((1 - 0.3256 - 0.03829) * 2860, 3);
-    expect(c!.sh).toBe(1368);
-  });
-  it('intersects a normative negative outset with the actual source bitmap', () => {
-    const c = cropSourceRect(fakeImg(100, 100), { l: -0.5, t: 0, r: 0, b: 0 });
-    expect(c).toEqual({ sx: 0, sy: 0, sw: 100, sh: 100 });
   });
 });
 

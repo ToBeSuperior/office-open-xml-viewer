@@ -122,7 +122,6 @@ import { measureParagraphIntrinsicWidths, measureTableCellIntrinsicWidths } from
 // one-directional dependency, with mutable acquisition state owned under layout/.
 import { buildFont, fontClassesWithPitches, getDefaultFontSize, paragraphMarkLineHeight } from '../line-layout.js';
 import type { DocGridCtx } from '../line-layout.js';
-import { measureParagraph } from '../paragraph-measure.js';
 import {
   acquireRetainedTable,
   type RetainedTableAcquisition,
@@ -1433,13 +1432,7 @@ function measureBodyParagraphEntry(
     services,
     state,
     sessionState,
-    footnotesById,
-    endnotesById,
-    storyAcquisitionContext,
-    pageRegistryFlowDomainId,
-    measureContext,
     publicAnchorBridge,
-    effectiveTablePositioning,
   } = context;
   setBodyAcquisitionLocation(services, state, sessionState, request.location);
   const paragraph = sourceElement(dependencies.source, request.input.source);
@@ -1632,18 +1625,10 @@ function layoutBodyNotes(
   request: Parameters<NonNullable<BodyLayoutSession['layoutNotes']>>[0],
 ): ReturnType<NonNullable<BodyLayoutSession['layoutNotes']>> {
   const {
-    source,
-    dependencies,
     services,
-    state,
-    sessionState,
     footnotesById,
     endnotesById,
     storyAcquisitionContext,
-    pageRegistryFlowDomainId,
-    measureContext,
-    publicAnchorBridge,
-    effectiveTablePositioning,
   } = context;
   const notes: NoteLayout[] = [];
   const stack = new NoteStack();
@@ -1913,17 +1898,10 @@ function measureFollowingBodyBlock(
   request: Parameters<NonNullable<BodyLayoutSession['measureFollowingBlock']>>[0],
 ): ReturnType<NonNullable<BodyLayoutSession['measureFollowingBlock']>> {
   const {
-    source,
     dependencies,
     services,
     state,
     sessionState,
-    footnotesById,
-    endnotesById,
-    storyAcquisitionContext,
-    pageRegistryFlowDomainId,
-    measureContext,
-    publicAnchorBridge,
     effectiveTablePositioning,
   } = context;
   const candidate: BodyAcquisitionState = {
@@ -2047,18 +2025,11 @@ function prescanBodyPageAnchors(
   request: Parameters<NonNullable<BodyLayoutSession['prescanPageAnchors']>>[0],
 ): ReturnType<NonNullable<BodyLayoutSession['prescanPageAnchors']>> {
   const {
-    source,
     dependencies,
     services,
     state,
     sessionState,
-    footnotesById,
-    endnotesById,
-    storyAcquisitionContext,
-    pageRegistryFlowDomainId,
-    measureContext,
     publicAnchorBridge,
-    effectiveTablePositioning,
   } = context;
   const geometry = request.location.section.geometry;
   const marginTopPt = bodyMarginInsetPt(geometry.marginTop);
@@ -2323,17 +2294,7 @@ function measureBodyLineNumberGlyph(
 ): ReturnType<NonNullable<BodyLayoutSession['measureLineNumberGlyph']>> {
   const {
     source,
-    dependencies,
-    services,
-    state,
-    sessionState,
-    footnotesById,
-    endnotesById,
-    storyAcquisitionContext,
-    pageRegistryFlowDomainId,
     measureContext,
-    publicAnchorBridge,
-    effectiveTablePositioning,
   } = context;
   const previousFont = measureContext.font;
   try {
@@ -2359,18 +2320,10 @@ function resetBodyPageAcquisition(
   next: Parameters<NonNullable<BodyLayoutSession['resetPageAcquisition']>>[0],
 ): ReturnType<NonNullable<BodyLayoutSession['resetPageAcquisition']>> {
   const {
-    source,
-    dependencies,
     services,
     state,
     sessionState,
-    footnotesById,
-    endnotesById,
-    storyAcquisitionContext,
     pageRegistryFlowDomainId,
-    measureContext,
-    publicAnchorBridge,
-    effectiveTablePositioning,
   } = context;
   state.floats = [];
   state.floatParaSeq = 0;
@@ -2393,18 +2346,7 @@ function bodyFlowRegistrySnapshot(
   context: BodySessionDependencies,
 ): ReturnType<NonNullable<BodyLayoutSession['flowRegistrySnapshot']>> {
   const {
-    source,
-    dependencies,
-    services,
-    state,
     sessionState,
-    footnotesById,
-    endnotesById,
-    storyAcquisitionContext,
-    pageRegistryFlowDomainId,
-    measureContext,
-    publicAnchorBridge,
-    effectiveTablePositioning,
   } = context;
   return Object.freeze({
     floats: sessionState.floatRegistry,
@@ -2417,18 +2359,8 @@ function commitBodyFlowRegistryDelta(
   delta: Parameters<NonNullable<BodyLayoutSession['commitFlowRegistryDelta']>>[0],
 ): ReturnType<NonNullable<BodyLayoutSession['commitFlowRegistryDelta']>> {
   const {
-    source,
-    dependencies,
-    services,
     state,
     sessionState,
-    footnotesById,
-    endnotesById,
-    storyAcquisitionContext,
-    pageRegistryFlowDomainId,
-    measureContext,
-    publicAnchorBridge,
-    effectiveTablePositioning,
   } = context;
   if (!delta.floats && !delta.drawingCollisions) {
     throw new Error('Body flow registry delta must update at least one registry');
@@ -3815,6 +3747,7 @@ function registerAnchorFloats(
   // a paraId (e.g. two side-by-side photos in one paragraph) never displace each
   // other; floats from different paragraphs do (de-facto overlap avoidance).
   const paraId = state.floatParaSeq++;
+  // `word-page-level-float-prescan`
   const prescanned = state.pageAnchorPrescanned?.has(para) ?? false;
   for (const run of para.runs) {
     if (run.type === 'image') {

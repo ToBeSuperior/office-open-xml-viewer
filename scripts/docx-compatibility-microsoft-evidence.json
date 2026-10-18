@@ -14,10 +14,6 @@
         {
           "id": "2.1.562",
           "title": "Part 4 Section 2.18.10, ST_CharacterSpacing (Character-Level Whitespace Compression Settings)"
-        },
-        {
-          "id": "2.1.1713",
-          "title": "Part 4 Section 6.1.2.22, textbox (Text Box)"
         }
       ]
     },
@@ -66,10 +62,6 @@
         {
           "id": "2.1.154",
           "title": "Part 1 Section 17.4.45, tblCellSpacing (Table Cell Spacing Default)"
-        },
-        {
-          "id": "2.1.155",
-          "title": "Part 1 Section 17.4.50, tblInd (Table Indent from Leading Margin)"
         },
         {
           "id": "2.1.156",

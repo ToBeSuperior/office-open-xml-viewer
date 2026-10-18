@@ -5,7 +5,7 @@
 
 use crate::resource::{
     self, OoxmlFormat, ResourceGovernor, ResourceScope, HARD_MAX_ARCHIVE_ENTRIES,
-    HARD_MAX_ARCHIVE_ENTRY_BYTES, HARD_MAX_CENTRAL_DIRECTORY_BYTES,
+    HARD_MAX_CENTRAL_DIRECTORY_BYTES,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -878,13 +878,6 @@ pub(crate) fn open_validated_cursor<T: AsRef<[u8]>>(
     Ok(archive)
 }
 
-/// Open an owned ZIP through the shared validated construction path.
-pub fn open_validated_zip(
-    data: Vec<u8>,
-) -> Result<zip::ZipArchive<std::io::Cursor<Vec<u8>>>, String> {
-    open_validated_cursor(std::io::Cursor::new(data))
-}
-
 /// Preserve the machine-readable resource envelope while adding the historical
 /// container context to ordinary ZIP errors.
 pub fn tag_container_error(error: String) -> String {
@@ -909,11 +902,6 @@ pub fn scoped_limits(
         None,
     )
     .scope(operation)
-}
-
-/// Install a retained archive's persistent governor for one synchronous method.
-pub fn scoped_governor(governor: &ResourceGovernor, operation: &str) -> ResourceScope {
-    governor.scope(operation)
 }
 
 /// Record accessible central-directory metadata and enforce hard entry count.
@@ -1076,12 +1064,6 @@ pub fn read_zip_string_head<R: std::io::Read + std::io::Seek>(
         }
         Err(error) => Err(format!("read error: {error}")),
     }
-}
-
-/// Legacy fallback used only when a parser test/helper has not installed a
-/// governor. Public browser paths always install a normalized session policy.
-pub fn fallback_max_archive_entry_bytes() -> u64 {
-    HARD_MAX_ARCHIVE_ENTRY_BYTES
 }
 
 #[cfg(test)]

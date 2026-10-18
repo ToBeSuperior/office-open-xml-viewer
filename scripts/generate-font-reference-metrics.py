@@ -3,8 +3,9 @@
 
 The generated profiles are reference facts, not proof of the font face selected by
 Canvas, the operating system, or Office. No outlines, glyph maps, or per-glyph
-advances are written to the output. GSUB vert coverage over the fixed 45-character
-stacked-sideways domain is metadata: only covered Unicode characters are emitted,
+advances are written to the output. GSUB vert coverage (and, separately, the vrt2
+coverage vert lacks) over the fixed 45-character stacked-sideways domain is
+metadata: only covered Unicode characters are emitted,
 not glyph identities or advances. OS/2 xAvgCharWidth is a scalar font metric,
 not a shaped text advance.
 """
@@ -113,8 +114,8 @@ def font_files(source: Source) -> list[tuple[str, Path]]:
     return sorted(files, key=lambda item: (item[0].casefold(), item[0]))
 
 
-def stacked_vertical_glyphs(font: TTFont) -> str:
-    """Union vert single-substitution inputs across all script/language features."""
+def stacked_feature_glyphs(font: TTFont, tag: str) -> str:
+    """Union `tag` single-substitution inputs across all script/language features."""
     if "GSUB" not in font:
         return ""
     gsub = font["GSUB"].table
@@ -124,10 +125,10 @@ def stacked_vertical_glyphs(font: TTFont) -> str:
     glyphs: set[str] = set()
     # OpenType GSUB lookup types 1 (Single) and 7 (Extension). This is
     # coverage metadata, not shaping: inspect every vert FeatureRecord rather
-    # than selecting a Script/LangSys, and deliberately exclude vrt2 (#1827).
+    # than selecting a Script/LangSys.
     # https://learn.microsoft.com/en-us/typography/opentype/spec/gsub
     for record in gsub.FeatureList.FeatureRecord:
-        if record.FeatureTag != "vert":
+        if record.FeatureTag != tag:
             continue
         for index in record.Feature.LookupListIndex:
             lookup = gsub.LookupList.Lookup[index]
@@ -139,6 +140,18 @@ def stacked_vertical_glyphs(font: TTFont) -> str:
                 if lookup_type == 1:
                     glyphs.update(subtable.mapping)
     return "".join(ch for ch in STACKED_SIDEWAYS if cmap.get(ord(ch)) in glyphs)
+
+
+def stacked_vertical_glyphs(font: TTFont) -> str:
+    """The face's vert coverage: the vertical glyphs stacked text uses (#1827)."""
+    return stacked_feature_glyphs(font, "vert")
+
+
+def stacked_vrt2_only_glyphs(font: TTFont) -> str:
+    """vrt2 coverage that vert lacks. Recorded separately so the runtime rule for
+    this class stays one decision in core stacked-faces.ts (#1827)."""
+    vert = set(stacked_vertical_glyphs(font))
+    return "".join(ch for ch in stacked_feature_glyphs(font, "vrt2") if ch not in vert)
 
 
 def face_profile(font: TTFont, source_id: str) -> dict[str, Any] | None:
@@ -200,12 +213,16 @@ def face_profile(font: TTFont, source_id: str) -> dict[str, Any] | None:
     coverage = stacked_vertical_glyphs(font)
     if coverage:
         profile["stackedVerticalGlyphs"] = coverage
+    vrt2_only = stacked_vrt2_only_glyphs(font)
+    if vrt2_only:
+        profile["stackedVrt2OnlyGlyphs"] = vrt2_only
     # Preserve legacy metric fingerprints as runtime metadata evolves. New
     # vert coverage is recorded beside each source face, not in its legacy ID;
     # the identity still covers the raw OS/2 code-page value.
     identity_profile = {
         **{key: value for key, value in profile.items()
-           if key not in {"farEastCodePage", "win", "typoMetrics", "panose", "stackedVerticalGlyphs"}},
+           if key not in {"farEastCodePage", "win", "typoMetrics", "panose", "stackedVerticalGlyphs",
+                          "stackedVrt2OnlyGlyphs"}},
         "os2": None if os2 is None else {
             "codePageRange1": provenance_code_page_range1,
         },
@@ -261,8 +278,8 @@ def main() -> None:
                     provenance_code_page_range1 = profile.pop("_provenanceCodePageRange1")
                     canonical = json.dumps(profile, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
                     profiles_by_canonical.setdefault(canonical, profile)
-                    coverage_metadata = ({"stackedVerticalGlyphs": profile["stackedVerticalGlyphs"]}
-                                         if "stackedVerticalGlyphs" in profile else {})
+                    coverage_metadata = {key: profile[key] for key in ("stackedVerticalGlyphs", "stackedVrt2OnlyGlyphs")
+                                         if key in profile}
                     provenance.append({
                         **coverage_metadata,
                         "profileId": profile_id,

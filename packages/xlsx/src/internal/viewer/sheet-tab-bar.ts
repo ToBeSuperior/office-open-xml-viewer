@@ -3,7 +3,7 @@ import type { HiddenSheetMode } from '../../viewer.js';
 import { ListenerScope } from './listener-scope.js';
 
 /** Height of the composite viewer's footer (tab strip + zoom control). */
-export const TAB_BAR_H = 30;
+const TAB_BAR_H = 30;
 // Footer chrome stays in screen pixels: sheet zoom scales grid cells and their
 // row/column headers, but must not resize the tab-navigation controls.
 const TAB_NAV_W = HEADER_W;

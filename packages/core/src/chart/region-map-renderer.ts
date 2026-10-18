@@ -7,6 +7,7 @@ import type {
   ChartexValueColorStop,
 } from '../types/chart.js';
 import { ownValue } from '../internal/own-key.js';
+import { hex6ToRgb } from '../image/duotone.js';
 import { chartTitleBand, resolveManualLayoutRect } from './layout.js';
 import { paintLegendFrame } from './legend-frame.js';
 import { paintPlotAreaFrame } from './plot-area-frame.js';
@@ -117,8 +118,7 @@ export function resolveRegionMapFeature(
 
 function hexRgb(value: string | null | undefined, fallback: string): [number, number, number] {
   const text = (value ?? '').replace(/^#/, '').slice(0, 6);
-  if (!/^[0-9a-f]{6}$/i.test(text)) return hexRgb(fallback, '000000');
-  return [0, 2, 4].map((offset) => Number.parseInt(text.slice(offset, offset + 2), 16)) as [number, number, number];
+  return hex6ToRgb(text) ?? hexRgb(fallback, '000000');
 }
 
 function rgbHex(rgb: readonly number[]): string {

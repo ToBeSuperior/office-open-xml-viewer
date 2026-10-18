@@ -359,7 +359,7 @@ export function renderBarChart(
   const hasDataTable = chartHasDataTable(chart);
   const dataTableBaseH = chartDataTableBaseHeight(chart, ptToPx);
   const dataTableHeaderW = chartDataTableHeaderWidth(ctx, chart, ptToPx);
-  const leg = measuredLegendReserve(ctx, legendChart, w, h, 0.22, ptToPx);
+  const leg = measuredLegendReserve(ctx, legendChart, w, h, ptToPx);
   const { legRightW, legLeftW, legTopH, legBottomH } = chartLegendBands(
     leg, chart.legendOverlay === true,
   );
@@ -725,6 +725,7 @@ export function renderBarChart(
     ? axisTitleFontPx(sec.titleFontSizeHpt, ptToPx) + 8
     : 0;
 
+  // Fixed gutter fractions: library policy, see ChartPad in layout.ts.
   const pad = {
     t: padT,
     r: legRightW + w * 0.03 + (primaryAxisRight
@@ -790,7 +791,6 @@ export function renderBarChart(
     // The cartesian title band is already folded into `pad.t`; pass it so
     // `frame.title` (if read) matches the reserved band instead of a stale frac.
     titleBand,
-    legendSideReserveFrac: 0.22,
     legendReserve: leg,
     pad,
     honorPlotAreaManualLayout: true,
@@ -815,7 +815,6 @@ export function renderBarChart(
     );
     frame = computeChartFrame(chart, x, y, w, h, ptToPx, {
       titleBand,
-      legendSideReserveFrac: 0.22,
       legendReserve: leg,
       pad,
       honorPlotAreaManualLayout: true,
@@ -2418,7 +2417,7 @@ export function drawBarDataLabel(
  * follows the numeric axis: Y for columns and X for horizontal bars. Deltas
  * have already been expanded by the shared parser (percentage/fixed/stdDev/
  * custom), so this layer only maps the authored geometry. */
-export function drawBarErrorBars(
+function drawBarErrorBars(
   ctx: CanvasRenderingContext2D,
   s: ChartSeries,
   eb: NonNullable<ChartSeries['errBars']>[number],
@@ -2476,7 +2475,7 @@ export function drawBarErrorBars(
  * a slightly wider fallback and otherwise split `10` into `1` / `0`. Permit a
  * small metric-only overhang for numeric tokens; ordinary text still obeys the
  * exact measured slot and genuinely over-wide numbers continue to wrap. */
-export function numericCategoryMetricTolerance(text: string, fontPx: number): number {
+function numericCategoryMetricTolerance(text: string, fontPx: number): number {
   return /^[+-]?(?:\d+(?:[.,]\d*)?|[.,]\d+)%?$/.test(text)
     ? fontPx * 0.15
     : 0;
@@ -2487,7 +2486,7 @@ export function numericCategoryMetricTolerance(text: string, fontPx: number): nu
  * rectangle replaces the automatic legend rectangle, so the plot must start
  * below its actual bottom rather than below the shorter measured reserve. Keep
  * the existing automatic legend-to-plot clearance unchanged. */
-export function manualTopLegendPlotInset(
+function manualTopLegendPlotInset(
   chart: ChartModel,
   legend: MeasuredLegendLayout | null,
   x: number,

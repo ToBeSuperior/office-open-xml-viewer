@@ -583,7 +583,7 @@ function enforceCachedRetainedBudget(
 }
 
 /** Stable base key shared by the base and derived decoded-surface caches. */
-export function cachedBitmapVariantKey(
+function cachedBitmapVariantKey(
   imagePath: string,
   opts: CachedBitmapOptions = {},
 ): string {
@@ -876,7 +876,7 @@ const DERIVED_CACHE_PREFIX = 'derived:';
 /** General document-owned decoded-surface primitive. Loader choice is separate
  * from the owner token; callers sharing a namespace/key dedupe regardless of
  * whether bytes came from an image or media extraction API. */
-export function getCachedDecodedBitmap(
+function getCachedDecodedBitmap(
   namespace: string,
   cacheKey: string,
   owner: DecodedBitmapCacheOwner,

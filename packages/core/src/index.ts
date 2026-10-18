@@ -247,7 +247,9 @@ export { hexToRgba, relativeLuma, autoContrastColor, resolveFill, usesPathShade,
 export { trackPaintPath, currentStrokeBounds } from './shape/paint-bounds';
 export { measurePaintBounds } from './shape/measure-paint-bounds';
 export type { FillOutline } from './shape/path-gradient';
-export { buildShapePath, drawStar, drawPolygon, ooxmlArcTo } from './shape/preset';
+export { buildShapePath } from './shape/preset';
+export { EM_BOX_CENTER_FALLBACK_EM, emBoxCenterAboveBaseline } from './text/em-box-center';
+export { SYNTHETIC_ASCENT_EM, SYNTHETIC_DESCENT_EM } from './text/synthetic-em-box';
 export {
   paintDrawingMLShape,
   clipDrawingMLShape,
@@ -292,7 +294,6 @@ export {
   captureDecodedBitmapCacheEpoch,
   dropCachedDerivedBitmapNamespace,
   getCachedBitmapByPath,
-  getCachedDecodedBitmap,
   getCachedDerivedBitmap,
   inspectCachedRasterSource,
   resolvedCachedBitmapVariantKey,
@@ -342,7 +343,6 @@ export {
   decodeRasterOrMetafile,
   getIncompleteMetafileReport,
   isOoxmlIncompleteMetafileError,
-  OoxmlIncompleteMetafileError,
   type DecodeRasterOptions,
   type IncompleteMetafilePolicy,
   type IncompleteMetafileReport,
@@ -397,7 +397,6 @@ export {
 // Shared `<a:srcRect>` crop (§20.1.8.55) for all three renderers: the source-rect
 // math, the full-frame raster size for a cropped metafile, and the draw wrapper.
 export {
-  cropSourceRect,
   drawImageCropped,
   imageNaturalSize,
   metafileRasterSize,
@@ -415,7 +414,6 @@ export {
   duotoneImageData,
   hex6ToRgb,
   luminance601,
-  defaultOffscreenFactory,
   type Duotone,
   type RgbaBuffer,
   type OffscreenFactory,
@@ -454,9 +452,9 @@ export { decodedBitmapTargetResizeOptions } from './image/raster-target';
 // renderers' picture-decode paths.
 export { preferVectorBlip } from './image/blip-gate';
 // ECMA-376 §20.1.9 spec-driven preset geometry engine (presets.json from
-// presetShapeDefinitions.xml). Coexists with the legacy hand-rolled
-// `buildShapePath` above, which the pptx renderer still uses as a silhouette /
-// fallback codepath. Consolidating the two is intentionally out of scope here.
+// presetShapeDefinitions.xml). `buildShapePath` above is only the fallback for
+// names the engine does not define (`rect`, schema-invalid values) and routes
+// every spec-defined name back to this engine.
 export {
   renderPresetShape,
   hasPreset,
@@ -472,7 +470,6 @@ export { type PresetPath } from './shape/preset-geometry/path-executor';
 // the pptx renderer's per-glyph WordArt path.
 export {
   hasTextWarp,
-  isSingleEdgeWarp,
   buildWarpEnvelope,
   samplePolyline,
   warpGlyphTransform,
@@ -520,7 +517,6 @@ export {
   type ExtrusionInput,
   type BevelRegion,
   computeBevelNormals,
-  bevelHeightProfile,
   distanceToEdge,
   lightDirFromRig,
   materialClass,
@@ -548,10 +544,10 @@ export {
   mathToMathML,
   svgExtents,
   recolorSvg,
-  MATH_RASTER_PX_PER_EM,
   rasterizeMathSvg,
   sizeMathSvgForRaster,
   tintMathRaster,
+  cachedTintedMathRaster,
   type MathSvg,
   type MathRenderer,
   type RasterizedMathSvg,
@@ -563,7 +559,6 @@ export type {
   MathBorderBox,
   MathBox,
   MathDelimiter,
-  MathFormula,
   MathFraction,
   MathFunc,
   MathGroup,
@@ -610,7 +605,7 @@ export { doubleRailGeometry, fillDoubleBorder } from './draw/double-border';
 // of truth for underline geometry across the pptx / docx renderers; docx
 // normalizes its §17.18.99 ST_Underline vocabulary to this DrawingML vocabulary
 // before calling in.
-export { drawUnderline } from './text/underline';
+export { drawUnderline, DECORATION_LINE_WIDTH_EM, STRIKE_RISE_EM } from './text/underline';
 export {
   WorkerBridge,
   type WorkerLike,
@@ -697,6 +692,7 @@ export {
   withVertFeatureCanvasScope,
 } from './text/vertical-vert-feature';
 export type { VerticalGlyphCellMetrics } from './text/vertical-vert-feature';
+export { inkCenterAboveMiddlePx } from './text/vertical-glyph-metrics';
 // Shared Excel serial-date → UTC `Date` conversion (ECMA-376 §18.17.4.1),
 // with the 1900 Lotus leap-year-bug compat and 1900/1904 date-system select.
 // Used by the xlsx cell formatter and the core chart date formatter.
@@ -782,7 +778,6 @@ export {
 // browser-selected face.
 export {
   normalizeFontMetricFamily,
-  openTypeDesignLineRatios,
   type ResolvedFontMetric,
 } from './fonts/resource-metrics';
 export {

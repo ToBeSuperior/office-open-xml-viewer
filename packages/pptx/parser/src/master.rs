@@ -237,35 +237,43 @@ impl InheritedShapeGeometry {
                     .collect()
             })
             .unwrap_or_default();
-        let adjustment = |index: usize| -> Option<f64> {
-            let expected_name = if index == 0 {
-                None
-            } else {
-                Some(format!("adj{}", index + 1))
-            };
-            gd_nodes
-                .iter()
-                .find(|n| {
-                    let name = attr(n, "name");
-                    if index == 0 {
-                        matches!(name.as_deref(), Some("adj") | Some("adj1"))
-                    } else {
-                        name == expected_name
-                    }
-                })
-                .or_else(|| gd_nodes.get(index))
-                .and_then(|gd| attr(gd, "fmla"))
-                .and_then(|fmla| fmla.strip_prefix("val ").map(str::to_owned))
-                .and_then(|value| value.parse::<f64>().ok())
-        };
-
         Some(Self {
             geometry,
             cust_geom: None,
             cust_geom_paint: None,
-            adjustments: std::array::from_fn(adjustment),
+            adjustments: std::array::from_fn(|index| preset_adjustment(&gd_nodes, index)),
         })
     }
+}
+
+/// Adjust handle `index` (0 = `adj`/`adj1`) from a `<a:prstGeom><a:avLst>`'s
+/// `<a:gd>` guides, as PowerPoint shapes and connectors read it.
+///
+/// This intentionally differs from the DOCX/XLSX
+/// `ooxml_common::preset_geometry::parse_preset_adj`: when no guide carries
+/// the handle's name, the guide at the same position is used even in a named
+/// list, and the `val` operand is not trimmed. Changing it would move shapes
+/// in decks that author only some of a multi-handle preset's guides.
+pub(crate) fn preset_adjustment(gd_nodes: &[roxmltree::Node<'_, '_>], index: usize) -> Option<f64> {
+    let expected_name = if index == 0 {
+        None
+    } else {
+        Some(format!("adj{}", index + 1))
+    };
+    gd_nodes
+        .iter()
+        .find(|n| {
+            let name = attr(n, "name");
+            if index == 0 {
+                matches!(name.as_deref(), Some("adj") | Some("adj1"))
+            } else {
+                name == expected_name
+            }
+        })
+        .or_else(|| gd_nodes.get(index))
+        .and_then(|gd| attr(gd, "fmla"))
+        .and_then(|fmla| fmla.strip_prefix("val ").map(str::to_owned))
+        .and_then(|value| value.parse::<f64>().ok())
 }
 
 #[derive(Debug, Clone, serde::Serialize)]

@@ -2295,7 +2295,7 @@ function takeTableFragmentPass(
       if (context.availableHeightPt + EPSILON_PT < context.freshPageHeightPt) {
         return passOf({ fragment: null, nextCursor: cursor, requiresFreshPage: true });
       }
-      // Compatibility-owned over-page cantSplit admission.
+      // `word-over-page-cant-split-clip`: compatibility-owned over-page cantSplit admission.
       if (wordClipsOverPageCantSplitRow({
         compatibility: context.compatibility,
         availableHeightPt: context.availableHeightPt,

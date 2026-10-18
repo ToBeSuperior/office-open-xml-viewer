@@ -67,7 +67,7 @@ interface CropMapping {
 
 /** One §20.1.8.55 calculation for every image paint. Non-finite fractions
  * mean no crop; a crop with no positive logical extent paints nothing. */
-export function imageCropProjection(
+function imageCropProjection(
   srcRect: SrcRect | null | undefined,
 ): Readonly<ImageCropProjection> | null {
   if (!srcRect) return null;
@@ -181,24 +181,6 @@ export function withImagePaintProjection(
       } finally { ctx.restore(); }
     }
   } finally { if (hasAlpha) ctx.restore(); }
-}
-
-/** The 9-arg `drawImage` source rectangle for an `<a:srcRect>` crop, or `null`
- *  when there is no (non-empty) crop or the image reports no native size.
- *
- *  The returned rectangle is the intersection of the logical source rectangle
- *  with the actual bitmap. Negative edges therefore return the full affected
- *  source range; {@link drawImageCropped} additionally preserves their outset
- *  as transparent destination space. Callers
- *  that need the rect for auxiliary paints (e.g. pptx effect passes) call this
- *  directly; the common path uses {@link drawImageCropped}. */
-export function cropSourceRect(
-  img: CanvasImageSource,
-  srcRect: SrcRect | null | undefined,
-): { sx: number; sy: number; sw: number; sh: number } | null {
-  const mapping = cropSourceMapping(img, srcRect);
-  if (!mapping) return null;
-  return { sx: mapping.sx, sy: mapping.sy, sw: mapping.sw, sh: mapping.sh };
 }
 
 /** Draw `img` into the destination box `[dx, dy, dw, dh]`, honoring an optional

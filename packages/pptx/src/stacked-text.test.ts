@@ -136,6 +136,29 @@ describe('pptx stacked vertical text (wordArtVert / wordArtVertRtl)', () => {
     expect(calls.some((c) => c.text === '「')).toBe(false);
   });
 
+  // #1827 PowerPoint controls: vrt2-only ∥ (Yu Gothic) stands unturned in a
+  // 1 em cell, left-aligned with the （ form; MS Gothic's vert ∥ is turned.
+  it('draws a vrt2-only ∥ unturned in the vertical-form frame and a vert ∥ turned', () => {
+    const face = (text: string, family: string) => {
+      const b = body(text, 'wordArtVert', family);
+      (b.paragraphs[0].runs[0] as TextRunData).fontFamily = family;
+      return b;
+    };
+    const { ctx, calls } = mockCtx();
+    const runs: PptxTextRunInfo[] = [];
+    renderTextBody(ctx, face('∥（', 'Yu Gothic'), 0, 0, 60, 470, SCALE,
+      null, 0, false, false, '#000000', undefined, undefined, (run) => runs.push(run));
+    const bar = calls.find((c) => c.text === '∥')!;
+    const form = calls.find((c) => c.text === '︵')!;
+    expect(bar).toMatchObject({ rot: 0, align: 'left' });
+    expect(bar.x).toBeCloseTo(form.x, 6);
+    expect(form.y - bar.y).toBeCloseTo(24, 6);
+    expect(runs[0].h).toBeCloseTo(24, 6);
+    const ms = mockCtx();
+    renderTextBody(ms.ctx, face('∥', 'MS Gothic'), 0, 0, 60, 470, SCALE);
+    expect(ms.calls[0].rot).toBeCloseTo(Math.PI / 2, 6);
+  });
+
   it.each([false, true])('uses bold-specific vert coverage for the drawing face (italic=%s)', (italic) => {
     const advances = [false, true].map((bold) => {
       const { ctx } = mockCtx();

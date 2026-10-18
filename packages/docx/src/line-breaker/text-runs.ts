@@ -175,6 +175,7 @@ export function isFullWidthJapaneseKana(character: string): boolean {
 }
 
 
+// `word-full-width-character-spacing-scope`
 export function characterSpacingControlCompresses(
   grapheme: string,
   setting: string | undefined,
