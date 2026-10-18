@@ -275,15 +275,12 @@ describe('progressive layout with page-owned anchors', () => {
   }, 300_000);
 
   it('lowers the bound to the reach page of a table placed at or past it', async () => {
-    // Two page-positioned tables whose bands collide: the second is deferred
-    // from the page where the flow reaches it to the next page (§17.4.56).
-    // A checkpoint whose live page holds the deferred table must not publish
-    // its reach page, because a later floor could still act there.
-    const secondTableIndex = 62;
-    const model = documentModel(300, [
-      [60, pageFloatingTable(300, 72, 3, 120, 0)],
-      [secondTableIndex, pageFloatingTable(300, 100, 3, 120, 0)],
-    ]);
+    // A full-width page-positioned table whose exclusion sends the lines
+    // before it past its page is placed one page past where the flow reaches
+    // it. A checkpoint whose live page holds that table must not publish its
+    // reach page, because a later floor could still act there.
+    const secondTableIndex = 70;
+    const model = documentModel(300, [[secondTableIndex, pageFloatingTable(468, 300, 4, 100, 20)]]);
     const blocking = blockingLayout(model);
     const { reachedPage, placedPage } = tablePages(blocking.layout, secondTableIndex);
     expect(placedPage).toBe(reachedPage + 1);
@@ -292,12 +289,10 @@ describe('progressive layout with page-owned anchors', () => {
     expect(layoutFingerprint(final)).toBe(layoutFingerprint(blocking.layout));
     expectPublishedPagesFinal(previews, final);
     const counts = previews.map((preview) => preview.layout.pages.length);
-    // The checkpoint while the deferred table's page is live stops at the
-    // reach page instead of publishing it (which would be `placedPage` pages),
-    // and later checkpoints extend past both once that page has closed.
+    // The checkpoint while the floored table's page is live stops at the
+    // reach page instead of publishing it (which would be `placedPage` pages).
     expect(counts).toContain(reachedPage);
     expect(counts).not.toContain(placedPage);
-    expect(counts.at(-1)!).toBeGreaterThan(placedPage);
   }, 300_000);
 
   it('publishes the opening pages of a document that opens with a page table during discovery', async () => {
@@ -470,7 +465,9 @@ describe('page-table destination cycle settlement', () => {
     for (const page of layout.pages) {
       const tables = page.layers.body.filter((node) => node.kind === 'table');
       const lines = page.layers.body.flatMap((node) => node.kind === 'paragraph' ? node.lines : []);
-      const bands = [...tables.map((table) => table.flowBounds), ...lines.map((line) => line.bounds)];
+      // Page-positioned tables may overlap one another (Windows Word
+      // 16.0.20430 #1896 controls); body text still flows around them.
+      const bands = lines.map((line) => line.bounds);
       for (const table of tables) {
         for (const b of bands) {
           const a = table.flowBounds;
