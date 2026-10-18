@@ -2,8 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { createTypeScriptResolver, findViolations, isGuardedPath } from './check-core-legacy-boundary.mjs';
+import nodePath, { join } from 'node:path';
+import {
+  createTypeScriptResolver, findViolations, isGuardedPath, legacyCargoViolations,
+} from './check-core-legacy-boundary.mjs';
 import { companionBundleBoundary, legacyBundleBoundary, wasmAssetUrl } from '../vite.config.ts';
 import { build } from 'vite';
 
@@ -18,6 +20,124 @@ test('flags legacy imports, options, branches and names in the OOXML packages', 
   assert.deepEqual(rules('archive.revision_markup_in_print?.()'), ['legacy-revision-view']);
   assert.deepEqual(rules('interface T { measureLegacyXlsNormalFont?: unknown; }'), ['legacy-xls-measurement']);
   assert.deepEqual(rules('interface T { langDefault?: string; }'), ['docx-lang-default']);
+});
+
+test('flags legacy-producer wire names and binary-format vocabulary', () => {
+  for (const [code, rule] of [
+    ['// pub native_separators: Option<Box<X>>,', 'legacy-wire-name'],
+    ['interface T { readonly nativeTextFlow?: number; }', 'legacy-wire-name'],
+    ["code: 'NATIVE_DOC_NESTED_CELL_FRAME_FLOW';", 'legacy-wire-name'],
+    ['// [MS-DOC] 2.3.3 reserved stories', 'legacy-binary-spec'],
+    ['// [MS-PPT] round-trip color map', 'legacy-binary-spec'],
+    ['/// a BIFF chart has no Series record', 'legacy-binary-spec'],
+    ['// effective CHPX of the paragraph mark', 'legacy-binary-structure'],
+    ['// sprmSTextFlow carries an MSOTXFL', 'legacy-binary-structure'],
+  ]) {
+    assert.deepEqual(rules(code), [rule], code);
+  }
+});
+
+test('allows OOXML specifications and the listed binary-format allowances only', () => {
+  assert.deepEqual(rules('// [MS-DOCX] §2.6.2.3 and MS-ODRAWXML svgBlip'), []);
+  const at = (path, text) => findViolations([{ path, text }]).map((v) => v.rule);
+  assert.deepEqual(at('packages/xlsx/src/x.ts', '// [MS-XLSB] and [MS-XLS] semantics'), []);
+  assert.deepEqual(at('packages/xlsx/src/x.ts', '// [MS-XLS] and BIFF8'), ['legacy-binary-spec']);
+  assert.deepEqual(at('packages/core/src/errors/cfb-sniff.ts', "['WordDocument']; // .doc (§[MS-DOC])"), []);
+  assert.deepEqual(at('packages/core/src/errors/cfb-sniff.ts', '// sprmCFSpec'), ['legacy-binary-structure']);
+  assert.deepEqual(at('packages/docx/src/layout/diagnostics.ts', "part: 'WordDocument';"), ['legacy-binary-structure']);
+  // Allowances name complete tokens and exact files: near misses still fail.
+  const pageLimit = 'packages/docx/src/layout/table-acquisition.ts';
+  assert.deepEqual(at(pageLimit, '// MS-DOC 2.6.4 sprmSXaPage / sprmSYaPage'), []);
+  assert.deepEqual(at(pageLimit, '// sprmSTextFlow'), ['legacy-binary-structure']);
+  assert.deepEqual(at(pageLimit, '// sprmSXaPageX'), ['legacy-binary-structure']);
+  assert.deepEqual(at(pageLimit, '// sprmSXaPage and sprmCFSpec'), ['legacy-binary-structure']);
+  assert.deepEqual(at('packages/core/src/source/cfb-new-reader.ts', "['WordDocument'];"), ['legacy-binary-structure']);
+  assert.deepEqual(at('packages/core/src/errors/cfb-sniff2.ts', "['WordDocument'];"), ['legacy-binary-structure']);
+  assert.deepEqual(at('packages/xlsx/src/xlsx-cfb-guard.test.ts', "['WordDocument'];"), ['legacy-binary-structure']);
+  assert.deepEqual(at('packages/ooxml-common/src/chart/model.rs', '/// BIFF chart'), ['legacy-binary-spec']);
+  assert.deepEqual(at('src/docx.ts', 'export { nativeReadingNotices };'), ['legacy-wire-name']);
+});
+
+// Each case is a real manifest that Cargo resolves; path dependencies point at
+// this repository's crates.
+function manifestLines(body) {
+  const dir = mkdtempSync(nodePath.join(tmpdir(), 'legacy-cargo-'));
+  const crates = nodePath.resolve('packages');
+  // Root-level dotted keys must precede every table header.
+  const text = [
+    ...body.map((line) => line.replaceAll('../..', crates)),
+    '[package]', 'name = "legacy-probe"', 'version = "0.0.0"', 'edition = "2021"', '[lib]', 'path = "lib.rs"',
+    '[workspace]',
+  ].join('\n');
+  writeFileSync(nodePath.join(dir, 'Cargo.toml'), text);
+  writeFileSync(nodePath.join(dir, 'lib.rs'), '');
+  try {
+    return legacyCargoViolations(nodePath.join(dir, 'Cargo.toml')).map((v) => v.text);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test('limits the legacy reader to model crates and the listed parser crates', () => {
+  assert.deepEqual(manifestLines([
+    '[dependencies]',
+    'pptx-model = { path = "../../pptx/model" }',
+    'pptx-parser = { path = "../../pptx/parser", optional = true }',
+    'docx-parser = { path = "../../docx/parser" }',
+    '[dev-dependencies]',
+    'xlsx-parser = { path = "../../xlsx/parser" }',
+  ]), ['docx-parser resolves to docx-parser']);
+});
+
+test('resolves renamed, quoted, dotted, table and target-specific parser dependencies', () => {
+  assert.deepEqual(manifestLines([
+    '[dependencies]',
+    'reader = { "package" = "docx-parser", path = "../../docx/parser" }',
+  ]), ['reader resolves to docx-parser']);
+  assert.deepEqual(manifestLines([
+    'dependencies.reader = { package = "docx-parser", path = "../../docx/parser" }',
+  ]), ['reader resolves to docx-parser']);
+  assert.deepEqual(manifestLines([
+    '[dependencies."docx\\u002dparser"]',
+    'path = "../../docx/parser"',
+  ]), ['docx-parser resolves to docx-parser']);
+  assert.deepEqual(manifestLines([
+    "[target.'cfg(unix)'.dependencies.grid]",
+    'package = "xlsx-parser"',
+    'path = "../../xlsx/parser"',
+    "[target.'cfg(unix)'.dev-dependencies]",
+    'pptx-model = { path = "../../pptx/model" }',
+  ]), ['grid resolves to xlsx-parser']);
+  assert.deepEqual(manifestLines([
+    '[build-dependencies]',
+    'docx-parser = { path = "../../docx/parser" }',
+  ]), ['docx-parser resolves to docx-parser']);
+});
+
+test('a manifest Cargo cannot read fails closed', () => {
+  const [text] = manifestLines(['[dependencies]', '{ odd } = 1']);
+  assert.match(text, /^cargo metadata failed/);
+});
+
+test('citation allowances admit the token only inside comments', () => {
+  const at = (path, text) => findViolations([{ path, text }]).map((v) => v.rule);
+  const policy = 'packages/xlsx/src/internal/source-policy.ts';
+  assert.deepEqual(at(policy, '// Excel stores this per [MS-XLS] 2.4.1.'), []);
+  assert.deepEqual(at(policy, '/**\n * the [MS-XLSB] record keeps the same field.\n */'), []);
+  assert.deepEqual(at(policy, "export interface SourceFacts { sourceFormat?: 'MS-XLS'; }"), ['legacy-binary-spec']);
+  assert.deepEqual(at(policy, "export const binary = (f: string) => f === 'MS-XLS'; // [MS-XLS]"), ['legacy-binary-spec']);
+  const table = 'packages/docx/src/layout/table-acquisition.ts';
+  assert.deepEqual(at(table, '/**\n * (MS-DOC 2.6.4 sprmSXaPage / sprmSYaPage)\n */'), []);
+  assert.deepEqual(at(table, "const limit = source === 'MS-DOC' ? sprmSXaPage : 0;"), ['legacy-binary-spec', 'legacy-binary-structure']);
+  assert.deepEqual(at(policy, "export const binary = (f: string) =>\n  /* source kind */ f === 'MS-XLS';"), ['legacy-binary-spec']);
+  assert.deepEqual(at(table, "const limit = /* page */ source === 'MS-DOC' ? 1 : 0;"), ['legacy-binary-spec']);
+  assert.deepEqual(at(policy, "const url = 'https://example.test/a'; // [MS-XLS] 2.4"), []);
+  assert.deepEqual(at(policy, "export const b = (f: string) =>\n  f.replace(/\\//g, '-') === 'MS-XLS';"), ['legacy-binary-spec']);
+  assert.deepEqual(at(table, "const p = /a\\/b/.test(s) && s === 'MS-DOC';"), ['legacy-binary-spec']);
+  assert.deepEqual(at(policy, "/*\n  multi-line [MS-XLSB] note\n*/ const kind = 'MS-XLSB';"), ['legacy-binary-spec']);
+  const rules = 'packages/docx/src/layout/line-compatibility.ts';
+  assert.deepEqual(at(rules, "const rule = {\n  reference: '[MS-DOC] §2.9.146',\n};"), []);
+  assert.deepEqual(at(rules, "const binary = format === 'MS-DOC';"), ['legacy-binary-spec']);
 });
 
 test('allows the pre-existing generic CFB rejection and unrelated "legacy" wording', () => {
@@ -229,6 +349,8 @@ test('guards source, parser and manifest files but not generated or private outp
   assert.equal(isGuardedPath('packages/core/src/index.ts'), true);
   assert.equal(isGuardedPath('packages/docx/parser/src/parser.rs'), true);
   assert.equal(isGuardedPath('packages/node/package.json'), true);
+  assert.equal(isGuardedPath('packages/ooxml-common/src/chart/model.rs'), true);
+  assert.equal(isGuardedPath('src/docx.ts'), true);
   assert.equal(isGuardedPath('packages/xlsx/src/wasm/xlsx_parser.js'), false);
   assert.equal(isGuardedPath('packages/pptx/public/demo/readme.md'), false);
   assert.equal(isGuardedPath('packages/legacy-office/src/legacy-doc.ts'), false);

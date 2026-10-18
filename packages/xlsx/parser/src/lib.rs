@@ -596,6 +596,44 @@ impl WorkbookShared {
 /// `wb_doc` / `rels_doc` are re-parsed here from the cached source strings (cheap
 /// in-memory roxmltree parses, no zip inflate) because a `roxmltree::Document`
 /// borrows its input and so can't be stored in `WorkbookShared`.
+/// Effective `<col>` default style per 1-based column (index 0 unused):
+/// the LAST declaration covering a column wins (ECMA-376 §18.3.1.13). Ranges
+/// are painted newest-first and each column is painted once, skipping
+/// already-painted spans, so the work is linear in columns plus declarations
+/// however many declarations overlap. Empty when no column carries a style.
+fn last_column_style_by_column(ranges: &[crate::types::ColumnStyleRange]) -> Vec<Option<u32>> {
+    const MAX_COLUMN: usize = 16_384;
+    if ranges.is_empty() {
+        return Vec::new();
+    }
+    let mut styles = vec![None; MAX_COLUMN + 1];
+    // next_unpainted[c]: the first unpainted column >= c (MAX_COLUMN + 1 = none).
+    let mut next_unpainted: Vec<usize> = (0..=MAX_COLUMN + 1).collect();
+    fn find(next: &mut [usize], column: usize) -> usize {
+        let mut root = column;
+        while next[root] != root {
+            root = next[root];
+        }
+        let mut current = column;
+        while next[current] != root {
+            let following = next[current];
+            next[current] = root;
+            current = following;
+        }
+        root
+    }
+    for range in ranges.iter().rev() {
+        let max = (range.max as usize).min(MAX_COLUMN);
+        let mut column = find(&mut next_unpainted, (range.min as usize).max(1));
+        while column <= max {
+            styles[column] = Some(range.style_index);
+            next_unpainted[column] = column + 1;
+            column = find(&mut next_unpainted, column + 1);
+        }
+    }
+    styles
+}
+
 fn parse_sheet_with(
     archive: &mut XlsxZip,
     shared: &WorkbookShared,
@@ -2732,16 +2770,15 @@ fn parse_projected_worksheet(
     // ECMA-376 §18.3.1.13: a column style is the default XF for cells in that
     // column. Resolve it onto sparse authored cells only after every `<col>`
     // declaration is known; an explicit `c/@s="0"` remains `Some(0)` and wins.
+    // The last declaration covering a column wins, as before; resolving it
+    // once per column keeps this linear in cells plus declarations.
+    let column_styles = last_column_style_by_column(&authored_col_styles);
     for row in &mut rows {
         for cell in &mut row.cells {
             if cell.style_index.is_some() {
                 continue;
             }
-            cell.style_index = authored_col_styles
-                .iter()
-                .rev()
-                .find(|range| cell.col >= range.min && cell.col <= range.max)
-                .map(|range| range.style_index);
+            cell.style_index = column_styles.get(cell.col as usize).copied().flatten();
         }
     }
 
@@ -10323,5 +10360,38 @@ mod fail_closed_sparkline_tests {
         );
         assert_eq!(payload["details"]["violation"]["limit"], 1_000_000);
         assert_eq!(payload["details"]["violation"]["observed"], 1_000_001);
+    }
+}
+
+#[cfg(test)]
+mod column_style_resolution_tests {
+    use super::last_column_style_by_column;
+    use crate::types::ColumnStyleRange;
+
+    #[test]
+    fn last_covering_declaration_wins_for_every_column() {
+        let range = |min, max, style_index| ColumnStyleRange {
+            min,
+            max,
+            style_index,
+        };
+        let ranges = [
+            range(1, 16_384, 1),
+            range(3, 8, 2),
+            range(5, 5, 3),
+            range(7, 20, 4),
+            range(16_384, 16_384, 5),
+            range(2, 4, 6),
+        ];
+        let resolved = last_column_style_by_column(&ranges);
+        for column in 1..=16_384u32 {
+            let oracle = ranges
+                .iter()
+                .rev()
+                .find(|range| column >= range.min && column <= range.max)
+                .map(|range| range.style_index);
+            assert_eq!(resolved[column as usize], oracle, "column {column}");
+        }
+        assert!(last_column_style_by_column(&[]).is_empty());
     }
 }

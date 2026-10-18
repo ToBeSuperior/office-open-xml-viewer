@@ -819,7 +819,7 @@ pub struct ChartAnchor {
 /// object. This is a normative acquisition fact recorded from the actual XML
 /// element name and never inferred from marker or extent values. `None` on a
 /// model means the producer did not record it (older models, VML/OLE previews,
-/// legacy binary conversion), and consumers keep their untagged behaviour.
+/// producers without DrawingML anchors), and consumers keep their untagged behaviour.
 #[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
 pub enum DrawingAnchorTag {
     /// `<xdr:oneCellAnchor>` (§20.5.2.24): `from` + anchor-level `<xdr:ext>`.
@@ -1372,7 +1372,7 @@ pub struct ImageAnchor {
     pub edit_as: Option<String>,
     /// XML anchor element kind (normative fact; OOXML pictures parsed here are
     /// `twoCellAnchor` or `oneCellAnchor`). `None` = not recorded (old models,
-    /// OLE/VML previews, legacy binary conversion).
+    /// OLE/VML previews, producers without DrawingML anchors).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub anchor_tag: Option<DrawingAnchorTag>,
     /// `<xdr:oneCellAnchor><xdr:ext cx cy>` in EMU (§20.5.2.24): the picture's
