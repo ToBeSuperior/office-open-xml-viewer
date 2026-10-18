@@ -78,6 +78,19 @@ jobs:
         working-directory: packages/vscode-extension
         run: pnpm exec vsce package --no-dependencies --out ooxml-viewer.vsix
 
+      # The webview needs every format's parser. Code-split chunks carry the
+      # DOCX and PPTX parser URLs, so check the packaged files, not the source.
+      - name: Verify the VSIX ships every parser WASM
+        working-directory: packages/vscode-extension
+        run: |
+          for format in docx xlsx pptx; do
+            unzip -l ooxml-viewer.vsix | grep -qE "extension/dist/assets/${format}_parser_bg-[^ ]+\.wasm$" \
+              || { echo "::error::VSIX lacks the ${format} parser WASM"; exit 1; }
+          done
+          if grep -qE '"(docx|xlsx|pptx)_parser_bg\.wasm"' dist/webview.js; then
+            echo "::error::webview.js references a parser WASM outside dist/assets"; exit 1
+          fi
+
       - name: Upload VSIX artifact
         uses: actions/upload-artifact@v7
         with:
