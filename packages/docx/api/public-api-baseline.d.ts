@@ -2450,6 +2450,7 @@ export type ShapeFill = {
     tile?: TileInfo;
     alpha?: number;
     duotone?: Duotone;
+    blipEffects?: BlipEffect[];
 };
 export interface ShapeRun {
     inline?: boolean;

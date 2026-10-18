@@ -1398,6 +1398,7 @@ export interface ImageAnchor {
     };
     alpha?: number;
     duotone?: Duotone;
+    blipEffects?: BlipEffect[];
 }
 export interface ImageFill {
     fillType: 'image';
@@ -2046,6 +2047,7 @@ export type ShapeGeom = {
     };
     alpha?: number;
     duotone?: Duotone;
+    blipEffects?: BlipEffect[];
 };
 export interface ShapeInfo {
     zOrder?: number;
