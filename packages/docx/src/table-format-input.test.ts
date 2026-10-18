@@ -141,7 +141,9 @@ describe('table format acquisition adapter', () => {
       { rule: 'auto', valuePt: 24 },
       { rule: 'exact', valuePt: 15 },
       { rule: 'atLeast', valuePt: 18 },
-      { rule: 'atLeast', valuePt: 16 },
+      // The public model already reports an omitted hRule as atLeast, so its
+      // "auto" is an authored auto with no minimum.
+      { rule: 'auto', valuePt: 16 },
     ]);
   });
 

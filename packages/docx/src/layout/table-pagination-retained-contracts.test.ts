@@ -290,7 +290,9 @@ describe('retained table pagination contracts', () => {
     const tables = retainedTopLevelTables(layout);
     const drawing = layout.pages[0]!.layers.paintOrder.find((entry) => entry.kind === 'drawing');
     if (drawing?.kind !== 'drawing') throw new Error('expected drawing');
-    expect(tables.at(-1)!.flowBounds.yPt).toBeCloseTo(60, 10);
+    // Overlap-permitted floats of other paragraphs do not displace the table
+    // (Windows Word 16.0.20430, #1896 float controls).
+    expect(tables.at(-1)!.flowBounds.yPt).toBeCloseTo(55, 10);
     expect(drawing.node.inkBounds.yPt + drawing.layoutTranslationPt.yPt).toBeCloseTo(34, 10);
   });
   it('preserves the reference of a horizontally merged leading carrier', () => {
