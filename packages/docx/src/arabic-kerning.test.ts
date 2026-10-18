@@ -34,4 +34,12 @@ describe('Arabic pair kerning (WORD_ARABIC_PAIR_KERNING, #1850)', () => {
     expect(latin.length).toBeGreaterThan(0);
     expect(latin.every((request) => request.kerning === false)).toBe(true);
   });
+
+  it('keeps w:kern for a group mixing Arabic with letters of another script', () => {
+    const { text, requests } = service();
+    text.shape({ text: 'AV سلام', fontSizePt: 14, kerning: false, measure: true,
+      fonts: { ascii: 'Arial', highAnsi: 'Arial', eastAsia: 'Arial', complexScript: 'Arial' } });
+    expect(requests.length).toBeGreaterThan(0);
+    expect(requests.every((request) => request.kerning === false)).toBe(true);
+  });
 });

@@ -52,7 +52,7 @@ export interface FontResolver {
   scopedSubstituteScript?(requestedFamily: string | null | undefined, weight?: number, style?: FontStyle): FontSubstituteScript | undefined;
   /** Installed Office faces of an authored family loaded through an exact
    * local() name, each under its own private single-face family. */
-  exactLocalFaces?(requestedFamily: string): readonly Readonly<{ resolvedFamily: string; weight: number; style: FontStyle }>[];
+  exactLocalFaces?(requestedFamily: string): readonly Readonly<{ resolvedFamily: string; weight: number; style: FontStyle; coverageProbeFamily?: string }>[];
 }
 
 export interface FontInventoryFace {
@@ -64,6 +64,8 @@ export interface FontInventoryFace {
   readonly style?: FontStyle;
   /** Visual substitute limited to one script (core `substitute-script.ts`). */
   readonly script?: FontSubstituteScript;
+  /** Size-adjust:0% registration of this exact source (glyph ownership). */
+  readonly coverageProbeFamily?: string;
 }
 
 export interface FontResolverOptions {
@@ -316,7 +318,10 @@ export function createFontResolver(
     exactLocalFaces(requestedFamily: string) {
       return (byFamily.get(normalizeFamily(requestedFamily)) ?? [])
         .filter((face) => face.source === 'local' && face.resourceIdentity?.startsWith('office-local:') === true)
-        .map((face) => ({ resolvedFamily: face.resolvedFamily, weight: face.weight, style: face.style }));
+        .map((face) => ({
+          resolvedFamily: face.resolvedFamily, weight: face.weight, style: face.style,
+          ...(face.coverageProbeFamily ? { coverageProbeFamily: face.coverageProbeFamily } : {}),
+        }));
     },
     scopedSubstituteScript(requestedFamily: string | null | undefined, weight?: number, style?: FontStyle): FontSubstituteScript | undefined {
       const family = requestedFamily?.trim();

@@ -61,14 +61,19 @@ export function authoredReferenceVerticalMetric(
     || selected.source !== 'native' || selected.installedFamily !== true) return exact;
   const faces = synthesis.text.exactLocalFaces?.(selected.requestedFamily) ?? [];
   const matched = cssMatchedFace(faces, selected.weight, selected.style);
-  if (!matched) return undefined;
+  // Glyph ownership: the span's own graphemes (and the raster probe's) must
+  // come from the matched exact source, not from a fallback face.
+  if (!matched?.coverageProbeFamily || !synthesis.text.ownsGlyphs) return undefined;
   const reference = referenceFontLineMetrics(selected.requestedFamily, matched.weight, matched.style);
   // Face identity is a property of the route and tuple, as for the regular
   // catalog tuple this extends (which admits a native installed route without
   // per-glyph proof). One fixed probe per script class bounds the work to a
   // few rasterizations per document instead of one per distinct span.
   const probe = EAST_ASIAN_PROBE_SCRIPT.test(synthesis.probe) ? '国あ' : 'Hxg';
-  return reference && synthesis.text.sameGlyphRaster({
+  const owned = (text: string) => synthesis.text.ownsGlyphs!({
+    text, weight: selected.weight, style: selected.style, coverageProbeFamily: matched.coverageProbeFamily!,
+  });
+  return reference && owned(probe) && owned(synthesis.probe) && synthesis.text.sameGlyphRaster({
     text: probe,
     weight: selected.weight,
     style: selected.style,

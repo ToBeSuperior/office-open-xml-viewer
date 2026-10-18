@@ -22,6 +22,7 @@ function minchoServices(sameRaster: boolean) {
     fonts: createFontResolver([{
       requestedFamily: 'MS Mincho', resolvedFamily: 'private-ms-mincho-400', source: 'local',
       resourceIdentity: 'office-local:local("MS Mincho")', weight: 400, style: 'normal',
+      coverageProbeFamily: 'private-ms-mincho-400-coverage',
     }]),
     measurer: {
       fingerprint: `synthesized-face-fixture-${sameRaster}`,
@@ -33,6 +34,8 @@ function minchoServices(sameRaster: boolean) {
         comparisons.push(request);
         return sameRaster;
       },
+      // The face owns everything but Hangul, which falls back.
+      ownsGlyphs: (request) => !/\p{Script=Hangul}/u.test(request.text),
     },
   });
   return { layoutServices: { text }, comparisons };
@@ -90,5 +93,18 @@ describe('bold runs of a face catalogued only at 400 (#1848)', () => {
       fontSize: 14, bold: false, italic: false, underline: false, strikethrough: false,
     }] as DocRun[], { pageIndex: 0, totalPages: 1, layoutServices: layoutServices as never });
     expect(comparisons).toEqual([]);
+  });
+
+  it('declines a span whose glyphs fall back to another face', () => {
+    // Korean authored in MS Mincho: the face paints the probe identically,
+    // but the span's own glyphs come from a fallback face.
+    const { layoutServices } = minchoServices(true);
+    const segments = buildSegments([{
+      type: 'text', text: '한국어', fontFamily: 'MS Mincho', fontFamilyEastAsia: 'MS Mincho',
+      fontSize: 14, bold: true, italic: false, underline: false, strikethrough: false,
+    }] as DocRun[], { pageIndex: 0, totalPages: 1, layoutServices: layoutServices as never });
+    const line = layoutLines(context, segments, 400, 0, 1)[0]!;
+    expect(lineBoxHeight(null, line.ascent, line.descent, 1, undefined, false,
+      line.intendedSingle, true, line.gridCountSingle)).toBeCloseTo(14, 8);
   });
 });

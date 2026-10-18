@@ -502,6 +502,17 @@ export interface GlyphMeasurer {
   /** True only when both routes paint pixel-identical non-empty glyph
    * rasters for the request. Absent or unable to rasterize → no proof. */
   sameGlyphRaster?(request: Readonly<GlyphRasterComparisonRequest>): boolean;
+  /** True only when every grapheme of `text` shapes with zero advance
+   * through the size-adjust:0% family, i.e. that exact source owns it. */
+  ownsGlyphs?(request: Readonly<GlyphOwnershipRequest>): boolean;
+}
+
+/** Glyph ownership through one source's size-adjust:0% registration. */
+export interface GlyphOwnershipRequest {
+  readonly text: string;
+  readonly weight: number;
+  readonly style: FontStyle;
+  readonly coverageProbeFamily: string;
 }
 
 export interface TextShapeSpan extends GlyphMeasurement {
@@ -564,7 +575,9 @@ export interface TextLayoutService {
   /** Cached {@link GlyphMeasurer.sameGlyphRaster} proof. */
   sameGlyphRaster?(request: Readonly<GlyphRasterComparisonRequest>): boolean;
   /** {@link FontResolver.exactLocalFaces} of this service's resolver. */
-  exactLocalFaces?(requestedFamily: string): readonly Readonly<{ resolvedFamily: string; weight: number; style: FontStyle }>[];
+  exactLocalFaces?(requestedFamily: string): readonly Readonly<{ resolvedFamily: string; weight: number; style: FontStyle; coverageProbeFamily?: string }>[];
+  /** {@link GlyphMeasurer.ownsGlyphs} of this service's measurer. */
+  ownsGlyphs?(request: Readonly<GlyphOwnershipRequest>): boolean;
 }
 
 export interface TextLayoutServiceInput {
@@ -1033,6 +1046,8 @@ export function createTextLayoutService(input: TextLayoutServiceInput): TextLayo
   const service: TextLayoutService = Object.freeze({
     ...(input.glyphContours ? { glyphContours: input.glyphContours } : {}),
     ...(sameGlyphRaster ? { sameGlyphRaster } : {}),
+    ...(input.measurer.ownsGlyphs
+      ? { ownsGlyphs: (request: Readonly<GlyphOwnershipRequest>) => input.measurer.ownsGlyphs!(request) } : {}),
     ...(input.fonts.exactLocalFaces
       ? { exactLocalFaces: (family: string) => input.fonts.exactLocalFaces!(family) } : {}),
     fingerprint,

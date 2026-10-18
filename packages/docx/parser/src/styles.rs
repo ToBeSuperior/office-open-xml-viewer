@@ -223,6 +223,11 @@ pub struct ParaFmt {
     pub num_level: Option<u32>,
     /// Explicit tab stops (pos_pt, alignment, leader). None = inherit from parent style chain.
     pub tab_stops: Option<Vec<(f64, String, String)>>,
+    /// Positions a merged layer cleared (`w:tab w:val="clear"`) and no later
+    /// layer set again. `merge_tab_stops` drops clears from `tab_stops`; a
+    /// numbering level's tabs entering beneath this chain must still honour
+    /// them (§17.7.2 precedence, §17.9.6 level pPr).
+    pub tab_clears: Vec<f64>,
     /// merged run defaults from pPr/rPr
     pub run: RunFmt,
     /// Paragraph background hex color (w:shd fill on paragraph)
@@ -1019,6 +1024,13 @@ pub(crate) fn apply_para(dst: &mut ParaFmt, src: &ParaFmt) {
         // TOC leader tab). `dst` empty ⇒ merge is just the sorted src.
         let base = dst.tab_stops.take().unwrap_or_default();
         dst.tab_stops = Some(merge_tab_stops(&base, src_tabs));
+        for (pos, val, _) in src_tabs {
+            dst.tab_clears
+                .retain(|cleared| (cleared - pos).abs() > 0.05);
+            if val == "clear" {
+                dst.tab_clears.push(*pos);
+            }
+        }
     }
     if src.shading.is_some() {
         dst.shading = src.shading.clone();
