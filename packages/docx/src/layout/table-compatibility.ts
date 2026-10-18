@@ -296,15 +296,6 @@ export const WORD_OMITTED_ROW_HEIGHT_RULE_AT_LEAST = defineCompatibilityRule({
   description: 'Treat an omitted trHeight hRule as atLeast while retaining an explicitly authored auto rule as authored input.',
 });
 
-export const WORD_AUTHORED_AUTO_ROW_HEIGHT_FLOOR = defineCompatibilityRule({
-  id: 'word-authored-auto-row-height-floor',
-  evidence: {
-    kind: 'library-policy',
-    reference: 'packages/docx/src/table-row-height.test.ts#auto with @val — @val is honored as a lower bound',
-  },
-  description: 'Preserve the established legacy-model behavior that an auto row with an authored height value uses that value as a lower bound. Library policy, no Office measurement: floor for an explicit hRule auto, carried over from omitted-hRule evidence (PR #549); ECMA-376 §17.4.80 gives auto no minimum, so this needs a control or retirement.',
-});
-
 export const WORD_COLLAPSED_BORDER_ROW_TRACK_FOOTPRINT = defineCompatibilityRule({
   id: 'word-collapsed-border-row-track-footprint',
   evidence: {

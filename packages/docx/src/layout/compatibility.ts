@@ -49,15 +49,6 @@ export const WORD_SECTION_BTLR_TBRL_PAGE_FRAME = defineCompatibilityRule({
   description: 'Issue #988 comment 4950296007 records that, unlike the normative ECMA-376 Part 4 §14.11.7 equivalence to lr, Word uses the tbRl page frame for section-level btLr; this rule covers only the page frame, while glyph orientation is paint-owned. Evidence (observed Office behaviour): Word output adjudicated in issue #988 and PR #996; [MS-OI29500] §2.1.558(b) states that Word ignores section-level btLr but not the tbRl mapping.',
 });
 
-export const WORD_FLOAT_DIFFERENT_PARAGRAPH_DISPLACEMENT = defineCompatibilityRule({
-  id: 'word-float-different-paragraph-displacement',
-  evidence: {
-    kind: 'library-policy',
-    reference: 'packages/docx/src/layout/floats.test.ts#keeps observed different-paragraph displacement on exclusion bounds',
-  },
-  description: 'Preserve the established Word-compatible policy that an overlap-permitted floating table or frame is displaced by exclusion geometry from floats anchored in other paragraphs, while same-paragraph floats may overlap. It does not apply to DrawingML objects: issue #1623 Word controls keep allowOverlap=true pictures from different paragraphs at their resolved positions in compatibility modes 14 and 15. Library policy, no Office measurement: displaces overlap-permitted floating tables and frames by floats of other paragraphs (PR #447); issue #1623 disproved it for DrawingML and no table or frame control exists.',
-});
-
 export const WORD_PAGE_ANCHORED_TABLE_COLLISION_DEFERRAL = defineCompatibilityRule({
   id: 'word-page-anchored-table-collision-deferral',
   evidence: {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  floatingTableAvoidance,
   resolveBlockFlowAdmission,
   resolveFloatPlacement,
   resolvePageAnchoredTableDeferral,
@@ -66,10 +67,7 @@ describe('float displacement policy', () => {
     const result = resolveFloatPlacement({
       moving,
       blockers: [blocker],
-      avoidance: {
-        kind: 'word-different-paragraph',
-        paragraphId: moving.paragraphId,
-      },
+      avoidance: { kind: 'none' },
       rightBoundaryPt: 100,
     });
 
@@ -83,10 +81,7 @@ describe('float displacement policy', () => {
     const result = resolveFloatPlacement({
       moving,
       blockers: [participant('blocker', 'table', 0, 1, 0, 'never')],
-      avoidance: {
-        kind: 'word-different-paragraph',
-        paragraphId: moving.paragraphId,
-      },
+      avoidance: { kind: 'none' },
       rightBoundaryPt: 100,
     });
 
@@ -138,116 +133,16 @@ describe('float displacement policy', () => {
     expect(place([left, right]).bounds.xPt).toBe(20);
   });
 
-  it('keeps observed different-paragraph displacement on exclusion bounds', () => {
+  // Windows Word 16.0.20430 (#1896 controls): an overlap-permitted floating
+  // table or frame keeps its position over floats of other paragraphs.
+  it('keeps an overlap-permitted table over a frame of another paragraph', () => {
     const moving = participant('moving', 'table', 0, 2, 2);
     const result = resolveFloatPlacement({
       moving,
-      blockers: [
-        participant('same-paragraph', 'drawingml', 0, 2, 8),
-        participant('other-paragraph', 'frame', 0, 1, 4),
-      ],
-      avoidance: {
-        kind: 'word-different-paragraph',
-        paragraphId: moving.paragraphId,
-      },
+      blockers: [participant('other-paragraph', 'frame', 0, 1, 4)],
+      avoidance: floatingTableAvoidance(),
       rightBoundaryPt: 100,
     });
-
-    expect(result.exclusionBounds.xPt).toBe(14);
-    expect(result.appliedCompatibilityRuleIds).toEqual([
-      'word-float-different-paragraph-displacement',
-    ]);
-  });
-
-  it('keeps the compatibility exclusion band within the right boundary and slack', () => {
-    const moving: FloatPlacementParticipant = Object.freeze({
-      occurrenceId: 'moving',
-      kind: 'table',
-      tableOverlap: 'overlap',
-      paragraphId: 2,
-      bounds: Object.freeze({
-        xPt: 20,
-        yPt: 10,
-        widthPt: 45,
-        heightPt: 10,
-      }),
-      exclusionBounds: Object.freeze({
-        xPt: 20,
-        yPt: 10,
-        widthPt: 53,
-        heightPt: 10,
-      }),
-    });
-    const blocker: FloatPlacementParticipant = Object.freeze({
-      occurrenceId: 'blocker',
-      kind: 'frame',
-      paragraphId: 1,
-      bounds: Object.freeze({
-        xPt: 0,
-        yPt: 0,
-        widthPt: 50,
-        heightPt: 50,
-      }),
-      exclusionBounds: Object.freeze({
-        xPt: 0,
-        yPt: 0,
-        widthPt: 50,
-        heightPt: 50,
-      }),
-    });
-    const place = (rightBoundaryPt: number) => resolveFloatPlacement({
-      moving,
-      blockers: [blocker],
-      avoidance: {
-        kind: 'word-different-paragraph',
-        paragraphId: moving.paragraphId,
-      },
-      rightBoundaryPt,
-      overlapEpsilonPt: 0.01,
-      rightBoundarySlackPt: 0.5,
-    });
-
-    const constrained = place(100);
-    expect(constrained.bounds).toMatchObject({ xPt: 20, yPt: 50 });
-    expect(constrained.exclusionBounds.xPt + constrained.exclusionBounds.widthPt)
-      .toBeLessThanOrEqual(100.5);
-    expect(constrained.appliedCompatibilityRuleIds).toEqual([
-      'word-float-different-paragraph-displacement',
-    ]);
-
-    expect(place(110).bounds).toMatchObject({ xPt: 50, yPt: 10 });
-    expect(place(102.5).bounds).toMatchObject({ xPt: 50, yPt: 10 });
-    expect(place(102.48).bounds).toMatchObject({ xPt: 20, yPt: 50 });
-  });
-
-  it('reports a Word compatibility rule only when it changes placement', () => {
-    const moving = participant('moving', 'table', 0, 2, 2);
-    const result = resolveFloatPlacement({
-      moving,
-      blockers: [participant('other-paragraph', 'frame', 50, 1, 4)],
-      avoidance: {
-        kind: 'word-different-paragraph',
-        paragraphId: moving.paragraphId,
-      },
-      rightBoundaryPt: 100,
-    });
-
-    expect(result.displacement).toEqual({ xPt: 0, yPt: 0 });
-    expect(result.appliedCompatibilityRuleIds).toEqual([]);
-  });
-
-  it('does not report a Word compatibility rule when no blocker is eligible', () => {
-    const moving = participant('moving', 'table', 0, 2, 2);
-    const result = resolveFloatPlacement({
-      moving,
-      blockers: [participant('same-paragraph', 'frame', 0, 2, 4)],
-      avoidance: {
-        kind: 'word-different-paragraph',
-        paragraphId: moving.paragraphId,
-      },
-      rightBoundaryPt: 100,
-    });
-
     expect(result.displacement).toEqual({ xPt: 0, yPt: 0 });
     expect(result.appliedCompatibilityRuleIds).toEqual([]);
   });
