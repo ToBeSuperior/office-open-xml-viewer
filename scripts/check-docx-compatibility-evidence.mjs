@@ -526,22 +526,45 @@ function rustItemEnd(text, start) {
 // comments, comments and attributes attached above it. A `cfg` predicate that
 // mentions `test` outside `not(test)` counts as test-only; this errs toward
 // stripping, which can only make the citation gate stricter.
-const RUST_TEST_ATTRIBUTE = /#\[\s*(?:test|cfg\s*\((?:[^()]|\([^()]*\))*\))\s*\]/g;
-
-function isTestOnlyAttribute(attribute) {
-  if (/^#\[\s*test\s*\]$/.test(attribute)) return true;
-  const predicate = attribute.replace(/not\s*\(\s*test\s*\)/g, '');
-  return /\btest\b/.test(predicate.replace(/^#\[\s*cfg/, ''));
+// Outer attributes `#[...]` with balanced brackets, so nested cfg predicates
+// such as cfg(any(all(test, feature = "x"))) are read whole.
+function rustAttributes(text) {
+  const attributes = [];
+  for (let start = text.indexOf('#['); start >= 0; start = text.indexOf('#[', start + 2)) {
+    let depth = 0;
+    let end = -1;
+    for (let i = start + 1; i < text.length; i++) {
+      if (text[i] === '[') depth += 1;
+      else if (text[i] === ']' && --depth === 0) { end = i + 1; break; }
+    }
+    if (end > 0) attributes.push({ index: start, text: text.slice(start, end) });
+  }
+  return attributes;
 }
 
-// Start of the comment and attribute lines directly attached above `index`.
+function isTestOnlyAttribute(attribute) {
+  const body = attribute.replace(/\s+/g, '');
+  if (body === '#[test]') return true;
+  if (!body.startsWith('#[cfg(')) return false;
+  return /\btest\b/.test(body.slice('#[cfg'.length).replace(/not\(test\)/g, ''));
+}
+
+// Start of the comment and attribute lines directly attached above `index`,
+// including `/** ... */` and `/* ... */` blocks that end on their own line.
 function attachedItemStart(text, index) {
   let start = text.lastIndexOf('\n', index - 1) + 1;
   while (start > 0) {
     const previousStart = text.lastIndexOf('\n', start - 2) + 1;
     const line = text.slice(previousStart, start - 1).trim();
-    if (!(line.startsWith('//') || (line.startsWith('#[') && line.endsWith(']')))) break;
-    start = previousStart;
+    if (line.startsWith('//') || (line.startsWith('#[') && line.endsWith(']'))) {
+      start = previousStart;
+    } else if (line.endsWith('*/')) {
+      const open = text.lastIndexOf('/*', start - 1);
+      if (open < 0) break;
+      start = text.lastIndexOf('\n', open - 1) + 1;
+    } else {
+      break;
+    }
   }
   return Math.max(start, 0);
 }
@@ -549,13 +572,11 @@ function attachedItemStart(text, index) {
 function withoutRustTestItems(text) {
   let result = '';
   let cursor = 0;
-  RUST_TEST_ATTRIBUTE.lastIndex = 0;
-  for (let match = RUST_TEST_ATTRIBUTE.exec(text); match; match = RUST_TEST_ATTRIBUTE.exec(text)) {
-    if (match.index < cursor || !isTestOnlyAttribute(match[0])) continue;
-    const end = rustItemEnd(text, match.index + match[0].length);
-    result += text.slice(cursor, Math.max(cursor, attachedItemStart(text, match.index)));
+  for (const attribute of rustAttributes(text)) {
+    if (attribute.index < cursor || !isTestOnlyAttribute(attribute.text)) continue;
+    const end = rustItemEnd(text, attribute.index + attribute.text.length);
+    result += text.slice(cursor, Math.max(cursor, attachedItemStart(text, attribute.index)));
     cursor = end;
-    RUST_TEST_ATTRIBUTE.lastIndex = end;
   }
   return result + text.slice(cursor);
 }

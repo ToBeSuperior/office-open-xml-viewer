@@ -467,6 +467,13 @@ fn helper() {}
 /// Documents \`${first}\` above a test-only module.
 #[cfg(all(test, feature = "x"))]
 mod more_tests {}
+
+/** Block docs for \`${first}\`. */
+#[cfg(any(test))]
+fn block_doc_helper() {}
+
+#[cfg(any(all(test, feature = "x")))]
+fn nested() { let id = "${first}"; }
 `;
   const rustPath = 'packages/docx/parser/src/chart_compatibility.rs';
   write(root, rustPath, testOnly);
