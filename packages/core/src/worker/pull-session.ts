@@ -7,6 +7,7 @@ import {
 } from './error-wire.js';
 import {
   isPullSessionInsufficientCreditError,
+  requiredPullCredit,
 } from './pull-credit-error.js';
 export { PULL_SESSION_INSUFFICIENT_CREDIT_CODE } from './pull-credit-error.js';
 
@@ -99,6 +100,28 @@ function validateSessionId(value: PullSessionKey): void {
     (typeof value === 'number' && Number.isSafeInteger(value) && value > 0)
   ) return;
   throw new RangeError('session id must be a non-empty string or positive safe integer');
+}
+
+/**
+ * Pull one unit with `initialBytes` of credit. When the unit is indivisible
+ * and needs at most `maximumRequiredBytes`, retry once with exactly the
+ * required credit (same sequence); any other failure propagates. It lives
+ * beside BoundedPullSession, which every caller already imports, so it adds no
+ * chunk edge to the model-source dispatch cost.
+ */
+export async function pullWithCreditRetry<TChunk>(
+  session: { pull(byteCredit: number, options?: { signal?: AbortSignal }): Promise<TChunk> },
+  initialBytes: number,
+  maximumRequiredBytes: number,
+  signal?: AbortSignal,
+): Promise<TChunk> {
+  try {
+    return await session.pull(initialBytes, { signal });
+  } catch (error) {
+    const required = requiredPullCredit(error, initialBytes, maximumRequiredBytes);
+    if (required === undefined) throw error;
+    return session.pull(required, { signal });
+  }
 }
 
 /** Main-thread half of the shared, format-neutral bounded pull protocol. */

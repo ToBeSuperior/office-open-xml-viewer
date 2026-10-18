@@ -14,7 +14,6 @@ import type { PptxSlideCursorArchive } from '../slide-cursor-operation.js';
 import type { PresentationBootstrap } from '../worker-protocol.js';
 // @ts-ignore wasm-pack generated module has no declaration entry
 import * as pptxWasm from '../wasm/pptx_parser.js';
-import { createAbortError, throwIfAborted } from '@silurus/ooxml-core/internal/abort';
 
 const ABORT_MESSAGE = 'PPTX presentation session was aborted';
 
@@ -104,4 +103,19 @@ export async function acquirePptxNodeSession(
     metrics.fail(normalized);
     throw normalized;
   }
+}
+
+// Kept file-local on purpose (core internal/abort has the shared copy):
+// importing it here adds a cross-chunk edge to each per-format Node chunk.
+// That edge exists only while model-source dispatch splits the Node entry, so
+// it counts against scripts/check-model-source-lazy-graph.mjs's budget.
+function throwIfAborted(signal: AbortSignal | undefined, message: string): void {
+  if (!signal?.aborted) return;
+  throw createAbortError(message);
+}
+
+function createAbortError(message: string): Error {
+  const error = new Error(message);
+  error.name = 'AbortError';
+  return error;
 }
