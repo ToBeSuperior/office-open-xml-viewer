@@ -106,6 +106,7 @@ export type WireRenderPageOptions = Omit<RenderPageOptions, 'onTextRun'>;
 export type RenderWorkerRequest =
   | { type: 'init'; wasmUrl: string }
   | { type: 'hostFontLinesMeasured'; forId: number; measurements: import('./host-font-line-metrics.js').HostFontLineMeasurement[] }
+  | { type: 'nativeRouteLinesMeasured'; forId: number; lines: (import('@silurus/ooxml-core').NativeRouteNormalLine | null)[] }
   // `currentDateMs` / `showTrackedChanges` select the layout VARIANT the worker
   // paginates and reports metadata for. They are acquisition inputs, not paint
   // flags: hiding deletions changes line breaking, and DATE/TIME field text
@@ -163,6 +164,7 @@ export type RenderWorkerWireRequest =
 
 export type RenderWorkerResponse =
   | { type: 'measureHostFontLines'; forId: number; routes: import('@silurus/ooxml-core').OfficeFontFallbackRoute[] }
+  | { type: 'measureNativeRouteLines'; forId: number; requests: import('@silurus/ooxml-core').NativeRouteLineRequest[] }
   | Exclude<WorkerResponse, { type: 'documentSessionOpened' }>
   | PullSessionResponse<ArrayBuffer, number>
   | {
@@ -181,9 +183,13 @@ export type RenderWorkerResponse =
   // worker that parses vertical East-Asian content opens a bounded model stream
   // so the proxy can continue through main-thread rendering instead of silently
   // painting horizontal glyph forms or receiving one monolithic JSON value.
+  // The same continuation serves a worker realm that cannot register the
+  // native-route sentinels (native-route-line-metrics.ts).
   | ({
       type: 'mainThreadVerticalFallback';
       id: number;
+      /** Omitted for DOM vertical glyph selection. */
+      reason?: 'nativeRouteSentinels';
       usage?: OoxmlResourceUsageSnapshot;
       /** The model source's own view preferences, validated in the worker. */
       viewDefaults?: { showTrackedChanges?: boolean };

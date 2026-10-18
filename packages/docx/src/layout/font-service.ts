@@ -1,7 +1,8 @@
-import { cjkLangFromLanguage, type CjkLang } from '@silurus/ooxml-core';
+import { cjkLangFromLanguage, type CjkLang, type ResolvedFontMetric } from '@silurus/ooxml-core';
 import { quoteCssFontFamily } from '@silurus/ooxml-core/internal/css-font-family';
 import type { LayoutDiagnostic } from './types.js';
 import { stableFingerprint } from './fingerprint.js';
+import { ownValue } from '@silurus/ooxml-core/internal/own-key';
 import {
   createCanvasFontRoute,
   type CanvasFontRoute,
@@ -39,7 +40,18 @@ export interface FontResolution {
    * tuple: CSS font matching paints that installed family (synthesizing
    * weight/style), so the authored face is present on the host, not absent. */
   readonly installedFamily?: true;
+  /** Native route of an absent authored face: the measured normal line of the
+   * route's first available face (native-route-line-metrics.ts). Admitted
+   * only for clusters that face is proven to draw. */
+  readonly routeLineMetric?: NativeRouteLineMetric;
 }
+
+/** Plain, array-free projection of a measured native route line, so a
+ * resolution stays structured-clone/deep-readonly plain data. */
+export type NativeRouteLineMetric = Readonly<Pick<ResolvedFontMetric,
+  'family' | 'requestedFamily' | 'weight' | 'style' | 'farEastCodePage' | 'requiresGlyphCoverage'
+  | 'nativeRoutePrimaryFamily' | 'lineHeightRatio' | 'designAscentRatio' | 'designDescentRatio'
+  | 'lineGapRatio'>>;
 
 export interface FontResolver {
   readonly fingerprint: string;
@@ -97,6 +109,15 @@ export interface FontResolverOptions {
     script: FontSubstituteScript;
     substituteFamilies: readonly string[];
   }>>>;
+  /** Measured native route lines keyed by {@link nativeRouteMetricKey}. They
+   * participate in cache identity: main and worker resolve the same table. */
+  readonly nativeRouteMetrics?: Readonly<Record<string, NativeRouteLineMetric>>;
+}
+
+/** Exact native route identity: the complete CSS family list Canvas receives
+ * and the normalized tuple. */
+export function nativeRouteMetricKey(familyList: string, weight: number, style: FontStyle): string {
+  return JSON.stringify([familyList, weight, style]);
 }
 
 // DOCX family keys use the locale-independent Unicode lowercase mapping. It is
@@ -207,10 +228,14 @@ export function createFontResolver(
   const installedFamilySet = new Set(installedFamilies);
   const shadowedFamilies = [...new Set((options.shadowedFamilies ?? []).map(normalizeFamily))].sort();
   const shadowedFamilySet = new Set(shadowedFamilies);
+  const nativeRouteMetrics = Object.freeze(Object.fromEntries(
+    Object.entries(options.nativeRouteMetrics ?? {}).sort(([a], [b]) => a.localeCompare(b)),
+  ));
   const fingerprint = stableFingerprint('fonts', {
     faces, nativeFamilyLists, regionalFamilyLists, scriptScopedFamilies,
     ...(installedFamilies.length > 0 ? { installedFamilies } : {}),
     ...(shadowedFamilies.length > 0 ? { shadowedFamilies } : {}),
+    ...(Object.keys(nativeRouteMetrics).length > 0 ? { nativeRouteMetrics } : {}),
   });
 
   // Every shaped script span, line segment and east-Asian line floor asks for a
@@ -280,14 +305,22 @@ export function createFontResolver(
         && (installedFamilySet.has(normalizeFamily(authored))
           || candidates.some((candidate) => candidate.source === 'local'
             && candidate.resourceIdentity?.startsWith('office-local:') === true));
+      const route = createCanvasFontRoute(
+        withoutScopedSubstitutes(familyList, authored, request.script),
+        'native',
+      );
+      // An installed authored face paints this route itself (catalog path);
+      // otherwise the route's first available face paints, and its measured
+      // normal line (when one was admitted for this exact list) describes it.
+      const routeLineMetric = installedFamily
+        ? undefined
+        : ownValue(nativeRouteMetrics, nativeRouteMetricKey(route.familyList, weight, style));
       return freezeResolution({
         ...(installedFamily ? { installedFamily: true as const } : {}),
+        ...(routeLineMetric ? { routeLineMetric } : {}),
         requestedFamily,
         resolvedFamily: authored,
-        route: createCanvasFontRoute(
-          withoutScopedSubstitutes(familyList, authored, request.script),
-          'native',
-        ),
+        route,
         source: 'native',
         weight,
         style,
