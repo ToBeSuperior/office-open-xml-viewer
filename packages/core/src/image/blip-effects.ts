@@ -209,6 +209,10 @@ export function blipEffectsCoverageReach(
         break;
       case 'transform':
         return null;
+      // Named recipes may run more than once (§20.1.10.22 effectDag);
+      // their multiplicity is not statically bounded here.
+      case 'reference': case 'definitions':
+        return null;
       default: break;
     }
   }

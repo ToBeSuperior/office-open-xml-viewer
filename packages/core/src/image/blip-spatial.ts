@@ -56,7 +56,13 @@ export function unionEffectGrids(a: Pick<EffectBuffer, 'width' | 'height' | 'fra
   const af = a.frame ?? { x: 0, y: 0, width: a.width, height: a.height };
   const bf = b.frame ?? { x: 0, y: 0, width: b.width, height: b.height };
   const x = Math.max(af.x, bf.x), y = Math.max(af.y, bf.y);
-  return { width: x + Math.max(a.width - af.x, b.width - bf.x),
-    height: y + Math.max(a.height - af.y, b.height - bf.y),
-    frame: { x, y, width: af.width, height: af.height } };
+  const width = x + Math.max(a.width - af.x, b.width - bf.x);
+  const height = y + Math.max(a.height - af.y, b.height - bf.y);
+  // The union is a new surface: enforce the declared per-axis dimension
+  // quota at planning time, before any buffer or canvas is allocated.
+  if (!(width <= MAX_RASTER_DIMENSION) || !(height <= MAX_RASTER_DIMENSION)) {
+    throw new OoxmlDecodedImageLimitError('image-dimension', MAX_RASTER_DIMENSION,
+      Number.isFinite(Math.max(width, height)) ? Math.max(width, height) : Number.MAX_SAFE_INTEGER);
+  }
+  return { width, height, frame: { x, y, width: af.width, height: af.height } };
 }

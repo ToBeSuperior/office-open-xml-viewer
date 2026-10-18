@@ -960,7 +960,15 @@ it('bounds effect reach conservatively and axis-independently, or not at all', (
   expect(blipEffectsCoverageReach([{ type: 'shadow', shadow, inner: false }], 1000, 400))
     .toEqual({ x: 1050, y: 1050 });
   expect(blipEffectsCoverageReach([{ type: 'grayscale' }], 1000, 400)).toEqual({ x: 0, y: 0 });
+  // A named recipe may run several times; its reach is not static.
+  expect(blipEffectsCoverageReach([{ type: 'reference', reference: 'grow' }], 10, 10)).toBeNull();
   // Skewed/scaled shadows have no cheap static bound.
   expect(blipEffectsCoverageReach([{ type: 'shadow', shadow: { ...shadow, dist: 0, kx: 80 }, inner: false }], 10, 10))
     .toBeNull();
+});
+
+it('rejects an over-wide union grid before allocating it', async () => {
+  const { unionEffectGrids } = await import('./blip-spatial');
+  expect(() => unionEffectGrids({ width: 1, height: 1 }, { width: 40_001, height: 1, frame: { x: 0, y: 0, width: 1, height: 1 } }))
+    .toThrowError(expect.objectContaining({ metric: 'image-dimension' }));
 });
