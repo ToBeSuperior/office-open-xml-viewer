@@ -435,8 +435,7 @@ function resolveRowHeights(
   for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
     open = resolveRowTrack(store, rows, rowIndex, open, flowOf, input.segmentOpeningLogicalRowIndex);
   }
-  rows.forEach((row, rowIndex) => {
-    if (row.heightRule === 'exact') return;
+  rows.forEach((_row, rowIndex) => {
     heights[rowIndex] = (heights[rowIndex] ?? 0) + (boundaryFootprintsPt[rowIndex] ?? 0);
   });
   return { heights, contentHeights };
@@ -681,18 +680,35 @@ function collapsedHorizontalBoundaryWidthsPt(
   });
 }
 
+/** The collapsed horizontal rules each row's content sits inside
+ * (WORD_COLLAPSED_BORDER_ROW_TRACK_FOOTPRINT): the full rule above the row
+ * and, for the last row, the full bottom rule below it. */
+interface RowRuleInsets {
+  readonly top: readonly number[];
+  readonly bottom: readonly number[];
+}
+
+function rowRuleInsetsPt(
+  input: TableLayoutInput,
+  boundaries: ReturnType<typeof resolvedBoundaries>,
+): RowRuleInsets {
+  const widthsPt = collapsedHorizontalBoundaryWidthsPt(input, boundaries);
+  const last = input.rows.length - 1;
+  return {
+    top: input.rows.map((_row, rowIndex) => widthsPt[rowIndex] ?? 0),
+    bottom: input.rows.map((_row, rowIndex) => rowIndex === last ? widthsPt[rowIndex + 1] ?? 0 : 0),
+  };
+}
+
 function rowBoundaryFootprintsPt(
   input: TableLayoutInput,
   boundaries: ReturnType<typeof resolvedBoundaries>,
+  insets: RowRuleInsets = rowRuleInsetsPt(input, boundaries),
 ): readonly number[] {
-  const widthsPt = collapsedHorizontalBoundaryWidthsPt(input, boundaries);
-  return input.rows.map((row, rowIndex) => (
-    row.heightRule === 'exact'
-      ? 0
-      : wordCollapsedBorderRowTrackFootprintPt(
-          widthsPt[rowIndex] ?? 0,
-          widthsPt[rowIndex + 1] ?? 0,
-        )
+  return input.rows.map((row, rowIndex) => wordCollapsedBorderRowTrackFootprintPt(
+    row.heightRule === 'exact',
+    insets.top[rowIndex] ?? 0,
+    insets.bottom[rowIndex] ?? 0,
   ));
 }
 
@@ -966,22 +982,33 @@ function materializeBorders(
         merged.push({ ...segment });
       }
     }
+    // WORD_COLLAPSED_BORDER_ROW_TRACK_FOOTPRINT: a rule occupies the band
+    // below its boundary; the table's bottom rule, the band above its end.
     for (const segment of merged) {
+      const halfPt = segment.resolved.border.widthPt / 2;
+      const yPt = boundary === input.rows.length ? rowY(boundary) - halfPt : rowY(boundary) + halfPt;
       segments.push(borderSegment(
         segment.resolved,
-        { xPt: segment.leftPt, yPt: rowY(boundary) },
-        { xPt: segment.rightPt, yPt: rowY(boundary) },
+        { xPt: segment.leftPt, yPt },
+        { xPt: segment.rightPt, yPt },
       ));
     }
   });
+  // Vertical rules meet the table's top and bottom rules at their centre
+  // lines, which sit inside the table box (see the horizontal rules above).
+  const horizontalRuleWidthsPt = collapsedHorizontalBoundaryWidthsPt(input, boundaries);
+  const lastRow = input.rows.length - 1;
   boundaries.vertical.forEach((rows, boundary) => {
     rows.forEach((resolved, row) => {
       if (effectiveCellSpacingPt(input.rows[row]) > 0) return;
       if (!resolved) return;
+      const topPt = rowY(row) + (row === 0 ? (horizontalRuleWidthsPt[0] ?? 0) / 2 : 0);
+      const bottomPt = rowY(row + 1)
+        - (row === lastRow ? (horizontalRuleWidthsPt[lastRow + 1] ?? 0) / 2 : 0);
       segments.push(borderSegment(
         resolved,
-        { xPt: columnX(row, boundary), yPt: rowY(row) },
-        { xPt: columnX(row, boundary), yPt: rowY(row + 1) },
+        { xPt: columnX(row, boundary), yPt: topPt },
+        { xPt: columnX(row, boundary), yPt: bottomPt },
       ));
     });
   });
@@ -1330,14 +1357,14 @@ export function layoutTable(
     flows.set(cell.id, resolveCellFlow(cell.verticalMerge === 'continue' ? [] : cell.blocks));
   }));
   const boundaries = resolvedBoundaries(input);
+  const ruleInsetsPt = rowRuleInsetsPt(input, boundaries);
   const resolvedRows = resolveRowHeights(
     input,
     flows,
-    rowBoundaryFootprintsPt(input, boundaries),
+    rowBoundaryFootprintsPt(input, boundaries, ruleInsetsPt),
   );
-  // ECMA-376 §17.4.80 owns the authored row height. Word's page-local collapsed
-  // boundary footprint is added only to non-exact tracks above; exact tracks
-  // already define the complete row box.
+  // ECMA-376 §17.4.80 owns the authored row height; an exact track already
+  // contains its top rule, and only the table's bottom rule extends it.
   const rowHeightsPt = resolvedRows.heights;
   const widthPt = input.columnWidthsPt.reduce((sum, width) => sum + width, 0);
   const heightPt = rowHeightsPt.reduce((sum, height) => sum + height, 0);
@@ -1371,6 +1398,7 @@ export function layoutTable(
     widthPt,
     columnOffsetsPt: columnOffsetsOf(input),
     flows,
+    ruleInsetsPt,
   };
   const rows: TableRowLayout[] = input.rows.map((_row, rowIndex) => (
     materializeTableRow(input, rowIndex, frame, placement)
@@ -1426,6 +1454,8 @@ interface TableRowFrame {
   readonly widthPt: number;
   readonly columnOffsetsPt: readonly number[];
   readonly flows: ReadonlyMap<string, CellFlowGeometry>;
+  /** Rule insets by row of the frame (WORD_COLLAPSED_BORDER_ROW_TRACK_FOOTPRINT). */
+  readonly ruleInsetsPt: RowRuleInsets;
 }
 
 function columnOffsetsOf(input: TableLayoutInput): readonly number[] {
@@ -1448,6 +1478,7 @@ function materializeTableRow(
 ): TableRowLayout {
   const {
     yPt, rowOffsetsPt: rowOffsets, rowHeightsPt, rowXPt, xPt, widthPt, columnOffsetsPt: columnOffsets, flows,
+    ruleInsetsPt,
   } = frame;
   const columnX = (column: number) => (rowXPt[rowIndex] ?? xPt) + (input.bidiVisual
     ? widthPt - (columnOffsets[column] ?? 0)
@@ -1486,16 +1517,23 @@ function materializeTableRow(
       ? Math.max(0, cellBottomPt - cellTopPt)
       : Math.max(0, rowHeightPt - rowSpacing.topPt - rowSpacing.bottomPt);
     const flow = flows.get(cell.id) ?? resolveCellFlow([]);
+    // WORD_COLLAPSED_BORDER_ROW_TRACK_FOOTPRINT: content starts below the
+    // row's top rule and ends above the table's bottom rule.
+    const margins = {
+      ...cell.margins,
+      topPt: cell.margins.topPt + (ruleInsetsPt.top[rowIndex] ?? 0),
+      bottomPt: cell.margins.bottomPt + (ruleInsetsPt.bottom[lastRowIndex] ?? 0),
+    };
     const physicalContentHeightPt = Math.max(
       0,
-      cellHeightPt - cell.margins.topPt - cell.margins.bottomPt,
+      cellHeightPt - margins.topPt - margins.bottomPt,
     );
     const exactOwnedSpan = row.heightRule === 'exact' && input.rows
       .slice(rowIndex + 1, lastRowIndex + 1)
       .every((ownedRow) => ownedRow.heightRule === 'exact');
     if (cell.verticalText && cell.verticalMerge !== 'continue') {
       return rotatedCellLayout(
-        cell,
+        { ...cell, margins },
         flow,
         { xPt: cellXPt, yPt: cellTopPt, widthPt: cellWidthPt, heightPt: cellHeightPt },
         physicalContentHeightPt,
@@ -1506,13 +1544,13 @@ function materializeTableRow(
     }
     const availableContentHeightPt = physicalContentHeightPt;
     // `word-cell-vertical-alignment-ink-block`: align the ink block, not the line boxes.
-    const topInkOffsetPt = cell.margins.topPt - Math.min(0, flow.inkTopPt);
+    const topInkOffsetPt = margins.topPt - Math.min(0, flow.inkTopPt);
     const inkOffsetPt = flow.inkHeightPt >= availableContentHeightPt
       ? topInkOffsetPt
       : cell.vAlign === 'center'
-        ? cell.margins.topPt + (availableContentHeightPt - flow.inkHeightPt) / 2 - flow.inkTopPt
+        ? margins.topPt + (availableContentHeightPt - flow.inkHeightPt) / 2 - flow.inkTopPt
         : cell.vAlign === 'bottom'
-          ? cellHeightPt - cell.margins.bottomPt - flow.inkHeightPt - flow.inkTopPt
+          ? cellHeightPt - margins.bottomPt - flow.inkHeightPt - flow.inkTopPt
           : topInkOffsetPt;
     const contentBounds = {
       xPt: cellXPt + cell.margins.leftPt,
@@ -1524,9 +1562,10 @@ function materializeTableRow(
     };
     const cellFlowBounds = { xPt: cellXPt, yPt: cellTopPt, widthPt: cellWidthPt, heightPt: cellHeightPt };
     // `word-exact-row-vertical-clip-only`
+    // The authored exact box ends above the table's appended bottom rule.
     const clipBounds = cell.verticalMerge !== 'continue' && exactOwnedSpan
       ? wordExactRowVerticalClipBounds(
-          cellFlowBounds,
+          { ...cellFlowBounds, heightPt: Math.max(0, cellHeightPt - (ruleInsetsPt.bottom[lastRowIndex] ?? 0)) },
           placement.availableBounds,
         )
       : undefined;
@@ -1628,6 +1667,7 @@ export function laidOutTableTracks(
     xPt: rowXPt[0] ?? laidOut.flowBounds.xPt,
     widthPt: input.columnWidthsPt.reduce((sum, width) => sum + width, 0),
     columnOffsetsPt: columnOffsetsOf(input),
+    ruleInsetsPt: rowRuleInsetsPt(input, resolvedBoundaries(input)),
   };
   return Object.freeze({
     row(rowIndex: number, candidate: TableRowLayoutInput): TableRowLayout {
@@ -1992,6 +2032,7 @@ export function tablePrefixTracks(input: TableLayoutInput): TablePrefixTracks {
         widthPt,
         columnOffsetsPt: columnOffsetsOf(input),
         flows: new Map(candidate.cells.map((cell) => [cell.id, flowOf(cell)] as const)),
+        ruleInsetsPt: rowRuleInsetsPt(localInput, resolvedBoundaries(localInput)),
       }, placement);
     },
   };

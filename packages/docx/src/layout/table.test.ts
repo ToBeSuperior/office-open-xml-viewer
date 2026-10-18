@@ -240,8 +240,10 @@ describe('retained table layout', () => {
     }), placement(), services);
     const layout = result.layout as TableLayout;
 
+    // The frame joins the rules' centre lines: the top rule lies inside the
+    // table below its edge, the bottom rule inside above the extended end.
     expect(layout.compoundBorderFrames).toEqual([{
-      bounds: { xPt: 10, yPt: 20, widthPt: 100, heightPt: 20 },
+      bounds: { xPt: 10, yPt: 20.75, widthPt: 100, heightPt: 20 },
       border: {
         authoredStyle: 'thinThickSmallGap',
         color: '#000000',
@@ -252,7 +254,8 @@ describe('retained table layout', () => {
     }]);
   });
 
-  it('includes half of each collapsed horizontal rule in adjacent non-exact rows', async () => {
+  it('includes each collapsed horizontal rule once, in the row below it, and the bottom rule last', async () => {
+    // WORD_COLLAPSED_BORDER_ROW_TRACK_FOOTPRINT (Windows Word #1904 controls).
     const single = { widthPt: 0.5, color: '#000000', authoredStyle: 'single' };
     const rows = Array.from({ length: 4 }, (_, rowIndex) => ({
       id: `row-${rowIndex}`,
@@ -271,12 +274,12 @@ describe('retained table layout', () => {
     const layout = result.layout as TableLayout;
 
     expect(layout.rows.map((rowLayout) => rowLayout.advancePt)).toEqual([
-      20.9, 20.9, 20.9, 20.9,
+      20.9, 20.9, 20.9, 21.4,
     ]);
-    expect(layout.advancePt).toBeCloseTo(83.6, 8);
+    expect(layout.advancePt).toBeCloseTo(84.1, 8);
   });
 
-  it('does not expand exact rows by collapsed horizontal rule footprints', async () => {
+  it('keeps an exact row, which holds its top rule, and adds only the table bottom rule', async () => {
     const single = { widthPt: 0.5, color: '#000000', authoredStyle: 'single' };
     const input = tableInput([{
       id: 'row-0',
@@ -293,7 +296,7 @@ describe('retained table layout', () => {
 
     const result = layoutTable(input, placement(), services);
 
-    expect((result.layout as TableLayout).rows[0]?.advancePt).toBe(20.4);
+    expect((result.layout as TableLayout).rows[0]?.advancePt).toBeCloseTo(20.9, 8);
   });
 
   it('acquires each ordinary and nested cell paragraph final geometry once', () => {
@@ -492,8 +495,10 @@ describe('retained table layout', () => {
 
     const { layout } = layoutTable(input, placement(), services);
 
-    expect(layout.rows.map((row) => row.advancePt)).toEqual([9, 9, 8]);
-    expect(layout.advancePt).toBe(26);
+    // atLeast rows add their top rule; the exact row already holds its own
+    // and the table's bottom rule extends it.
+    expect(layout.rows.map((row) => row.advancePt)).toEqual([9, 9, 9]);
+    expect(layout.advancePt).toBe(27);
   });
 
   it('keeps explicit auto content-sized and adds Word bottom padding to exact heights', async () => {
@@ -1129,10 +1134,10 @@ describe('retained table layout', () => {
 
     expect(layout.borders.filter((border) => border.edge === 'between')).toEqual([
       expect.objectContaining({
-        color: '#0000ff', from: { xPt: 10, yPt: 28 }, to: { xPt: 40, yPt: 28 },
+        color: '#0000ff', from: { xPt: 10, yPt: 28.5 }, to: { xPt: 40, yPt: 28.5 },
       }),
       expect.objectContaining({
-        color: '#ff0000', from: { xPt: 40, yPt: 28 }, to: { xPt: 80, yPt: 28 },
+        color: '#ff0000', from: { xPt: 40, yPt: 28.5 }, to: { xPt: 80, yPt: 28.5 },
       }),
     ]);
   });
@@ -1167,10 +1172,10 @@ describe('retained table layout', () => {
 
     expect(layout.borders.filter((border) => border.edge === 'between')).toEqual([
       expect.objectContaining({
-        color: '#0000ff', from: { xPt: 10, yPt: 28 }, to: { xPt: 40, yPt: 28 },
+        color: '#0000ff', from: { xPt: 10, yPt: 28.5 }, to: { xPt: 40, yPt: 28.5 },
       }),
       expect.objectContaining({
-        color: '#ff0000', from: { xPt: 40, yPt: 28 }, to: { xPt: 80, yPt: 28 },
+        color: '#ff0000', from: { xPt: 40, yPt: 28.5 }, to: { xPt: 80, yPt: 28.5 },
       }),
     ]);
   });
