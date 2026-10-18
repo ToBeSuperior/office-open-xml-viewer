@@ -7,7 +7,7 @@ use crate::{parse_rels_map, resolve_zip_path};
 // a blip's `<a:extLst>`. Replaces xlsx's former local `mime_from_ext` (a strict
 // subset that lacked the `svg` arm and so dropped SVG parts).
 use ooxml_common::blip::{
-    blip_embed_rid, mime_from_ext, parse_blip_alpha, parse_blip_duotone, parse_src_rect,
+    blip_embed_rid, mime_from_ext, parse_blip_duotone, parse_blip_effects, parse_src_rect,
     svg_blip_rid,
 };
 use ooxml_common::depth::{parse_guarded, DepthGuard};
@@ -181,8 +181,11 @@ fn parse_drawing_doc_anchors(
         let mut src_rect: Option<SrcRect> = None;
         // ECMA-376 §20.1.8.6 `<a:alphaModFix>` opacity (None ⇒ opaque) and
         // §20.1.8.23 `<a:duotone>` recolour (None ⇒ no effect).
-        let mut alpha: Option<f64> = None;
+        // Parsed pictures leave `alpha` empty: alphaModFix lives in the
+        // ordered `blip_effects` chain and is baked there exactly once.
+        let alpha: Option<f64> = None;
         let mut duotone: Option<Duotone> = None;
+        let mut blip_effects = Vec::new();
         // ECMA-376 §20.5.2.33 `twoCellAnchor@editAs` (normative fact): "twoCell"
         // (default), "oneCell", "absolute". It governs how later band edits
         // move/resize the picture (§20.5.3.2). The initial display rect of a
@@ -270,12 +273,18 @@ fn parse_drawing_doc_anchors(
                         }
                         // `<a:srcRect>` is a sibling of `<a:blip>` inside blipFill.
                         src_rect = parse_src_rect(bf);
-                        // Blip effects: `<a:alphaModFix>` opacity (§20.1.8.6) and
-                        // `<a:duotone>` recolour (§20.1.8.23). The duotone colours
-                        // resolve through the shared DrawingML grammar using the
-                        // sheet's theme palette.
-                        alpha = parse_blip_alpha(bf);
+                        // Ordered CT_Blip effects (§20.1.8.13), shared with
+                        // DOCX/PPTX: alphaModFix (§20.1.8.6) at its authored
+                        // position and each duotone (§20.1.8.23) with its own
+                        // palette. A lone duotone keeps the legacy `duotone`
+                        // fast path (the shared parser then returns no list).
+                        // Colours resolve through the sheet's theme palette.
                         duotone = parse_blip_duotone(
+                            bf,
+                            &XlsxSchemeResolver { theme_colors },
+                            ooxml_common::color::TintMode::PowerPointLinear,
+                        );
+                        blip_effects = parse_blip_effects(
                             bf,
                             &XlsxSchemeResolver { theme_colors },
                             ooxml_common::color::TintMode::PowerPointLinear,
@@ -334,6 +343,11 @@ fn parse_drawing_doc_anchors(
             (None, None) => continue,
         };
         let mime_type = mime_from_ext(&image_path).to_string();
+        // Nested CT_Blip image fills (fillOverlay/fill) carry relationship ids;
+        // resolve them against this drawing part, never send an id as a path.
+        ooxml_common::blip::resolve_blip_effect_images(&mut blip_effects, &mut |rid| {
+            resolve_drawing_media_path(drawing_rels, drawing_path, archive, rid)
+        });
 
         anchors.push(ImageAnchor {
             z_order: anchor
@@ -369,6 +383,7 @@ fn parse_drawing_doc_anchors(
             src_rect,
             alpha,
             duotone,
+            blip_effects,
         });
     }
     anchors
@@ -1530,13 +1545,27 @@ pub(crate) fn collect_shapes(
                 .descendants()
                 .find(|n| n.is_element() && n.tag_name().name() == "blipFill");
             let src_rect = leaf_blip_fill.and_then(parse_src_rect);
-            let alpha = leaf_blip_fill.and_then(parse_blip_alpha);
+            // alphaModFix is part of the ordered effect chain (see the
+            // top-level picture path); `alpha` stays empty for parsed leaves.
+            let alpha = None;
             let duotone = leaf_blip_fill.and_then(|bf| {
                 parse_blip_duotone(
                     bf,
                     &XlsxSchemeResolver { theme_colors },
                     ooxml_common::color::TintMode::PowerPointLinear,
                 )
+            });
+            let mut blip_effects = leaf_blip_fill
+                .map(|bf| {
+                    parse_blip_effects(
+                        bf,
+                        &XlsxSchemeResolver { theme_colors },
+                        ooxml_common::color::TintMode::PowerPointLinear,
+                    )
+                })
+                .unwrap_or_default();
+            ooxml_common::blip::resolve_blip_effect_images(&mut blip_effects, &mut |rid| {
+                rid_urls.get(rid).cloned()
             });
 
             // Prefer the raster as `image_path`; fall back to the SVG when no
@@ -1603,6 +1632,7 @@ pub(crate) fn collect_shapes(
                     src_rect,
                     alpha,
                     duotone,
+                    blip_effects,
                 },
                 text: None,
             });
@@ -2487,6 +2517,7 @@ pub(crate) fn parse_ole_object_anchors(
             // OLE object previews carry no blip effects.
             alpha: None,
             duotone: None,
+            blip_effects: Vec::new(),
         });
     }
     anchors
@@ -4239,6 +4270,7 @@ mod blip_svg_tests {
             src_rect: None,
             alpha: None,
             duotone: None,
+            blip_effects: Vec::new(),
         };
         let json = serde_json::to_string(&anchor).unwrap();
         assert!(json.contains("\"imagePath\":\"xl/media/image1.png\""));
@@ -4272,6 +4304,7 @@ mod blip_svg_tests {
             src_rect: None,
             alpha: None,
             duotone: None,
+            blip_effects: Vec::new(),
         };
         let json = serde_json::to_string(&geom).unwrap();
         assert!(json.contains("\"type\":\"image\""));

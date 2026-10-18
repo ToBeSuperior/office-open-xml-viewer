@@ -128,6 +128,9 @@ export interface LayoutTextSeg extends LayoutSegSource {
   /** Metadata-only vertical reference for a native authored family. It grants
    * no width, cmap, resource ownership, shaping, or paint-route authority. */
   referenceFontVerticalMetric?: true;
+  /** The painted catalogued face's own underline / strikethrough geometry
+   *  (see segment-builder `admittedFaceDecoration`). */
+  referenceFontDecoration?: import('@silurus/ooxml-core/internal/font-decoration').FontDecorationGeometry;
   resolvedDesignAscentRatio?: number;
   resolvedDesignDescentRatio?: number;
   resolvedEastAsianLineHeightRatio?: number;
@@ -450,6 +453,10 @@ export interface LayoutImageSeg extends LayoutSegSource {
   /** ECMA-376 §20.4.2.8 — this image-shaped line segment reserves the inline
    * WPS shape's extent; paint is owned by the paragraph's retained drawing. */
   inlineShape?: true;
+  /** Paint offset of an inline shape from its pen position (a VML
+   * position:relative left/top); the line advance is unchanged. */
+  inlineOffsetXPt?: number;
+  inlineOffsetYPt?: number;
   /** Parser-private retained placeholder for a recognized payload whose
    * package part is unavailable. It participates in line/anchor geometry but
    * never enters the paint resource registry. */

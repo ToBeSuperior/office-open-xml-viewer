@@ -170,10 +170,12 @@ pub fn apply_color_transforms(hex: &str, node: Node, tint_mode: TintMode) -> Str
     };
 
     let attr_pct = |t: &Node, name: &str, default: f64| -> f64 {
+        // ST_Percentage accepts both Transitional integers and Strict
+        // percentage lexemes (ECMA-376 §20.1.10.40). All color transforms,
+        // including fill/duotone alpha, share the same unit conversion.
         t.attribute(name)
-            .and_then(|v| v.parse::<f64>().ok())
-            .unwrap_or(default)
-            / 100_000.0
+            .and_then(crate::units::drawingml_percentage_to_fraction)
+            .unwrap_or(default / 100_000.0)
     };
 
     for t in node.children().filter(|n| n.is_element()) {
@@ -1065,6 +1067,22 @@ mod tests {
         assert_eq!(
             apply_signed_tint_or_shade("156082", 0.35, TintMode::PowerPointLinear),
             "A1AFBB"
+        );
+    }
+
+    #[test]
+    fn strict_percentage_color_transforms_match_transitional_values() {
+        let parse = |modifiers: &str| {
+            let xml = format!(
+                r#"<a:solidFill xmlns:a="{NS}"><a:srgbClr val="FF0000">{modifiers}</a:srgbClr></a:solidFill>"#
+            );
+            let doc = roxmltree::Document::parse(&xml).unwrap();
+            parse_color_node(doc.root_element(), &MapResolver, TintMode::WordLiteral)
+        };
+        assert_eq!(parse(r#"<a:alpha val="50%"/>"#), Some("FF000080".into()));
+        assert_eq!(
+            parse(r#"<a:satMod val="50%"/><a:lumMod val="75%"/><a:tint val="80%"/>"#),
+            parse(r#"<a:satMod val="50000"/><a:lumMod val="75000"/><a:tint val="80000"/>"#)
         );
     }
 

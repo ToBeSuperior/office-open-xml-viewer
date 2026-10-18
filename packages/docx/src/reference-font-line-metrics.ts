@@ -1,3 +1,4 @@
+import type { FontDecorationGeometry } from '@silurus/ooxml-core/internal/font-decoration';
 import {
   findReferenceFontMetrics,
   type ReferenceFontMetricProfile,
@@ -50,6 +51,38 @@ function preferredProfiles(
     preferredProfilesMemo.delete(preferredProfilesMemo.keys().next().value as string);
   }
   return result;
+}
+
+/**
+ * The catalogued face's own underline and strikethrough geometry (post /
+ * OS/2), from the same preferred source group as its vertical geometry.
+ * Undefined when the face is not catalogued, records none, or its copies
+ * disagree. Callers admit it only where the face's reference vertical
+ * geometry is admitted (the catalog cannot prove the painted face otherwise).
+ */
+export function referenceFontDecorationMetrics(
+  family: string | null | undefined,
+  weight: number,
+  style: 'normal' | 'italic',
+): FontDecorationGeometry | undefined {
+  let geometry: FontDecorationGeometry | undefined;
+  for (const profile of preferredProfiles(family, weight, style)) {
+    const decoration = profile.decoration;
+    if (!decoration || !(profile.unitsPerEm > 0)) return undefined;
+    const [underlinePosition, underlineThickness, strikeoutPosition, strikeoutSize] = decoration;
+    if (!(underlineThickness > 0) || !(strikeoutSize > 0) || !(strikeoutPosition > 0)) return undefined;
+    const em = profile.unitsPerEm;
+    const next: FontDecorationGeometry = {
+      underlineTopEm: -underlinePosition / em,
+      underlineThicknessEm: underlineThickness / em,
+      strikeTopEm: -strikeoutPosition / em,
+      strikeThicknessEm: strikeoutSize / em,
+    };
+    if (geometry && (Object.keys(next) as (keyof FontDecorationGeometry)[])
+      .some((key) => geometry![key] !== next[key])) return undefined;
+    geometry = Object.freeze(next);
+  }
+  return geometry;
 }
 
 function project(profile: ReferenceFontMetricProfile): ReferenceFontLineMetrics | null {

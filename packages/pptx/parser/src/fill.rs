@@ -14,12 +14,6 @@ use ooxml_common::blip::{mime_from_ext, parse_blip_duotone, parse_blip_effects, 
 use ooxml_common::color::ThemeResolver;
 use std::collections::HashMap;
 
-/// Parse `<a:blip><a:alphaModFix amt="..."/></a:blip>` from a blipFill node
-/// (ECMA-376 §20.1.8.6). Thin re-export of the shared
-/// [`ooxml_common::blip::parse_blip_alpha`] so the three formats read the blip
-/// alpha identically (previously a pptx-local copy). Returns the fraction
-/// `amt/100000` when present and < 1.0; `None` otherwise.
-pub(crate) use ooxml_common::blip::parse_blip_alpha;
 pub(crate) use ooxml_common::fill::{parse_fill_rect, parse_tile};
 
 // ===========================
@@ -275,7 +269,7 @@ fn parse_blip_fill_with_color_resolver<
     let dpi = attr(&blip_fill, "dpi").and_then(|value| value.parse().ok());
     let rot_with_shape = attr(&blip_fill, "rotWithShape")
         .map(|value| value == "1" || value.eq_ignore_ascii_case("true"));
-    let alpha = parse_blip_alpha(blip_fill);
+    let alpha = None /* alpha is baked by the ordered blip chain */;
     // §20.1.8.23 duotone recolour, resolved through the theme with PowerPoint's
     // linear tint (same call the `<p:pic>` paths use). `None` ⇒ no effect.
     let duotone = parse_blip_duotone(
@@ -284,11 +278,12 @@ fn parse_blip_fill_with_color_resolver<
         ooxml_common::color::TintMode::PowerPointLinear,
     );
     // CT_Blip grayscl/biLevel/clrChange pixel effects in document order.
-    let blip_effects = parse_blip_effects(
+    let mut blip_effects = parse_blip_effects(
         blip_fill,
         color_resolver,
         ooxml_common::color::TintMode::PowerPointLinear,
     );
+    ooxml_common::blip::resolve_blip_effect_images(&mut blip_effects, resolve_blip);
     // EG_FillModeProperties (§20.1.8.14) is an optional choice of `tile`
     // (§20.1.8.58) or `stretch` (§20.1.8.56) with no schema default. Record
     // both authored facts as-is: `stretch` is the presence of `<a:stretch>`

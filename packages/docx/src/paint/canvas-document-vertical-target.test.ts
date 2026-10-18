@@ -380,7 +380,7 @@ describe('vertical OpenType paint target projection', () => {
     expect(fetchImage).not.toHaveBeenCalledWith('word/media/other-page.png', expect.anything());
   });
 
-  it('keeps a valid chart occurrence when another retained use has an invalid frame', async () => {
+  it('rejects a non-finite retained chart use even when a peer use is valid', async () => {
     vi.stubGlobal('createImageBitmap', vi.fn(async () => ({ width: 8, height: 8 })));
     const imagePath = 'word/media/chart-valid-occurrence.png';
     const fetchImage = vi.fn(async () => new Blob(['png'], { type: 'image/png' }));
@@ -410,7 +410,7 @@ describe('vertical OpenType paint target projection', () => {
       },
     };
 
-    await renderSelectedDocumentPage(
+    await expect(renderSelectedDocumentPage(
       { pages: [directPage], diagnostics: [] },
       directPage,
       new WorkerCanvas() as unknown as OffscreenCanvas,
@@ -432,10 +432,9 @@ describe('vertical OpenType paint target projection', () => {
         textRuns: [],
         fetchImage,
       },
-    );
+    )).rejects.toMatchObject({ code: 'unsupported-image-effect' });
 
-    expect(fetchImage).toHaveBeenCalledTimes(1);
-    expect(fetchImage).toHaveBeenCalledWith(imagePath, 'image/png');
+    expect(fetchImage).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -452,7 +451,7 @@ describe('vertical OpenType paint target projection', () => {
       { l: 0.5, t: 0, r: 0.4999999999999999, b: 0 },
     ],
   ] as const)(
-    'excludes %s retained chart occurrences before aggregate source gating and preload',
+    'handles %s retained chart occurrences without silently dropping overflowed image geometry',
     async (_case, invalidWidthPt, invalidHeightPt, overflowCrop) => {
       vi.stubGlobal('createImageBitmap', vi.fn(async () => ({ width: 8, height: 8 })));
       const fetchImage = vi.fn(async () => new Blob(['png'], { type: 'image/png' }));
@@ -467,7 +466,7 @@ describe('vertical OpenType paint target projection', () => {
         chartType: 'line', categories: ['A'],
         series: [{ name: 'Visible', values: [1], markerFillPaint: visibleFill }],
       } as ChartModel;
-      const sourceCount = overflowCrop ? 257 : 256;
+      const sourceCount = 256;
       const invalidChart = {
         chartType: 'line',
         categories: Array.from({ length: sourceCount }, (_, index) => String(index)),
@@ -521,7 +520,7 @@ describe('vertical OpenType paint target projection', () => {
         },
       };
 
-      await renderSelectedDocumentPage(
+      const rendering = renderSelectedDocumentPage(
         { pages: [directPage], diagnostics: [] },
         directPage,
         new WorkerCanvas() as unknown as OffscreenCanvas,
@@ -545,6 +544,12 @@ describe('vertical OpenType paint target projection', () => {
         },
       );
 
+      if (overflowCrop || !Number.isFinite(invalidWidthPt) || !Number.isFinite(invalidHeightPt) || invalidWidthPt < 0 || invalidHeightPt < 0) {
+        await expect(rendering).rejects.toMatchObject({ code: 'unsupported-image-effect' });
+        expect(fetchImage).not.toHaveBeenCalled();
+        return;
+      }
+      await rendering;
       expect(fetchImage).toHaveBeenCalledTimes(1);
       expect(fetchImage).toHaveBeenCalledWith(visiblePath, 'image/png');
     },

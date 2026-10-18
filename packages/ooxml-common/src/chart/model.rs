@@ -279,6 +279,11 @@ pub enum ChartStyleFill {
         alpha: Option<f64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         duotone: Option<crate::blip::Duotone>,
+        /// Ordered CT_Blip effects (§20.1.8.13), shared with picture paths.
+        /// When present, alphaModFix is baked at its authored position and
+        /// `alpha` stays empty; each duotone owns its palette.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        blip_effects: Vec<crate::blip::BlipEffect>,
     },
 }
 

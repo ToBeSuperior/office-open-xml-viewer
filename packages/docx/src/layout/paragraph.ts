@@ -1,6 +1,11 @@
 import { countedSpacingAdvance, countSpacingCharacters, textSpacingAdvance } from '../character-spacing.js';
 import { ownValue } from '@silurus/ooxml-core/internal/own-key';
 import { charSpacingDeltaPx, segmentCharacterGridDeltaPx } from '../line-breaker/advance.js';
+import {
+  authoredReferenceVerticalMetric,
+  mayUseAuthoredReferenceVerticalMetric,
+} from '../line-breaker/font-metrics.js';
+import { referenceFontDecorationMetrics } from '../reference-font-line-metrics.js';
 import { shadowInkBounds } from './vml-shadow.js';
 import { createParagraphAnchorReferenceWorkBudget } from './resource-budgets.js';
 import { addExactRational, exactRationalFromNumber, exactRationalToNumberUp } from './exact-geometry.js';
@@ -241,6 +246,10 @@ type RetainedInkMetric = Pick<
 
 interface RetainedTextGeometryPlan {
   readonly base: RetainedInkMetric;
+  readonly fontRule?: Readonly<{
+    geometry: import('@silurus/ooxml-core/internal/font-decoration').FontDecorationGeometry;
+    sizePt: number;
+  }>;
   readonly underline?: Readonly<{
     authoredStyle?: string;
     color: string;
@@ -284,6 +293,11 @@ export interface MeasuredTabPlanSegment {
     readonly authoredStyle?: string;
     readonly color: string;
     readonly probe: RetainedInkMetric;
+    /** The admitted catalogued face's rule, as for text segments. */
+    readonly fontRule?: Readonly<{
+      geometry: import('@silurus/ooxml-core/internal/font-decoration').FontDecorationGeometry;
+      sizePt: number;
+    }>;
   }>;
   readonly leaderShape?: Readonly<{
     glyph: string;
@@ -327,6 +341,8 @@ export interface MeasuredInlineDrawingPlanSegment {
   readonly widthPt: number;
   readonly heightPt: number;
   readonly topOffsetPt: number;
+  /** Relative paint offset from the pen position; the advance is unchanged. */
+  readonly leftOffsetPt?: number;
   readonly drawingId: string;
 }
 
@@ -970,6 +986,7 @@ export function planLine(input: PlanLineInput): LineLayout {
             base: segment.underline.base,
             color: segment.underline.color,
             underline: segment.underline,
+            ...(segment.underline.fontRule ? { fontRule: segment.underline.fontRule } : {}),
           })
         : undefined;
       placements.push({
@@ -1005,7 +1022,7 @@ export function planLine(input: PlanLineInput): LineLayout {
         range: segment.range,
         drawingId: segment.drawingId,
         bounds: {
-          xPt,
+          xPt: xPt + (segment.kind === 'inline-drawing' ? segment.leftOffsetPt ?? 0 : 0),
           yPt: line.baselinePt + segment.topOffsetPt,
           widthPt: segment.widthPt,
           heightPt: segment.heightPt,
@@ -1065,6 +1082,7 @@ export function planLine(input: PlanLineInput): LineLayout {
             color: retainedColorString(style.color),
             ...(retainedGeometry.underline ? { underline: retainedGeometry.underline } : {}),
             ...(retainedGeometry.strike ? { strike: retainedGeometry.strike } : {}),
+            ...(retainedGeometry.fontRule ? { fontRule: retainedGeometry.fontRule } : {}),
           })
         : style.decorations;
       const emphasis = retainedGeometry?.emphasis ? {
@@ -2142,8 +2160,16 @@ function retainedGeometryPlan(
       clusterInk,
     };
   })() : undefined;
+  // The admitted reference face's own rule, when the decorated text draws in
+  // that face (the low-line probe resolves to it); other faces keep the
+  // glyph-probe geometry.
+  const fontRule = (underline || strike) && segment.referenceFontDecoration
+    && shapeProbe('_').spans[0]?.font.requestedFamily === segment.authoredFontFamily
+    ? { geometry: segment.referenceFontDecoration, sizePt: request.fontSizePt }
+    : undefined;
   return {
     base,
+    ...(fontRule ? { fontRule } : {}),
     ...(underline ? { underline } : {}),
     ...(strike ? { strike } : {}),
     ...(emphasis ? { emphasis } : {}),
@@ -2764,9 +2790,19 @@ function planMeasuredLines(
         };
         if (textSource?.underline) {
           const textColor = textSource.color ? `#${textSource.color}` : '#000000';
+          // The face's own rule when its exact catalogued tuple is admitted,
+          // as for the run's text (retainedGeometryPlan).
+          const ruleFont = shapeTabGlyph('_').spans[0]?.font;
+          const ruleGeometry = ruleFont && ((ruleFont.source === 'local'
+              && ruleFont.resourceIdentity?.startsWith('office-local:') === true)
+            || (ruleFont.source === 'native' && ruleFont.installedFamily === true)
+            || (mayUseAuthoredReferenceVerticalMetric(ruleFont) && authoredReferenceVerticalMetric(ruleFont)))
+            ? referenceFontDecorationMetrics(ruleFont.requestedFamily, ruleFont.weight, ruleFont.style)
+            : undefined;
           underline = {
             base: selectedMetric('M'),
             probe: selectedMetric('_'),
+            ...(ruleGeometry ? { fontRule: { geometry: ruleGeometry, sizePt: tab.fontSize } } : {}),
             color: richRun?.underlineColor && richRun.underlineColor !== 'auto'
               ? `#${richRun.underlineColor}` : textColor,
             ...(richRun?.underlineStyle ? { authoredStyle: richRun.underlineStyle } : {}),
@@ -2816,7 +2852,8 @@ function planMeasuredLines(
             measuredWidthPt: image.measuredWidth,
             widthPt: image.widthPt,
             heightPt: image.heightPt,
-            topOffsetPt: -image.heightPt,
+            topOffsetPt: -image.heightPt + (image.inlineOffsetYPt ?? 0),
+            ...(image.inlineOffsetXPt ? { leftOffsetPt: image.inlineOffsetXPt } : {}),
           });
           sourceOffset = Math.max(sourceOffset, segmentOffset + occurrenceLength);
           continue;

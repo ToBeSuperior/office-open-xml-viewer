@@ -3,8 +3,9 @@ import type { Fill, GradientFill, PatternFill, Stroke } from '../types/common';
 import { buildPatternBitmap } from './pattern-bitmaps';
 import { resolveStrokeGeometry, type ResolvedStrokeGeometry } from './stroke-geometry';
 import { createAuxCanvasForContext } from '../canvas/aux-canvas';
-import { resolvePathShade, type FillOutline, type ShadeBox } from './path-gradient';
+import { pathShadeWorkspaceBytes, resolvePathShade, type FillOutline, type ShadeBox } from './path-gradient';
 import { hostStrokeBounds, paintPathSource } from './paint-bounds';
+import { brushSurfaceUnavailable } from '../canvas/strict-brush-surface';
 
 const MAX_GRADIENT_TILE_EDGE = 512;
 
@@ -54,7 +55,7 @@ function tiledGradient(
   const baseH = Math.max(1, Math.ceil(Math.abs(tileH) * scale));
   const base = createAuxCanvasForContext(ctx, baseW, baseH);
   const baseCtx = base?.getContext('2d');
-  if (!base || !baseCtx) return null;
+  if (!base || !baseCtx) return brushSurfaceUnavailable();
   const tileFill = { ...fill, tileRect: undefined, flip: undefined, rotWithShape: true };
   // Tiled rect/shape shades are outside the measured untiled model (#1599).
   // ECMA-376 §20.1.8.31 and [MS-OE376] §2.1.1377 differ on the focus frame;
@@ -64,7 +65,7 @@ function tiledGradient(
   const basePaint = fill.gradType === 'radial'
     ? nativeRadialFill(tileFill, baseCtx as CanvasRenderingContext2D, { x: 0, y: 0, w: baseW, h: baseH })
     : resolveFill(tileFill, baseCtx as CanvasRenderingContext2D, 0, 0, baseW, baseH, shapeRotationDeg);
-  if (!basePaint) return null;
+  if (!basePaint) return brushSurfaceUnavailable();
   baseCtx.fillStyle = basePaint;
   baseCtx.fillRect(0, 0, baseW, baseH);
 
@@ -76,7 +77,7 @@ function tiledGradient(
     const repeatH = baseH * (flipY ? 2 : 1);
     const repeat = createAuxCanvasForContext(ctx, repeatW, repeatH);
     const repeatCtx = repeat?.getContext('2d');
-    if (!repeat || !repeatCtx) return null;
+    if (!repeat || !repeatCtx) return brushSurfaceUnavailable();
     for (let row = 0; row < (flipY ? 2 : 1); row += 1) {
       for (let col = 0; col < (flipX ? 2 : 1); col += 1) {
         repeatCtx.save();
@@ -89,7 +90,7 @@ function tiledGradient(
     patternSource = repeat;
   }
   const pattern = ctx.createPattern(patternSource, 'repeat');
-  if (!pattern || typeof pattern.setTransform !== 'function') return null;
+  if (!pattern || typeof pattern.setTransform !== 'function') return brushSurfaceUnavailable();
   pattern.setTransform(counterRotatedFillTransform({
     a: tileW / baseW,
     b: 0,
@@ -200,6 +201,17 @@ export function relativeLuma(hex: string): number {
 export function autoContrastColor(bgHex: string | null): '#000000' | '#FFFFFF' {
   if (!bgHex) return '#000000';
   return relativeLuma(bgHex) < 128 ? '#FFFFFF' : '#000000';
+}
+
+/** Bounded auxiliary surfaces used while producing one shared fill brush.
+ * This excludes the caller-owned destination canvas/readback and decoded
+ * image, which are charged by the image owner/effect planner separately. */
+export function fillPaintWorkspaceBytes(fill: Readonly<Pick<Fill, 'fillType'>> & { readonly gradType?: string; readonly path?: string; readonly tileRect?: unknown }): number {
+  if (fill.fillType === 'pattern') return 64 * 64 * 4;
+  if (fill.fillType !== 'gradient') return 0;
+  if (fill.tileRect) return MAX_GRADIENT_TILE_EDGE ** 2 * 4 * 5;
+  if (fill.gradType === 'radial' && (fill.path === 'shape' || fill.path === 'rect')) return pathShadeWorkspaceBytes();
+  return 0;
 }
 
 /**

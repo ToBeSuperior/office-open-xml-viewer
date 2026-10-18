@@ -16,7 +16,7 @@ vi.mock('@silurus/ooxml-core', async (importOriginal) => {
   };
 });
 
-import { renderSlide } from './renderer.js';
+import { renderSlide, renderSlideWithEmbeddedFonts } from './renderer.js';
 
 function pngHeader(width: number, height: number): Uint8Array {
   const bytes = new Uint8Array(26);
@@ -57,6 +57,22 @@ describe('PPTX display-sized picture decode', () => {
   beforeEach(() => {
     coreMocks.decode.mockReset();
     coreMocks.decode.mockResolvedValue(coreMocks.bitmap);
+  });
+
+  it('routes SVG-only ordered effects through the pixel decoder with the worker SVG capability', async () => {
+    const svgDecoder = vi.fn();
+    const blipEffects = [{ type: 'luminance' as const, bright: .9, contrast: 0 }];
+    const slide = { index: 0, slideNumber: 1, background: null, elements: [{
+      type: 'picture', x: 0, y: 0, width: 914400, height: 914400,
+      rotation: 0, flipH: false, flipV: false,
+      imagePath: 'ppt/media/picture.svg', mimeType: 'image/svg+xml', blipEffects,
+    }] } as Slide;
+    await renderSlideWithEmbeddedFonts(canvas(), slide, 914400, 914400, {
+      width: 96, dpr: 1, fetchImage: async () => new Blob(), svgDecoder,
+    });
+    expect(coreMocks.decode).toHaveBeenCalledWith('ppt/media/picture.svg', 'image/svg+xml',
+      expect.objectContaining({ effects: blipEffects, duotone: null }), expect.any(Function),
+      expect.objectContaining({ svgDecoder, targetWidthPx: 96, targetHeightPx: 96 }));
   });
 
   it('labels an opaque legacy PICT picture without invoking a decoder, and keeps other pictures', async () => {

@@ -1,6 +1,6 @@
 use ooxml_common::blip::{
-    blip_embed_rid, mime_from_ext, parse_blip_alpha, parse_blip_duotone, parse_blip_effects,
-    parse_src_rect, svg_blip_rid, BlipEffect, Duotone,
+    blip_embed_rid, mime_from_ext, parse_blip_duotone, parse_blip_effects, parse_src_rect,
+    svg_blip_rid, BlipEffect, Duotone,
 };
 use ooxml_common::depth::{parse_guarded, DepthGuard};
 use ooxml_common::drawing::{parse_xsd_bool, DrawingGroupSpec, DrawingGroupTransform, DrawingRect};
@@ -1498,6 +1498,9 @@ pub(crate) struct DocxBodyCursor {
     body_finished: bool,
     terminal_emitted: bool,
     degraded_theme: ThemeColors,
+    /// Shape types defined by the body blocks pulled so far (the body streams
+    /// block by block, while Word defines a shape type once per part).
+    vml_shape_types: VmlShapeTypeIndex,
 }
 
 pub(crate) struct DocumentCursorFailure {
@@ -1628,6 +1631,7 @@ impl DocxBodyCursor {
             body_finished: false,
             terminal_emitted: false,
             degraded_theme,
+            vml_shape_types: VmlShapeTypeIndex::default(),
         })
     }
 
@@ -1728,21 +1732,27 @@ impl DocxBodyCursor {
                 .environment
                 .as_mut()
                 .ok_or_else(|| "document body cursor environment is unavailable".to_string())?;
-            let mut body = self.semantic.parse_block(
-                root,
-                is_final_body_sect_pr,
-                &environment.style_map,
-                &mut environment.num_map,
-                &environment.media_map,
-                &environment.chart_map,
-                &environment.rel_map,
-                &environment.theme,
-                &section_hf,
-                TablePositioningContext::Normal,
-                self.table_sequences[block.ordinal],
-                self.emitted_body_len,
-                Some(&mut self.diagnostics),
-            );
+            let semantic = &mut self.semantic;
+            let diagnostics = &mut self.diagnostics;
+            let table_sequence = self.table_sequences[block.ordinal];
+            let emitted_body_len = self.emitted_body_len;
+            let mut body = with_vml_shape_types(&mut self.vml_shape_types, root, || {
+                semantic.parse_block(
+                    root,
+                    is_final_body_sect_pr,
+                    &environment.style_map,
+                    &mut environment.num_map,
+                    &environment.media_map,
+                    &environment.chart_map,
+                    &environment.rel_map,
+                    &environment.theme,
+                    &section_hf,
+                    TablePositioningContext::Normal,
+                    table_sequence,
+                    emitted_body_len,
+                    Some(diagnostics),
+                )
+            });
             self.revisions.extend(collect_revisions(root));
 
             if self.pending_cover_break && !body.is_empty() {
@@ -4380,6 +4390,44 @@ impl BodyParseCursor {
 
 #[allow(clippy::too_many_arguments)]
 fn parse_body_elements_in_story(
+    body_node: roxmltree::Node,
+    style_map: &StyleMap,
+    num_map: &mut NumberingMap,
+    media_map: &HashMap<String, String>,
+    chart_map: &ChartMap,
+    rel_map: &HashMap<String, String>,
+    theme: &ThemeColors,
+    section_hf: &HashMap<roxmltree::NodeId, ResolvedSectionHf>,
+    table_positioning_context: TablePositioningContext,
+    diagnostics: Option<&mut Vec<ParseDiagnostic>>,
+    split_pg_break_and_para_mark: bool,
+) -> Vec<BodyElement> {
+    // A story nested in another (a text box, a table cell's content) shares
+    // its host's shape types; an outermost story indexes its own.
+    let parse = || {
+        parse_story_body_elements(
+            body_node,
+            style_map,
+            num_map,
+            media_map,
+            chart_map,
+            rel_map,
+            theme,
+            section_hf,
+            table_positioning_context,
+            diagnostics,
+            split_pg_break_and_para_mark,
+        )
+    };
+    if vml_shape_types_active() {
+        parse()
+    } else {
+        with_vml_shape_types(&mut VmlShapeTypeIndex::default(), body_node, parse)
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn parse_story_body_elements(
     body_node: roxmltree::Node,
     style_map: &StyleMap,
     num_map: &mut NumberingMap,
@@ -8839,6 +8887,9 @@ struct InlineBlip {
     alpha: Option<f64>,
     width_pt: f64,
     height_pt: f64,
+    rotation: f64,
+    flip_h: bool,
+    flip_v: bool,
 }
 
 /// Resolve a single picture drawing: the first `<a:blip>` of the container's
@@ -8870,11 +8921,34 @@ fn resolve_inline_blip(
     // §20.1.8.23 duotone recolour, resolved through the document theme.
     let duotone = blip_fill.and_then(|bf| parse_blip_duotone_docx(bf, theme));
     let blip_effects = blip_fill
-        .map(|bf| parse_blip_effects_docx(bf, theme))
+        .map(|bf| parse_blip_effects_docx(bf, theme, media_map))
         .unwrap_or_default();
     // §20.1.8.6 alphaModFix opacity (fraction, or None when opaque).
-    let alpha = blip_fill.and_then(parse_blip_alpha);
+    let alpha = None; // Ordered blip effects bake alpha exactly once.
     let (width_pt, height_pt) = drawing_extent_points(container)?;
+    // ECMA-376 §20.2.2.6 pic:spPr / §20.1.7.6 a:xfrm supplies the
+    // picture's orientation. wp:extent owns layout size, while these facts
+    // own paint and rotWithShape=false inside the recursive blip evaluator.
+    // Restrict lookup to this blip's picture, never a nested text-box drawing.
+    let xfrm = blip_fill
+        .and_then(|fill| fill.parent())
+        .and_then(|picture| {
+            picture
+                .children()
+                .find(|n| n.is_element() && n.tag_name().name() == "spPr")
+        })
+        .and_then(|properties| {
+            properties
+                .children()
+                .find(|n| n.is_element() && n.tag_name().name() == "xfrm")
+        });
+    let rotation = xfrm
+        .and_then(|n| n.attribute("rot"))
+        .and_then(|v| v.parse::<i32>().ok())
+        .unwrap_or(0) as f64
+        / 60000.0;
+    let flip_h = xfrm.is_some_and(|n| matches!(n.attribute("flipH"), Some("1" | "true")));
+    let flip_v = xfrm.is_some_and(|n| matches!(n.attribute("flipV"), Some("1" | "true")));
     Some(InlineBlip {
         image_path,
         mime_type,
@@ -8885,6 +8959,9 @@ fn resolve_inline_blip(
         alpha,
         width_pt,
         height_pt,
+        rotation,
+        flip_h,
+        flip_v,
     })
 }
 
@@ -9439,6 +9516,9 @@ fn parse_drawing_container(
             alpha,
             width_pt,
             height_pt,
+            rotation,
+            flip_h,
+            flip_v,
         } = match resolve_inline_blip(container, media_map, theme) {
             Some(b) => b,
             None => {
@@ -9454,9 +9534,9 @@ fn parse_drawing_container(
             src_rect,
             width_pt,
             height_pt,
-            rotation: 0.0,
-            flip_h: false,
-            flip_v: false,
+            rotation,
+            flip_h,
+            flip_v,
             anchor: false,
             anchor_x_pt: 0.0,
             anchor_y_pt: 0.0,
@@ -9692,6 +9772,9 @@ fn parse_drawing_container(
         alpha,
         width_pt,
         height_pt,
+        rotation,
+        flip_h,
+        flip_v,
     } = match resolve_inline_blip(container, media_map, theme) {
         Some(b) => b,
         None => {
@@ -9707,9 +9790,9 @@ fn parse_drawing_container(
         src_rect,
         width_pt,
         height_pt,
-        rotation: 0.0,
-        flip_h: false,
-        flip_v: false,
+        rotation,
+        flip_h,
+        flip_v,
         anchor: true,
         anchor_x_pt: pos_x,
         anchor_y_pt: pos_y,
@@ -10754,10 +10837,10 @@ fn parse_group_pic(
         .and_then(|bf| parse_blip_duotone_docx(bf, theme));
     let blip_effects = blip
         .parent()
-        .map(|bf| parse_blip_effects_docx(bf, theme))
+        .map(|bf| parse_blip_effects_docx(bf, theme, media_map))
         .unwrap_or_default();
     // §20.1.8.6 alphaModFix opacity (fraction, or None when opaque).
-    let alpha = blip.parent().and_then(parse_blip_alpha);
+    let alpha = None; // Ordered blip effects bake alpha exactly once.
 
     // Parse a:clrChange if present — used to make a specific color transparent.
     // clrFrom specifies the source color; clrTo with alpha=0 means replace with transparent.
@@ -12305,16 +12388,51 @@ fn parse_vml_pict(
                 .any(|c| c.is_element() && c.tag_name().name() == "imagedata")
     })?;
 
-    let shape_type = shape
+    // A shape type is defined once per part and referenced by later shapes
+    // (ECMA-376 Part 4 §14.1.2.20 shapetype; Word writes it in the first
+    // w:pict that uses it): search this pict, then the definitions that
+    // precede the shape in its story.
+    let type_id = shape
         .attribute("type")
-        .map(|value| value.trim_start_matches('#'))
-        .and_then(|id| {
-            pict.descendants().find(|node| {
-                node.is_element()
-                    && node.tag_name().name() == "shapetype"
-                    && node.attribute("id") == Some(id)
-            })
-        });
+        .map(|value| value.trim_start_matches('#'));
+    let is_type = |node: &roxmltree::Node| {
+        node.is_element()
+            && node.tag_name().name() == "shapetype"
+            && type_id.is_some_and(|id| node.attribute("id") == Some(id))
+    };
+    let local_type = type_id.and_then(|_| pict.descendants().find(is_type));
+    let recorded = if local_type.is_none() {
+        type_id.and_then(|id| preceding_vml_shape_type(id, shape.range().start))
+    } else {
+        None
+    };
+    let recorded_doc = recorded.as_deref().and_then(|xml| parse_guarded(xml).ok());
+    let shape_type = local_type.or_else(|| {
+        recorded_doc
+            .as_ref()
+            .and_then(|doc| doc.root_element().children().find(is_type))
+    });
+    // A top-level shape whose authored CSS style is not position:absolute
+    // flows in the line as an inline object (ECMA-376 Part 4 §14.1.2.19
+    // style; Windows Word 16.0.20430 #1896 controls stack such WordArt shapes
+    // line by line and seat one on a text baseline). position:relative keeps
+    // that flow advance and offsets only the painted shape by left/top (CSS
+    // relative positioning); a static shape ignores them. Group children keep
+    // their group frame; a shape without a style keeps its placement.
+    let inline = shape.attribute("style").and_then(|style| {
+        let position = vml_css_str(style, "position");
+        if position.is_some_and(|value| value.eq_ignore_ascii_case("absolute")) {
+            return None;
+        }
+        if !position.is_some_and(|value| value.eq_ignore_ascii_case("relative")) {
+            return Some((0.0, 0.0));
+        }
+        let coordinates = VmlStyleCoordinates::for_node(shape);
+        Some((
+            coordinates.css_length(style, "left").unwrap_or(0.0),
+            coordinates.css_length(style, "top").unwrap_or(0.0),
+        ))
+    });
     parse_vml_shape(
         style_map,
         num_map,
@@ -12327,6 +12445,163 @@ fn parse_vml_pict(
         (1.0, 1.0),
         depth,
     )
+    .map(|mut run| {
+        if let Some((offset_x_pt, offset_y_pt)) = inline {
+            run.inline = true;
+            run.inline_offset_x_pt = offset_x_pt;
+            run.inline_offset_y_pt = offset_y_pt;
+        }
+        run
+    })
+}
+
+/// VML shape types a story defines, by id (ECMA-376 Part 4 §14.1.2.20).
+/// Each definition is kept as standalone XML that re-declares every namespace
+/// in scope at its element, so it parses outside its source document.
+#[derive(Default)]
+pub(crate) struct VmlShapeTypeIndex {
+    types: HashMap<String, RecordedVmlShapeType>,
+    bytes: usize,
+}
+
+struct RecordedVmlShapeType {
+    xml: String,
+    /// Byte offset in the document being parsed; `None` once that document
+    /// is an earlier streamed block.
+    start: Option<usize>,
+}
+
+const VML_SHAPE_TYPE_ENTRY_LIMIT: usize = 256;
+const VML_SHAPE_TYPE_BYTE_LIMIT: usize = 64 * 1024;
+const VML_SHAPE_TYPE_TOTAL_BYTE_LIMIT: usize = 1024 * 1024;
+
+impl VmlShapeTypeIndex {
+    /// Record the definitions of `root`, one pass in document order. The
+    /// first definition of an id wins; earlier documents' entries now precede
+    /// every shape.
+    fn index(&mut self, root: roxmltree::Node) {
+        for recorded in self.types.values_mut() {
+            recorded.start = None;
+        }
+        let input = root.document().input_text();
+        for node in root
+            .descendants()
+            .filter(|node| node.is_element() && node.tag_name().name() == "shapetype")
+        {
+            let Some(id) = node.attribute("id") else {
+                continue;
+            };
+            let Some(source) = input.get(node.range()) else {
+                continue;
+            };
+            if self.types.contains_key(id) || self.types.len() >= VML_SHAPE_TYPE_ENTRY_LIMIT {
+                continue;
+            }
+            // Size the whole recorded entry, namespace declarations included,
+            // before allocating it.
+            let escaped_len = |uri: &str| {
+                uri.len()
+                    + uri.chars().fold(0, |extra, character| {
+                        extra
+                            + match character {
+                                '&' => 4,
+                                '<' => 3,
+                                '"' => 5,
+                                _ => 0,
+                            }
+                    })
+            };
+            let namespaces = || {
+                node.namespaces()
+                    .filter(|namespace| namespace.name() != Some("xml"))
+            };
+            let length = namespaces().fold(
+                "<recorded>".len() + source.len() + "</recorded>".len(),
+                |length, namespace| {
+                    length.saturating_add(
+                        " xmlns=\"\"".len()
+                            + namespace.name().map_or(0, |prefix| prefix.len() + 1)
+                            + escaped_len(namespace.uri()),
+                    )
+                },
+            );
+            if length > VML_SHAPE_TYPE_BYTE_LIMIT
+                || self.bytes.saturating_add(length) > VML_SHAPE_TYPE_TOTAL_BYTE_LIMIT
+            {
+                continue;
+            }
+            let mut xml = String::with_capacity(length);
+            xml.push_str("<recorded");
+            for namespace in namespaces() {
+                xml.push_str(" xmlns");
+                if let Some(prefix) = namespace.name() {
+                    xml.push(':');
+                    xml.push_str(prefix);
+                }
+                xml.push_str("=\"");
+                for character in namespace.uri().chars() {
+                    match character {
+                        '&' => xml.push_str("&amp;"),
+                        '<' => xml.push_str("&lt;"),
+                        '"' => xml.push_str("&quot;"),
+                        _ => xml.push(character),
+                    }
+                }
+                xml.push('"');
+            }
+            xml.push('>');
+            xml.push_str(source);
+            xml.push_str("</recorded>");
+            debug_assert_eq!(xml.len(), length);
+            self.bytes += xml.len();
+            self.types.insert(
+                id.to_string(),
+                RecordedVmlShapeType {
+                    xml,
+                    start: Some(node.range().start),
+                },
+            );
+        }
+    }
+}
+
+std::thread_local! {
+    /// The index of the story being parsed. Installed only for the duration
+    /// of one parse, so interleaved document cursors never share it.
+    static ACTIVE_VML_SHAPE_TYPES: std::cell::RefCell<Option<VmlShapeTypeIndex>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+fn vml_shape_types_active() -> bool {
+    ACTIVE_VML_SHAPE_TYPES.with(|active| active.borrow().is_some())
+}
+
+/// Index `root` into `index`, then run `parse` with it installed.
+fn with_vml_shape_types<R>(
+    index: &mut VmlShapeTypeIndex,
+    root: roxmltree::Node,
+    parse: impl FnOnce() -> R,
+) -> R {
+    index.index(root);
+    let previous =
+        ACTIVE_VML_SHAPE_TYPES.with(|active| active.replace(Some(std::mem::take(index))));
+    let result = parse();
+    *index = ACTIVE_VML_SHAPE_TYPES
+        .with(|active| active.replace(previous))
+        .unwrap_or_default();
+    result
+}
+
+fn preceding_vml_shape_type(id: &str, shape_start: usize) -> Option<String> {
+    ACTIVE_VML_SHAPE_TYPES.with(|active| {
+        active
+            .borrow()
+            .as_ref()?
+            .types
+            .get(id)
+            .filter(|recorded| recorded.start.is_none_or(|start| start < shape_start))
+            .map(|recorded| recorded.xml.clone())
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -13963,8 +14238,10 @@ fn parse_shape_fill(
                     src_rect: parse_src_rect(child),
                     fill_rect,
                     tile,
-                    alpha: parse_blip_alpha(child),
+                    // alphaModFix lives in the ordered chain (baked once).
+                    alpha: None,
                     duotone: parse_blip_duotone_docx(child, theme),
+                    blip_effects: parse_blip_effects_docx(child, theme, media_map),
                 }));
             }
             "noFill" => return FillSpec::NoFill,
@@ -14403,7 +14680,11 @@ fn parse_blip_duotone_docx(blip_fill: roxmltree::Node, theme: &ThemeColors) -> O
     )
 }
 
-fn parse_blip_effects_docx(blip_fill: roxmltree::Node, theme: &ThemeColors) -> Vec<BlipEffect> {
+fn parse_blip_effects_docx(
+    blip_fill: roxmltree::Node,
+    theme: &ThemeColors,
+    media_map: &HashMap<String, String>,
+) -> Vec<BlipEffect> {
     let mut effects = parse_blip_effects(
         blip_fill,
         &DocxSchemeResolver {
@@ -14412,27 +14693,8 @@ fn parse_blip_effects_docx(blip_fill: roxmltree::Node, theme: &ThemeColors) -> V
         },
         ooxml_common::color::TintMode::WordLiteral,
     );
-    // DOCX compatibility boundary, not full CT_Blip conformance (§20.1.8.13):
-    // alphaModFix (§20.1.8.6) still belongs to paint/globalAlpha. Feeding a
-    // clrChange (§20.1.8.16) to the shared RGB/alpha matcher would therefore
-    // compare the unmodulated source alpha. Keep the pre-existing DOCX path
-    // for this combination (grouped-picture chromakey; inline clrChange was
-    // unsupported), until ordered alpha is represented by the shared model.
-    let has_alpha = blip_fill.children().any(|blip| {
-        blip.tag_name().name() == "blip"
-            && blip
-                .children()
-                .any(|effect| effect.tag_name().name() == "alphaModFix")
-    });
-    let mut saw_duotone = false;
-    effects.retain(|effect| match effect {
-        BlipEffect::ColorChange { .. } => !has_alpha,
-        // The shared model has only one resolved palette (§20.1.8.23).
-        // Preserve DOCX's first-palette-once behavior: replaying it for later
-        // markers newly darkens/recolours pictures without resolving theirs.
-        // Distinct per-effect palettes remain unsupported.
-        BlipEffect::Duotone => !std::mem::replace(&mut saw_duotone, true),
-        _ => true,
+    ooxml_common::blip::resolve_blip_effect_images(&mut effects, &mut |rid| {
+        media_map.get(rid).cloned()
     });
     effects
 }
@@ -22519,6 +22781,7 @@ mod svg_blip_tests {
                       <a:duotone><a:srgbClr val="000000"/><a:srgbClr val="FFFFFF"/></a:duotone>
                       <a:lum bright="0" contrast="-50000"/>
                     </a:blip><a:stretch><a:fillRect/></a:stretch></pic:blipFill>
+                    <pic:spPr><a:xfrm rot="5400000" flipH="1" flipV="true"/></pic:spPr>
                   </pic:pic>
                 </a:graphicData></a:graphic>
               </wp:{container}>
@@ -22527,10 +22790,16 @@ mod svg_blip_tests {
             let doc = parse_from_bytes(&build_docx_with_media(&body)).expect("parse must succeed");
             let image = serde_json::to_value(only_image(&doc)).unwrap();
             assert_eq!(
+                image["rotation"], 90.0,
+                "{container} must retain the host orientation for recursive effects"
+            );
+            assert_eq!(image["flipH"], true);
+            assert_eq!(image["flipV"], true);
+            assert_eq!(
                 image["blipEffects"],
                 serde_json::json!([
                     {"type": "luminance", "bright": 0.9, "contrast": 0.0},
-                    {"type": "duotone"},
+                    {"type": "duotone", "clr1":"000000", "clr2":"FFFFFF"},
                     {"type": "luminance", "bright": 0.0, "contrast": -0.5}
                 ]),
                 "{container}"
@@ -22584,8 +22853,11 @@ mod svg_blip_tests {
         let data = build_docx_with_media(body);
         let doc = parse_from_bytes(&data).expect("parse must succeed");
         let img = only_image(&doc);
-        let a = img.alpha.expect("alphaModFix must populate alpha");
-        assert!((a - 0.60).abs() < 1e-9, "alpha={a}");
+        assert!(
+            img.alpha.is_none(),
+            "ordered alpha must not also be painted globally"
+        );
+        assert_eq!(img.blip_effects, vec![BlipEffect::AlphaModFix { amt: 0.6 }]);
     }
 
     /// A picture without an `<a:alphaModFix>` (and one at 100%) leaves `alpha`
@@ -28450,7 +28722,12 @@ mod inline_wps_shape_tests {
         assert_eq!(json["srcRect"]["b"], 0.25);
         assert_eq!(json["fillRect"]["l"], 0.1);
         assert_eq!(json["fillRect"]["r"], -0.07574);
-        assert_eq!(json["alpha"], 0.75);
+        // alphaModFix is an ordered effect, never also paint-time alpha.
+        assert!(json.get("alpha").is_none());
+        assert_eq!(
+            json["blipEffects"],
+            serde_json::json!([{"type": "alphaModFix", "amt": 0.75}])
+        );
     }
 
     #[test]
@@ -32025,9 +32302,220 @@ mod vml_pict_tests {
             Some(ShapeFill::Image {
                 duotone: Some(colors),
                 ..
-            }) => assert_eq!(colors.clr1, "d21d54"),
+            }) => assert_eq!(
+                (colors.clr1.as_str(), colors.clr2.as_str()),
+                ("12ced4", "d21d54")
+            ),
             other => panic!("expected patterned textpath ink, got {other:?}"),
         }
+    }
+
+    /// Word writes a shape type once, in the first w:pict that uses it; a
+    /// later shape in another w:pict references it by id. Such shapes are
+    /// inline objects when their style is not position:absolute.
+    #[test]
+    fn later_pict_resolves_an_earlier_shapetype_and_flows_inline() {
+        let body = format!(
+            r##"<w:document{ns}><w:body>
+              <w:p><w:r><w:pict>
+                <v:shapetype id="_x0000_t136" coordsize="21600,21600" o:spt="136" path="m@7,l@8,m@5,21600l@6,21600e">
+                  <v:path textpathok="t"/><v:textpath on="t" fitshape="t"/>
+                </v:shapetype>
+                <v:shape id="a" type="#_x0000_t136" style="width:144pt;height:36pt" fillcolor="red" stroked="f">
+                  <v:textpath string="ONE"/></v:shape>
+              </w:pict></w:r></w:p>
+              <w:p><w:r><w:pict>
+                <v:shape id="b" type="#_x0000_t136" style="width:144pt;height:36pt" fillcolor="blue" stroked="f">
+                  <v:textpath string="TWO"/></v:shape>
+              </w:pict></w:r></w:p>
+            </w:body></w:document>"##,
+            ns = VML_NS,
+        );
+        let shapes = shape_runs(&body, &HashMap::new());
+        assert_eq!(shapes.len(), 2);
+        assert!(shapes.iter().all(|shape| shape.text_path.is_some()));
+        assert!(shapes.iter().all(|shape| shape.inline));
+    }
+
+    fn vml_docx(document_xml: &str) -> Vec<u8> {
+        use std::io::Write;
+        use zip::write::SimpleFileOptions;
+        let mut bytes = Vec::new();
+        {
+            let mut writer = zip::ZipWriter::new(std::io::Cursor::new(&mut bytes));
+            crate::parser::write_test_content_types(&mut writer);
+            writer
+                .start_file("word/document.xml", SimpleFileOptions::default())
+                .unwrap();
+            writer.write_all(document_xml.as_bytes()).unwrap();
+            writer.finish().unwrap();
+        }
+        bytes
+    }
+
+    fn streamed_shapes(body: &[BodyElement]) -> Vec<&ShapeRun> {
+        body.iter()
+            .filter_map(|element| match element {
+                BodyElement::Paragraph(paragraph) => Some(paragraph.runs.iter()),
+                _ => None,
+            })
+            .flatten()
+            .filter_map(|run| match run {
+                DocRun::Shape(shape) => Some(shape.as_ref()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn two_block_wordart(fill: &str) -> String {
+        format!(
+            r##"<w:document{ns}><w:body>
+              <w:p><w:r><w:pict>
+                <v:shapetype id="_x0000_t136" coordsize="21600,21600" o:spt="136" fillcolor="{fill}" path="m@7,l@8,m@5,21600l@6,21600e">
+                  <v:path textpathok="t"/><v:textpath on="t" fitshape="t"/>
+                </v:shapetype>
+              </w:pict></w:r></w:p>
+              <w:p><w:r><w:pict>
+                <v:shape id="b" type="#_x0000_t136" style="width:144pt;height:36pt" stroked="f">
+                  <v:textpath string="TWO"/></v:shape>
+              </w:pict></w:r></w:p>
+            </w:body></w:document>"##,
+            ns = VML_NS,
+        )
+    }
+
+    /// The shape types of one streamed document never reach another cursor,
+    /// even when the cursors' pulls interleave; a definition-only w:pict
+    /// still defines its shape type for later blocks.
+    #[test]
+    fn interleaved_streamed_cursors_keep_their_own_shapetypes() {
+        let mut first = open_zip(vml_docx(&two_block_wordart("#FF0000"))).unwrap();
+        let mut second = open_zip(vml_docx(&two_block_wordart("#0000FF"))).unwrap();
+        let mut first_cursor = DocxBodyCursor::start(&mut first).ok().unwrap();
+        let mut first_body = Vec::new();
+        if let StreamedDocumentUnit::Body { body } = first_cursor.next_unit(&mut first).unwrap() {
+            first_body.extend(body);
+        }
+        let mut second_cursor = DocxBodyCursor::start(&mut second).ok().unwrap();
+        let mut second_body = Vec::new();
+        while let StreamedDocumentUnit::Body { body } =
+            second_cursor.next_unit(&mut second).unwrap()
+        {
+            second_body.extend(body);
+        }
+        while let StreamedDocumentUnit::Body { body } = first_cursor.next_unit(&mut first).unwrap()
+        {
+            first_body.extend(body);
+        }
+        let first_shapes = streamed_shapes(&first_body);
+        let second_shapes = streamed_shapes(&second_body);
+        assert_eq!(first_shapes.len(), 1);
+        assert_eq!(second_shapes.len(), 1);
+        fn solid(shape: &ShapeRun) -> Option<String> {
+            match shape.fill.as_ref() {
+                Some(ShapeFill::Solid { color }) => Some(color.to_ascii_lowercase()),
+                _ => None,
+            }
+        }
+        assert_eq!(solid(first_shapes[0]).as_deref(), Some("ff0000"));
+        assert_eq!(solid(second_shapes[0]).as_deref(), Some("0000ff"));
+    }
+
+    /// A recorded shape type keeps the namespace bindings in scope at its
+    /// definition, including prefixes bound on an ancestor element.
+    #[test]
+    fn recorded_shapetype_keeps_inherited_namespace_prefixes() {
+        let document = r##"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:vv="urn:schemas-microsoft-com:vml" xmlns:oo="urn:schemas-microsoft-com:office:office"><w:body>
+              <w:p><w:r><w:pict>
+                <vv:shapetype id="_x0000_t136" coordsize="21600,21600" oo:spt="136" path="m@7,l@8,m@5,21600l@6,21600e">
+                  <vv:path textpathok="t"/><vv:textpath on="t" fitshape="t"/>
+                </vv:shapetype>
+              </w:pict></w:r></w:p>
+              <w:p><w:r><w:pict>
+                <vv:shape id="b" type="#_x0000_t136" style="width:144pt;height:36pt" fillcolor="blue" stroked="f">
+                  <vv:textpath string="TWO"/></vv:shape>
+              </w:pict></w:r></w:p>
+            </w:body></w:document>"##;
+        let document = parse_streamed(&mut open_zip(vml_docx(document)).unwrap()).unwrap();
+        let shapes = streamed_shapes(&document.body);
+        assert_eq!(shapes.len(), 1);
+        assert!(shapes[0].text_path.is_some());
+    }
+
+    /// A shape type resolves only from a definition that precedes the shape
+    /// (or shares its w:pict), in the streamed and whole-story paths alike.
+    #[test]
+    fn shapetype_defined_after_its_shape_does_not_resolve() {
+        let body = format!(
+            r##"<w:document{ns}><w:body>
+              <w:p><w:r><w:pict>
+                <v:rect id="a" type="#later" style="width:20pt;height:30pt"/>
+              </w:pict></w:r><w:r><w:pict>
+                <v:shapetype id="later" fillcolor="#ff0000"/>
+                <v:rect id="b" type="#later" style="width:20pt;height:30pt"/>
+              </w:pict></w:r></w:p>
+              <w:p><w:r><w:pict>
+                <v:rect id="c" type="#later" style="width:20pt;height:30pt"/>
+              </w:pict></w:r></w:p>
+            </w:body></w:document>"##,
+            ns = VML_NS,
+        );
+        fn red(shape: &ShapeRun) -> bool {
+            matches!(shape.fill.as_ref(), Some(ShapeFill::Solid { color }) if color == "ff0000")
+        }
+        let shapes = shape_runs(&body, &HashMap::new());
+        assert_eq!(
+            shapes.iter().map(red).collect::<Vec<_>>(),
+            [false, true, true]
+        );
+        let document = parse_streamed(&mut open_zip(vml_docx(&body)).unwrap()).unwrap();
+        let streamed = streamed_shapes(&document.body);
+        assert_eq!(
+            streamed.iter().map(|shape| red(shape)).collect::<Vec<_>>(),
+            [false, true, true]
+        );
+    }
+
+    /// The per-definition byte bound covers the re-declared namespaces, so a
+    /// tiny shape type under a huge inherited namespace is not recorded.
+    #[test]
+    fn recorded_shapetype_bound_counts_inherited_namespaces() {
+        let uri = format!("urn:{}", "x".repeat(70 * 1024));
+        let document = format!(
+            r##"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:big="{uri}"><w:body>
+              <w:p><w:r><w:pict><v:shapetype id="t" fillcolor="#ff0000"/></w:pict></w:r></w:p>
+              <w:p><w:r><w:pict><v:rect type="#t" style="width:20pt;height:30pt"/></w:pict></w:r></w:p>
+            </w:body></w:document>"##
+        );
+        let mut index = VmlShapeTypeIndex::default();
+        let parsed = roxmltree::Document::parse(&document).unwrap();
+        index.index(parsed.root_element());
+        assert!(index.types.is_empty());
+        assert_eq!(index.bytes, 0);
+        let small = document.replace(&uri, "urn:small");
+        let parsed = roxmltree::Document::parse(&small).unwrap();
+        index.index(parsed.root_element());
+        assert_eq!(index.types.len(), 1);
+        assert_eq!(index.bytes, index.types["t"].xml.len());
+    }
+
+    /// CSS relative positioning keeps the inline flow advance and offsets the
+    /// painted shape by left/top; a static shape ignores both.
+    #[test]
+    fn relative_inline_vml_shape_keeps_its_paint_offset() {
+        let body = format!(
+            r##"<w:document{ns}><w:body><w:p>
+              <w:r><w:pict><v:rect style="position:relative;left:20pt;top:10pt;margin-left:5pt;width:30pt;height:12pt"/></w:pict></w:r>
+              <w:r><w:pict><v:rect style="left:20pt;top:10pt;width:30pt;height:12pt"/></w:pict></w:r>
+            </w:p></w:body></w:document>"##,
+            ns = VML_NS,
+        );
+        let shapes = shape_runs(&body, &HashMap::new());
+        assert_eq!(shapes.len(), 2);
+        assert!(shapes.iter().all(|shape| shape.inline));
+        let offset = |shape: &ShapeRun| (shape.inline_offset_x_pt, shape.inline_offset_y_pt);
+        assert_eq!(offset(&shapes[0]), (20.0, 10.0));
+        assert_eq!(offset(&shapes[1]), (0.0, 0.0));
     }
 
     /// ECMA-376 Part 4's transitional VML schema places `textpathok` on

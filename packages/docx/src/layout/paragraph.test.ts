@@ -860,6 +860,52 @@ describe('paragraphLayoutFromMeasurement retained authorities', () => {
     expect(node.drawings.every((drawing) => drawing.anchorLayer === undefined)).toBe(true);
   });
 
+  it('offsets a relative inline shape from its pen position without changing the advance', () => {
+    const inlineShape = (offsetXPt: number, offsetYPt: number) => ({
+      type: 'shape' as const,
+      inline: true,
+      widthPt: 20,
+      heightPt: 10,
+      inlineOffsetXPt: offsetXPt,
+      inlineOffsetYPt: offsetYPt,
+      anchorXPt: 7,
+      anchorYPt: 7,
+      anchorXFromMargin: false,
+      anchorYFromPara: false,
+      zOrder: 0,
+      subpaths: [],
+      presetGeometry: 'rect',
+      fill: { fillType: 'solid' as const, color: '009989' },
+      stroke: null,
+      textBlocks: [],
+    });
+    const offsetParagraph = {
+      ...paragraph,
+      runs: [inlineShape(0, 0), inlineShape(5, 3), inlineShape(0, 0)],
+    } as unknown as DocParagraph;
+    const placement = {
+      startYPt: 10, paragraphXPt: 10, availableWidthPt: 100, maximumYPt: 500,
+      suppressSpaceBefore: false,
+    };
+    const measurer = { context: measureContext, fontFamilyClasses: {} };
+    const environment = {
+      documentHasEastAsianText: false, pageWritingMode: 'horizontal-tb' as const,
+      pageIndex: 0, totalPages: 1,
+    };
+    const context = { ...acquisitionContext, tabStops: [] };
+    const measured = measureParagraph(offsetParagraph as never, context, placement, measurer, environment);
+    const node = paragraphLayoutFromMeasurement(offsetParagraph as never, {
+      id: 'relative-vml', source, flowDomainId: 'body', ordinaryFlow: true,
+      context, placement, measurer, environment, exclusions: [],
+    } as never, measured);
+    const placements = node.lines.flatMap((line) => line.placements)
+      .filter((item) => item.kind === 'drawing');
+    expect(placements.map((item) => item.bounds.xPt)).toEqual([10, 35, 50]);
+    expect(placements[1]!.bounds.yPt - placements[0]!.bounds.yPt).toBe(3);
+    expect(placements.map((item) => item.advancePt)).toEqual([20, 20, 20]);
+    expect(node.drawings.map((drawing) => drawing.flowBounds.xPt)).toEqual([10, 35, 50]);
+  });
+
   it('retains selected-face anchor-host metrics instead of font-size ratios', () => {
     const paragraph = {
       alignment: 'left', indentLeft: 0, indentRight: 0, indentFirst: 0,

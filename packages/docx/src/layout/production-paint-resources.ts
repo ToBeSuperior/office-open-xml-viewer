@@ -24,7 +24,7 @@ export function chartPaintResourceKey(source: import('./types.js').SourceRef): s
   return chartResourceKey(source);
 }
 
-type ImageDescriptorOptions = Partial<ImageRun> & Pick<ImagePaintResourceDescriptor, 'vmlFill' | 'vmlStrokePattern'>;
+type ImageDescriptorOptions = Partial<ImageRun> & Pick<ImagePaintResourceDescriptor, 'vmlFill' | 'vmlStrokePattern' | 'effectHost'>;
 
 type ImageDescriptorCandidate = Omit<ImagePaintResourceDescriptor, 'intrinsicSize' | 'mimeType'>;
 
@@ -51,6 +51,7 @@ function imageCandidate(
     ...(run.vmlStrokePattern === undefined ? {} : { vmlStrokePattern: run.vmlStrokePattern }),
     ...(run.vmlFill === undefined ? {} : { vmlFill: run.vmlFill }),
     ...(run.blipEffects?.length ? { blipEffects: run.blipEffects.map(effect => ({ ...effect })) } : {}),
+    ...(run.effectHost === undefined ? {} : { effectHost: { ...run.effectHost } }),
   };
 }
 
@@ -105,6 +106,14 @@ function collectDescriptorCandidates(
           }),
           ...(shape.fill.alpha === undefined ? {} : { alpha: shape.fill.alpha }),
           ...(shape.fill.duotone === undefined ? {} : { duotone: shape.fill.duotone }),
+          ...(shape.fill.blipEffects?.length ? {
+            blipEffects: shape.fill.blipEffects,
+            effectHost: {
+              rotation: shape.rotation, flipH: shape.flipH, flipV: shape.flipV,
+              ...(shape.fill.fillRect === undefined ? {} : { fillRect: { ...shape.fill.fillRect } }),
+              ...(shape.fill.tile ? { tileDpi: 96 } : {}),
+            },
+          } : {}),
           ...(shape.fill.vml === undefined ? {} : { vmlFill: shape.fill.vml }),
         },
       );

@@ -208,7 +208,57 @@ describe('PPTX ordinary-shape image fills', () => {
     expect(textRuns.mock.calls.map(([run]) => run.text).join('')).toBe('Picture fill text');
   });
 
+  it('samples a tiled effect chain at the fill DPI, independent of the shape size', async () => {
+    mocks.decode.mockClear();
+    mocks.decode.mockResolvedValue(mocks.image);
+    const { canvas } = recordingCanvas();
+    const effected = {
+      ...shape('ppt/media/dpi-tile.png'),
+      fill: {
+        fillType: 'image', imagePath: 'ppt/media/dpi-tile.png', mimeType: 'image/png', dpi: 192,
+        tile: { algn: 'tl', tx: 0, ty: 0, sx: 1, sy: 1, flip: 'none' },
+        blipEffects: [{ type: 'blur', radius: 12700, grow: false }],
+      },
+    };
+    await renderSlide(canvas, {
+      index: 0, slideNumber: 1, background: null, elements: [effected],
+    } as unknown as Slide, 9_144_000, 6_858_000, {
+      width: 960, dpr: 1,
+      fetchImage: vi.fn(async () => new Blob([pngHeader(16, 16) as BlobPart], { type: 'image/png' })),
+    }).catch(() => undefined); // tile painting needs a surface; only preparation is asserted
+    expect(mocks.decode).toHaveBeenCalledTimes(1);
+    const [, , transform, , options] = mocks.decode.mock.calls[0]!;
+    expect(transform).toMatchObject({ emuPerPixelX: 4762.5, emuPerPixelY: 4762.5 });
+    expect(options).toMatchObject({ widthPt: 0, heightPt: 0 });
+  });
+
+  it('rejects a tiled effect fill whose source inspection fails natively instead of omitting it', async () => {
+    mocks.decode.mockClear();
+    const { canvas } = recordingCanvas();
+    const effected = {
+      ...shape('ppt/media/effected-tile.png'),
+      fill: {
+        fillType: 'image', imagePath: 'ppt/media/effected-tile.png', mimeType: 'image/png', dpi: 96,
+        tile: { algn: 'tl', tx: 0, ty: 0, sx: 1, sy: 1, flip: 'none' },
+        blipEffects: [{ type: 'grayscale' }],
+      },
+    };
+    await expect(renderSlide(canvas, {
+      index: 0, slideNumber: 1, background: null, elements: [effected],
+    } as unknown as Slide, 9_144_000, 6_858_000, {
+      width: 960, dpr: 1,
+      fetchImage: vi.fn(async () => { throw new TypeError('native read failed'); }),
+    })).rejects.toMatchObject({ code: 'unsupported-image-effect' });
+    expect(mocks.decode).not.toHaveBeenCalled();
+  });
+
   it.each([false, true])('keeps a shared tile native-sized regardless of consumer order (%s)', async (reversed) => {
+    class TileCanvas {
+      getContext() { return recordingCanvas().ctx; }
+    }
+    vi.stubGlobal('OffscreenCanvas', TileCanvas);
+    const target = recordingCanvas();
+    target.state.createPattern = () => ({});
     const shared = 'ppt/media/tile-and-stretch.png';
     const tiled = {
       ...shape(shared),
@@ -226,7 +276,7 @@ describe('PPTX ordinary-shape image fills', () => {
       },
     };
     mocks.decode.mockClear();
-    await renderSlide(recordingCanvas().canvas, {
+    await renderSlide(target.canvas, {
       index: 0, slideNumber: 1, background: null,
       elements: reversed ? [stretched, tiled] : [tiled, stretched],
     } as unknown as Slide, 9_144_000, 6_858_000, {
@@ -237,16 +287,17 @@ describe('PPTX ordinary-shape image fills', () => {
     expect(mocks.decode).toHaveBeenCalledTimes(1);
     expect(mocks.decode.mock.calls[0][4]).not.toHaveProperty('targetWidthPx');
     expect(mocks.decode.mock.calls[0][4]).not.toHaveProperty('targetHeightPx');
+    vi.unstubAllGlobals();
   });
 
   it.each([
     { sx: Number.POSITIVE_INFINITY, sy: 1, flip: 'none' },
   ])('rejects an unbounded tile auxiliary and restores caller state: %o', (tile) => {
     const { ctx, calls, state } = recordingCanvas();
-    expect(paintPreparedShapeImageFill(ctx, {
+    expect(() => paintPreparedShapeImageFill(ctx, {
       fillType: 'image', imagePath: 'ppt/media/huge.png', mimeType: 'image/png',
       dpi: 96, tile: { algn: 'tl', tx: 0, ty: 0, ...tile },
-    }, { image: mocks.image }, { x: 0, y: 0, w: 100, h: 100 }, 1)).toBe(false);
+    }, { image: mocks.image }, { x: 0, y: 0, w: 100, h: 100 }, 1)).toThrowError(expect.objectContaining({ code: 'unsupported-image-effect' }));
     expect(calls.some(([name]) => name === 'drawImage')).toBe(false);
     expect(state.globalAlpha).toBe(1);
   });

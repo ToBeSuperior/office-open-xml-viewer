@@ -47,6 +47,9 @@ export default defineConfig({
         // Keep core subpaths ahead of the package-root prefix alias; otherwise
         // Vite appends them to the root entry file (for example,
         // `src/index.ts/internal/resource-measurement`).
+        '@silurus/ooxml-core/internal/duotone-only-bitmap': fileURLToPath(
+          new URL('../packages/core/src/image/duotone-only-bitmap-by-path.ts', import.meta.url),
+        ),
         '@silurus/ooxml-core/internal/model-source': fileURLToPath(
           new URL('../packages/core/src/source/model-source.ts', import.meta.url),
         ),
@@ -61,6 +64,9 @@ export default defineConfig({
         ),
         '@silurus/ooxml-core/internal/office-auto-line': fileURLToPath(
           new URL('../packages/core/src/fonts/office-auto-line.ts', import.meta.url),
+        ),
+        '@silurus/ooxml-core/internal/font-decoration': fileURLToPath(
+          new URL('../packages/core/src/text/font-decoration.ts', import.meta.url),
         ),
         '@silurus/ooxml-core/internal/bounded-async-lru-cache': fileURLToPath(
           new URL('../packages/core/src/internal/bounded-async-lru-cache.ts', import.meta.url),

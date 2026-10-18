@@ -1,6 +1,7 @@
 import { counterRotatedFillTransform } from './fill-frame';
 import type { GradientFill, GradientStop } from '../types/common';
 import { createAuxCanvasForContext } from '../canvas/aux-canvas';
+import { brushSurfaceUnavailable } from '../canvas/strict-brush-surface';
 
 /** Append the fill-bearing outline; coordinates belong to the supplied box.
  * The caller owns beginPath. Decorative, unfilled paths must be excluded. */
@@ -531,7 +532,7 @@ export function resolvePathShade(
   const target = surface?.getContext('2d') as CanvasRenderingContext2D | null | undefined;
   const stops = [...fill.stops].sort((a, b) => a.position - b.position);
   const ramp = colorTable(ctx, stops);
-  if (!surface || !target || !ramp || typeof target.createImageData !== 'function') return null;
+  if (!surface || !target || !ramp || typeof target.createImageData !== 'function') return brushSurfaceUnavailable();
   const first = rgba(stops[0].color);
   const last = rgba(stops[stops.length - 1].color);
   // Keep the solver's double precision: Float32 can round s<1 to exactly 1
@@ -661,10 +662,18 @@ export function resolvePathShade(
   }
   target.putImageData(pixels, 0, 0);
   const pattern = ctx.createPattern(surface, 'no-repeat');
-  if (!pattern || typeof pattern.setTransform !== 'function') return null;
+  if (!pattern || typeof pattern.setTransform !== 'function') return brushSurfaceUnavailable();
   const auxToUser = multiply(userInverse, auxToDevice);
   pattern.setTransform(counterRotatedFillTransform({
     a: auxToUser[0], b: auxToUser[1], c: auxToUser[2], d: auxToUser[3], e: auxToUser[4], f: auxToUser[5],
   }, rotation, shapeBox.x + shapeBox.w / 2, shapeBox.y + shapeBox.h / 2));
   return pattern;
+}
+
+/** Conservative peak of this painter's bounded raster workspace: backing +
+ * ImageData + Float64 shade + two Int32 successor grids + Uint8 rank, and
+ * the 1024-color canvas/readback ramp. Callers with a whole-pipeline image
+ * quota charge this before calling resolveFill. */
+export function pathShadeWorkspaceBytes(): number {
+  return MAX_EDGE * MAX_EDGE * (4 + 4 + 8 + 4 + 4 + 1) + MAX_EDGE * (4 + 4 + 1) + 1024 * 8;
 }

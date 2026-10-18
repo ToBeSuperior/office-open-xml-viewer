@@ -566,7 +566,7 @@ describe('render-orchestrator image decode (lazy bytes)', () => {
     },
   );
 
-  it('excludes a chart whose finite frame overflows one usage before no-viewport aggregate gating', async () => {
+  it('propagates an overflowing chart usage before no-viewport aggregate decoding', async () => {
     const png = new Uint8Array(24);
     png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
     png.set([0x49, 0x48, 0x44, 0x52], 12);
@@ -581,7 +581,7 @@ describe('render-orchestrator image decode (lazy bytes)', () => {
       imagePath: 'xl/media/visible-overflow-gate.png',
       mimeType: 'image/png',
     };
-    const sourceCount = 257;
+    const sourceCount = 256;
     const overflowChart = {
       chartType: 'line',
       categories: Array.from({ length: sourceCount }, (_, index) => String(index)),
@@ -626,17 +626,11 @@ describe('render-orchestrator image decode (lazy bytes)', () => {
       new Blob([png as BlobPart], { type: mime }));
     const cache = new Map<string, CanvasImageSource | null>();
 
-    await prefetchImages(ws, cache, fetchImage, { effectiveDpr: 1 });
-
-    expect(fetchImage).toHaveBeenCalledOnce();
-    expect(fetchImage).toHaveBeenCalledWith('xl/media/visible-overflow-gate.png', 'image/png');
-    expect(decode).toHaveBeenCalledOnce();
-    expect(decode.mock.calls[0]?.[1]).toMatchObject({
-      resizeWidth: 4_096,
-      resizeQuality: 'high',
-    });
-    expect(cache.size).toBe(1);
-    expect(cache.has(chartImageFillKey(visibleFill))).toBe(true);
+    await expect(prefetchImages(ws, cache, fetchImage, { effectiveDpr: 1 }))
+      .rejects.toMatchObject({ code: 'unsupported-image-effect' });
+    expect(fetchImage).not.toHaveBeenCalled();
+    expect(decode).not.toHaveBeenCalled();
+    expect(cache.size).toBe(0);
   });
 
   it.each([false, true])(
@@ -706,6 +700,42 @@ describe('render-orchestrator image decode (lazy bytes)', () => {
     expect(cache.has('xl/media/image1.png')).toBe(true);
     expect(cache.has('xl/media/image2.png')).toBe(false);
     expect(fetchImage).toHaveBeenCalledTimes(1);
+  });
+
+  it('prefetchImages acquires an off-viewport picture whose CT_Blip outset may reach it', async () => {
+    vi.stubGlobal('createImageBitmap', vi.fn(async (blob: Blob) => new FakeBitmap(blob.type)));
+    const fetchImage = vi.fn(async (path: string, mime: string) =>
+      new Blob([new TextEncoder().encode(path)], { type: mime }));
+    const ws = worksheetWithImages();
+    const group = ws.shapeGroups![0]!;
+    group.nativeExtCx = group.nativeExtCy = 914400;
+    const leaf = group.shapes[0]!.geom;
+    if (leaf.type !== 'image') throw new Error('fixture leaf must be a picture');
+    const acquired = async (viewport: { row: number; col: number; rows: number; cols: number }) => {
+      fetchImage.mockClear();
+      leaf.blipEffects = [{ type: 'blur', radius: 12700, grow: true }, { type: 'alphaInv' }];
+      await prefetchImages(ws, new Map(), fetchImage, { viewport }).catch(() => undefined);
+      return fetchImage.mock.calls.map(([path]) => path).includes('xl/media/image2.png');
+    };
+    // A grown grid rounds to whole source pixels and alphaInv can make that
+    // margin opaque, so a nearby viewport acquires the off-viewport picture;
+    // a distant viewport still culls it.
+    expect(await acquired({ row: 1, col: 1, rows: 2, cols: 2 })).toBe(true);
+    expect(await acquired({ row: 2000, col: 2000, rows: 2, cols: 2 })).toBe(false);
+  });
+
+  it('prefetchImages keeps culling an off-viewport picture whose chain is pointwise', async () => {
+    vi.stubGlobal('createImageBitmap', vi.fn(async (blob: Blob) => new FakeBitmap(blob.type)));
+    const fetchImage = vi.fn(async (path: string, mime: string) =>
+      new Blob([new TextEncoder().encode(path)], { type: mime }));
+    const ws = worksheetWithImages();
+    const leaf = ws.shapeGroups![0]!.shapes[0]!.geom;
+    if (leaf.type !== 'image') throw new Error('fixture leaf must be a picture');
+    leaf.blipEffects = [{ type: 'grayscale' }, { type: 'alphaModFix', amt: 0.5 }];
+    await prefetchImages(ws, new Map(), fetchImage, {
+      viewport: { row: 1, col: 1, rows: 2, cols: 2 },
+    }).catch(() => undefined);
+    expect(fetchImage.mock.calls.map(([path]) => path)).not.toContain('xl/media/image2.png');
   });
 
   it('prefetchImages retains an off-cell anchor whose signed offset reaches the viewport', async () => {

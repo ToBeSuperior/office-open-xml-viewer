@@ -1212,6 +1212,11 @@ pub enum ShapeGeom {
         /// no effect. Remaps the leaf image along the `clr1`→`clr2` ramp.
         #[serde(skip_serializing_if = "Option::is_none")]
         duotone: Option<Duotone>,
+        /// Ordered CT_Blip effects (§20.1.8.13) on the leaf pic. Each duotone
+        /// carries its own palette and alphaModFix is baked at its authored
+        /// position, so the parser leaves `alpha` empty for parsed leaves.
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        blip_effects: Vec<BlipEffect>,
     },
 }
 
@@ -1435,6 +1440,12 @@ pub struct ImageAnchor {
     /// renderer remaps the image along the `clr1`→`clr2` luminance ramp.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duotone: Option<Duotone>,
+    /// Ordered CT_Blip effects (§20.1.8.13), shared with DOCX and PPTX. Each
+    /// duotone carries its own palette and alphaModFix (§20.1.8.6) is baked at
+    /// its authored position; parsed pictures therefore leave `alpha` empty.
+    /// Empty for a plain picture or a lone duotone (the legacy fast path).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub blip_effects: Vec<BlipEffect>,
 }
 
 /// ECMA-376 §20.1.8.55 `<a:srcRect>` source-image crop, shared across the docx,
@@ -1443,7 +1454,7 @@ pub use ooxml_common::blip::SrcRect;
 
 /// ECMA-376 §20.1.8.23 `<a:duotone>` image effect, shared across the docx, pptx
 /// and xlsx parsers (see `ooxml_common::blip`).
-pub use ooxml_common::blip::Duotone;
+pub use ooxml_common::blip::{BlipEffect, Duotone};
 
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]

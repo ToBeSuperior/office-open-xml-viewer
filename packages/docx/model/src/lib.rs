@@ -1961,6 +1961,13 @@ pub struct ShapeRun {
     /// participates in paragraph line flow like a glyph-sized drawing object.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub inline: bool,
+    /// Paint offset (pt) of an inline shape from its pen position: a VML
+    /// position:relative shape's left/top (ECMA-376 Part 4 §19.1.2.19). The
+    /// line advance is unchanged.
+    #[serde(skip_serializing_if = "is_zero_f64")]
+    pub inline_offset_x_pt: f64,
+    #[serde(skip_serializing_if = "is_zero_f64")]
+    pub inline_offset_y_pt: f64,
     /// pt
     pub width_pt: f64,
     /// pt
@@ -2372,6 +2379,12 @@ pub enum ShapeFill {
         alpha: Option<f64>,
         #[serde(skip_serializing_if = "Option::is_none")]
         duotone: Option<Duotone>,
+        /// Ordered CT_Blip effects (§20.1.8.13) of a DrawingML blipFill,
+        /// shared with pictures: alphaModFix is baked at its authored position
+        /// (so `alpha` stays empty) and each duotone owns its palette. VML
+        /// fills have no CT_Blip and leave this empty.
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        blip_effects: Vec<BlipEffect>,
         #[serde(skip_serializing_if = "Option::is_none")]
         vml: Option<VmlImageFill>,
     },
@@ -3269,10 +3282,9 @@ pub struct ImageRun {
     /// Ordered CT_Blip pixel effects, including §20.1.8.42 picture corrections.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub blip_effects: Vec<BlipEffect>,
-    /// ECMA-376 §20.1.8.6 `<a:blip><a:alphaModFix@amt>` opacity as a fraction
-    /// (0.0–1.0). `None` = fully opaque (the common case). When set, the renderer
-    /// multiplies the picture's `globalAlpha` by this fraction, exactly as the
-    /// pptx/xlsx picture paths do.
+    /// Legacy whole-picture opacity for model-source callers. The OOXML parser
+    /// emits alphaModFix in blip_effects and leaves this empty so subsequent
+    /// color/alpha replacements are not modulated a second time.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub alpha: Option<f64>,
     /// Wrap mode for anchor images. One of:

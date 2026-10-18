@@ -210,6 +210,7 @@ impl Store<'_> {
                 tile: None,
                 alpha: None,
                 duotone: None,
+                blip_effects: Vec::new(),
             }));
         }
         if let Some(gradient) = &shape.gradient {

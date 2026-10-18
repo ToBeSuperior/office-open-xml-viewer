@@ -230,7 +230,7 @@ export {
   symbolTextToUnicodeSegments,
   type SymbolTextSegment,
 } from './fonts/symbol-font';
-export { renderChart } from './chart/renderer';
+export { renderChart, collectChartFillRenderedSizes, assertChartFillRenderedSizeCount } from './chart/renderer';
 export { formatLocalizedExcelShortDate } from './chart/chart-number-format';
 export { autoResize, type AutoResizeOptions } from './autoResize';
 export {
@@ -279,8 +279,8 @@ export {
   type SvgImageSource,
   type SvgImageDecodeOptions,
 } from './image/svg-image-by-path';
-export { decodeSvgBlobOnMainThread } from './worker/svg-decode-bridge';
-export type { SvgBlobDecoder, SvgDecodeTarget } from './worker/svg-decode-bridge';
+export { decodeSvgBlobOnMainThread } from './image/svg-raster';
+export type { SvgBlobDecoder, SvgDecodeTarget } from './image/svg-raster';
 // Shared per-document decoded-raster owner: one weighted LRU, decode gate and
 // render-pass lease covers base blips, media posters, and derived effects across
 // all three renderers. `fetchImage` remains the compatibility owner by default,
@@ -316,6 +316,15 @@ export {
 } from './image/raster-blob-inspection';
 export {
   chartImageFillKey,
+  chartImageFillPixelTransform,
+  chartImageFillHostKey,
+  chartFillRenderedSize,
+  chartFillRenderedSizeKey,
+  chartImageFillNeedsRenderedSize,
+  chartImageFillStoreLookup,
+  type ChartFillRenderedSize,
+  type ChartFillRenderedSizeRequest,
+  type ChartImageFillHost,
   chartImageFillUsageSize,
   collectChartImageFillUsages,
   collectChartImageFillUsagesForCharts,
@@ -423,13 +432,20 @@ export {
 // CT_Blip pixel effects (grayscl, biLevel, clrChange) applied in document
 // order with the duotone, through the same decode cache.
 export {
-  applyBlipPixelEffects,
+  applyBlipPixelEffects, blipEffectImageFills, blipEffectsMayExtendCoverage, blipEffectsCoverageReach,
   assertBlipPixelEffectsBudget,
   blipLuminance,
   blipPixelEffectsKey,
   type BlipEffect,
+  type BlipEffectContainer,
+  type BlipEffectFill,
+  type BlipEffectImageFill,
   type BlipPixelEffects,
 } from './image/blip-effects';
+export type { BlendMode } from './image/blip-fill';
+export { imageEffectError } from './image/image-effect-error';
+export { srcRectHasVisibleArea, stretchedSourceFrame } from './image/crop';
+export { imageEffectFrame, imageEffectOutsetPeriods } from './image/image-effect-frame';
 export {
   getCachedDuotoneBitmapByPath,
   duotoneCacheKey,
@@ -827,3 +843,5 @@ export type { FindHighlightColors } from './search/find-highlight';
 
 export { resolveDrawingMLGeometry, requireResolvedDrawingMLGeometry, drawingMLGeometryBounds, type ResolvedDrawingMLGeometry } from './shape/drawingml-geometry';
 export { GeometryWorkBudgetError, type GeometryPath, type GeometryPathCommand } from './shape/path-data';
+
+export { hasImageEffectOutset } from './image/image-effect-frame.js';

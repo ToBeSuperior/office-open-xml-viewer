@@ -144,3 +144,25 @@ describe('drawUnderline (core, DrawingML ST_TextUnderlineType §20.1.10.82)', ()
     expect((h.ctx as unknown as { strokeStyle: string }).strokeStyle).toBe('#ff0000');
   });
 });
+
+describe('drawUnderline with the face rule (#1896 Windows PowerPoint controls)', () => {
+  // Arial at 48 pt: post underlinePosition -217, underlineThickness 150 / 2048.
+  const rule = { topPx: 217 / 2048 * 48, thicknessPx: 150 / 2048 * 48 };
+
+  it('centres the single rule on the face underline', () => {
+    const { ctx, ops } = makeCtx();
+    drawUnderline(ctx, 0, 100, 50, 48, '#000', 'sng', 1, undefined, rule);
+    const move = ops.find((op) => op.op === 'moveTo')!;
+    expect(move.args[1]).toBeCloseTo(100 + rule.topPx + rule.thicknessPx / 2, 0);
+    expect(ctx.lineWidth).toBeCloseTo(rule.thicknessPx, 6);
+  });
+
+  it('draws heavy 1.5x as thick with its bottom at the single rule centre', () => {
+    const { ctx, ops } = makeCtx();
+    drawUnderline(ctx, 0, 100, 50, 48, '#000', 'heavy', 1, undefined, rule);
+    const move = ops.find((op) => op.op === 'moveTo')!;
+    const singleCentre = 100 + rule.topPx + rule.thicknessPx / 2;
+    expect(ctx.lineWidth).toBeCloseTo(rule.thicknessPx * 1.5, 6);
+    expect(move.args[1] + ctx.lineWidth / 2).toBeCloseTo(singleCentre, 0);
+  });
+});
