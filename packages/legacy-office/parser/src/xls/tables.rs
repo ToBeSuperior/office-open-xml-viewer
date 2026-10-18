@@ -915,7 +915,10 @@ mod tests {
         // A built-in style in a theme-less workbook keeps the table and
         // reports why it is drawn without its style.
         let plain = project(
-            &records(&[feature(1, (8, 35), (1, 6)), style_info(1, 0x05, "TableStyleMedium2")]),
+            &records(&[
+                feature(1, (8, 35), (1, 6)),
+                style_info(1, 0x05, "TableStyleMedium2"),
+            ]),
             &mut Styles::default(),
             &context,
             &mut Vec::new(),
