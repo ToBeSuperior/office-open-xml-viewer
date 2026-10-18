@@ -71,8 +71,8 @@ export interface SheetAnchorRect {
  * call this one function so they always agree on the same rectangle.
  *
  * The top-left is always the `from` marker. The size is chosen as follows:
- * - Untagged (`anchorTag` absent: old models, VML/OLE previews, legacy binary
- *   conversion). Library compatibility policy, unchanged: use the complete
+ * - Untagged (`anchorTag` absent: old models, VML/OLE previews, producers
+ *   without DrawingML anchors). Library compatibility policy, unchanged: use the complete
  *   positive native extent when {@link usesNativeOneCellExtent}; otherwise use
  *   the `to` marker, including when only part of the native extent is present.
  * - `twoCellAnchor` (normative, ECMA-376 Part 1 §20.5.2.33). `from`/`to` is

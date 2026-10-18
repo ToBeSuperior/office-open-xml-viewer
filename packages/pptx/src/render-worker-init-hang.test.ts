@@ -19,6 +19,16 @@ const fontMocks = vi.hoisted(() => ({
 let bootstrapEmbeddedFonts: unknown[] = [];
 let extractedFontCount = 0;
 let subsetSlides: string[] | undefined;
+// Worker replies settle asynchronously. vi.waitFor's 1 s default expired on a
+// heavily loaded test host before the worker posted, so every wait states an
+// explicit budget. Each suite also allows for the first test importing the
+// worker module on such a host. No assertion
+// depends on the budget: a reply that never arrives still fails.
+const WORKER_REPLY_WAIT = { timeout: 10_000, interval: 10 } as const;
+const SUITE_OPTIONS = { timeout: 60_000 } as const;
+function settle(assertion: () => void): Promise<void> {
+  return vi.waitFor(assertion, WORKER_REPLY_WAIT);
+}
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((resolvePromise) => { resolve = resolvePromise; });
@@ -153,7 +163,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('pptx render-worker.ts — init failure never hangs a request (AR4)', () => {
+describe('pptx render-worker.ts — init failure never hangs a request (AR4)', SUITE_OPTIONS, () => {
   it('preflights a model-source cursor without initializing OOXML WASM', async () => {
     const archive = new FakePptxArchive(new Uint8Array());
     openSourceMock.mockResolvedValue({ archive, viewDefaults: {}, close: vi.fn() });
@@ -162,14 +172,14 @@ describe('pptx render-worker.ts — init failure never hangs a request (AR4)', (
       kind: 'parse', id: 40, buffer: new ArrayBuffer(4), resourcePolicy,
       source: modelSource, sourceOwnerUrl: './internal/worker-presentation-source.js',
     } } as MessageEvent);
-    await vi.waitFor(() => expect(fake.posted).toContainEqual(expect.objectContaining({
+    await settle(() => expect(fake.posted).toContainEqual(expect.objectContaining({
       kind: 'presentationReady', id: 40,
     })));
     expect(initMock).not.toHaveBeenCalled();
     expect(openSourceMock).toHaveBeenCalledTimes(1);
 
     fake.onmessage?.({ data: { kind: 'toMarkdown', id: 41 } } as MessageEvent);
-    await vi.waitFor(() => expect(fake.posted).toContainEqual(expect.objectContaining({
+    await settle(() => expect(fake.posted).toContainEqual(expect.objectContaining({
       kind: 'error', id: 41, message: 'Markdown conversion is unsupported for this source',
     })));
   });
@@ -186,7 +196,7 @@ describe('pptx render-worker.ts — init failure never hangs a request (AR4)', (
       kind: 'parse', id: 42, buffer: new ArrayBuffer(4), resourcePolicy,
       source: modelSource, sourceOwnerUrl: './internal/worker-presentation-source.js',
     } } as MessageEvent);
-    await vi.waitFor(() => expect(fake.posted).toContainEqual(expect.objectContaining({
+    await settle(() => expect(fake.posted).toContainEqual(expect.objectContaining({
       kind: 'error', id: 42, message: expect.stringContaining('render bootstrap trap'),
     })));
     expect(closeArchive).toHaveBeenCalledTimes(1);
@@ -201,7 +211,7 @@ describe('pptx render-worker.ts — init failure never hangs a request (AR4)', (
     fake.onmessage?.({
       data: { kind: 'parse', id: 9, buffer: new ArrayBuffer(4), resourcePolicy },
     } as MessageEvent);
-    await vi.waitFor(() => {
+    await settle(() => {
       expect(fake.posted.some((m) => (m as { kind?: string }).kind === 'error')).toBe(true);
     });
 
@@ -221,7 +231,7 @@ describe('pptx render-worker.ts — init failure never hangs a request (AR4)', (
     fake.onmessage?.({
       data: { kind: 'parse', id: 2, buffer: new ArrayBuffer(4), resourcePolicy },
     } as MessageEvent);
-    await vi.waitFor(() => {
+    await settle(() => {
       expect(fake.posted.some((m) => (m as { kind?: string }).kind === 'presentationReady')).toBe(true);
     });
 
@@ -262,7 +272,7 @@ describe('pptx render-worker.ts — init failure never hangs a request (AR4)', (
       data: { kind: 'parse', id: 22, buffer: new ArrayBuffer(4), resourcePolicy },
     } as MessageEvent);
 
-    await vi.waitFor(() => expect(added).toHaveLength(1));
+    await settle(() => expect(added).toHaveLength(1));
     expect(extractedFontCount).toBe(1);
     expect(added[0]).toMatchObject({
       family: expect.stringMatching(/^__ooxml_pptx_/),
@@ -284,13 +294,13 @@ describe('pptx render-worker.ts — init failure never hangs a request (AR4)', (
       data: { kind: 'parse', id: 13, buffer: new ArrayBuffer(4), resourcePolicy },
     } as MessageEvent);
 
-    await vi.waitFor(() => expect(fake.posted).toContainEqual(expect.objectContaining({
+    await settle(() => expect(fake.posted).toContainEqual(expect.objectContaining({
       kind: 'error',
       id: 13,
       code: 'ooxml-pptx-parse-already-started',
     })));
     init.resolve();
-    await vi.waitFor(() => expect(fake.posted).toContainEqual(expect.objectContaining({
+    await settle(() => expect(fake.posted).toContainEqual(expect.objectContaining({
       kind: 'presentationReady',
       id: 12,
     })));
@@ -309,21 +319,21 @@ describe('pptx render-worker.ts — init failure never hangs a request (AR4)', (
 
     send({ kind: 'init', wasmUrl: 'x' });
     send({ kind: 'parse', id: 30, buffer: new ArrayBuffer(4), resourcePolicy });
-    await vi.waitFor(() => expect(fake.posted).toContainEqual(expect.objectContaining({
+    await settle(() => expect(fake.posted).toContainEqual(expect.objectContaining({
       kind: 'presentationReady', id: 30,
     })));
     send({ kind: 'collectRuns', id: 31, slideIndex: 0, width: 100 });
-    await vi.waitFor(() => expect(fake.posted).toContainEqual(expect.objectContaining({
+    await settle(() => expect(fake.posted).toContainEqual(expect.objectContaining({
       kind: 'runsCollected', id: 31,
     })));
     expect(fontMocks.load).toHaveBeenCalledTimes(1);
 
     send({ kind: 'parse', id: 32, buffer: new ArrayBuffer(4), resourcePolicy });
-    await vi.waitFor(() => expect(fake.posted).toContainEqual(expect.objectContaining({
+    await settle(() => expect(fake.posted).toContainEqual(expect.objectContaining({
       kind: 'error', id: 32, code: 'ooxml-pptx-parse-already-started',
     })));
     send({ kind: 'collectRuns', id: 33, slideIndex: 0, width: 100 });
-    await vi.waitFor(() => expect(fake.posted).toContainEqual(expect.objectContaining({
+    await settle(() => expect(fake.posted).toContainEqual(expect.objectContaining({
       kind: 'runsCollected', id: 33,
     })));
 
@@ -338,7 +348,7 @@ describe('pptx render-worker.ts — init failure never hangs a request (AR4)', (
 });
 
 
-describe('Google subset readiness in progressive render owners', () => {
+describe('Google subset readiness in progressive render owners', SUITE_OPTIONS, () => {
   it.each(['default', 'source'] as const)('loads a later subset of an already requested family before publication (%s)', async (variant) => {
     subsetSlides = ['A', 'B'];
     initMock.mockResolvedValue(undefined);
@@ -361,18 +371,18 @@ describe('Google subset readiness in progressive render owners', () => {
     fake.onmessage?.({ data: { kind: 'parse', id: 71, buffer: new ArrayBuffer(4), resourcePolicy, useGoogleFonts: true, progressiveLayout: true,
       ...(variant === 'source' ? { source: modelSource, sourceOwnerUrl: './internal/worker-presentation-source.js' } : {}),
     } } as MessageEvent);
-    await vi.waitFor(() => expect(faces.map(f => f.loadCalls)).toEqual([0, 1]));
+    await settle(() => expect(faces.map(f => f.loadCalls)).toEqual([0, 1]));
     expect(fake.posted.some((m) => (m as { kind: string }).kind === 'presentationLayoutPartial')).toBe(false);
     a.resolve();
-    await vi.waitFor(() => expect(fake.posted).toContainEqual(expect.objectContaining({ kind: 'presentationLayoutPartial', availableSlides: 1 })));
+    await settle(() => expect(fake.posted).toContainEqual(expect.objectContaining({ kind: 'presentationLayoutPartial', availableSlides: 1 })));
     fake.onmessage?.({ data: { kind: 'continuePresentationPreflight', forId: 71, availableSlides: 1 } } as MessageEvent);
-    await vi.waitFor(() => expect(faces.map(f => f.loadCalls)).toEqual([1, 1]));
+    await settle(() => expect(faces.map(f => f.loadCalls)).toEqual([1, 1]));
     expect(fake.posted).not.toContainEqual(expect.objectContaining({ kind: 'presentationLayoutPartial', availableSlides: 2 }));
     b.resolve();
-    await vi.waitFor(() => expect(fake.posted).toContainEqual(expect.objectContaining({ kind: 'presentationLayoutPartial', availableSlides: 2 })));
+    await settle(() => expect(fake.posted).toContainEqual(expect.objectContaining({ kind: 'presentationLayoutPartial', availableSlides: 2 })));
     expect(faces).toHaveLength(2);
     fake.onmessage?.({ data: { kind: 'continuePresentationPreflight', forId: 71, availableSlides: 2 } } as MessageEvent);
-    await vi.waitFor(() => expect(fake.posted).toContainEqual(expect.objectContaining({ kind: 'presentationReady', id: 71 })));
+    await settle(() => expect(fake.posted).toContainEqual(expect.objectContaining({ kind: 'presentationReady', id: 71 })));
   });
 
   // Main mode never forwards renderer descriptors; the worker must load the
@@ -405,10 +415,10 @@ describe('Google subset readiness in progressive render owners', () => {
       renderers: { chartEx: { protocol: 'ooxml-worker-renderer-module/v1', builtin: 'chartEx' } },
       ...(variant === 'source' ? { source: modelSource, sourceOwnerUrl: './internal/worker-presentation-source.js' } : {}),
     });
-    await vi.waitFor(() => expect(fake.posted).toContainEqual(expect.objectContaining({ kind: 'presentationReady', id: 90 })));
+    await settle(() => expect(fake.posted).toContainEqual(expect.objectContaining({ kind: 'presentationReady', id: 90 })));
     // collectRuns awaits the worker's settled Google preload.
     send({ kind: 'collectRuns', id: 91, slideIndex: 0, width: 100 });
-    await vi.waitFor(() => expect(fake.posted).toContainEqual(expect.objectContaining({ kind: 'runsCollected', id: 91 })));
+    await settle(() => expect(fake.posted).toContainEqual(expect.objectContaining({ kind: 'runsCollected', id: 91 })));
     expect(faces.filter((f) => f.status === 'loaded').map((f) => f.source)).toEqual([expect.stringContaining('/a.woff2')]);
   });
 });

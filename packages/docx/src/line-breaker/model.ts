@@ -93,7 +93,7 @@ export interface LayoutTextSeg extends LayoutSegSource {
   /** Zero-advance anchor-character placeholder: contributes run metrics to the
    * line box but paints no glyph. */
   metricOnly?: true;
-  /** Native reserved-separator participant only (MS-DOC 2.3.3 rule control or
+  /** Reserved-separator participant only (rule control or
    * content mark): the bounded selected-face probe whose vertical metrics the
    * metric-only segment keeps. Never display text, glyph ownership, source
    * range length or inline width; other metric-only segments omit it. */

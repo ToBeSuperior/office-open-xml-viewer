@@ -119,10 +119,11 @@ describe('main-mode progressive load: onLayoutComplete contract', () => {
   });
 
   it('notifies completion exactly once after partials for a long document', async () => {
-    // Long enough to cross several page-count checkpoints: load() resolves on
-    // the opening publication and the drain keeps publishing. The completion
-    // callback fires once, after the last partial, never twice.
-    installMainModeParse(600);
+    // Long enough to cross two page-count checkpoints (five pages, published
+    // after one and three): load() resolves on the opening publication and the
+    // drain publishes a partial. The completion callback fires once, after the
+    // last partial, never twice.
+    installMainModeParse(30);
     const completions: unknown[] = [];
     const partials: number[] = [];
 

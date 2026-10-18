@@ -29,7 +29,7 @@ use crate::doc::{
     tokenize_with_fields, unsupported, Fields, Paragraph, Token,
 };
 use docx_model::{
-    DocxNote, NativeNoteSeparatorStoriesWire, NativeNoteSeparatorsWire, NoteLayoutSettingsWire,
+    DocxNote, NoteLayoutSettingsWire, ReservedNoteSeparatorStoriesWire, ReservedNoteSeparatorsWire,
 };
 
 mod separators;
@@ -160,13 +160,13 @@ pub(super) fn validate(
     }
     // MS-DOC 2.3.3/2.8.22 assigns story roles; 2.6.1 sprmCFSpec assigns
     // U+0003/U+0004 short/full semantics independently of those roles. Retain
-    // actual PAPX/CHPX and native provenance for the shared metric consumer.
+    // actual PAPX/CHPX for the shared reserved-separator metric consumer.
     // Footnote short/short is supported within its closed metric-only contract.
     // Numeric short-rule span remains the existing library layout policy;
     // admission does not claim Office-exact rule placement or width.
     let headers = headers
         .ok_or_else(|| unsupported("Word notes without separator stories are not supported"))?;
-    let mut native = NativeNoteSeparatorsWire::default();
+    let mut reserved = ReservedNoteSeparatorsWire::default();
     for (present, base) in [(footnotes, 0), (endnotes, 3)] {
         if !present {
             continue;
@@ -202,12 +202,12 @@ pub(super) fn validate(
         let slot = if base == 0 {
             settings.footnote_separator = ordinary.mark();
             settings.footnote_continuation_separator = continuation.mark();
-            &mut native.footnote
+            &mut reserved.footnote
         } else {
             settings.endnote_separator = ordinary.mark();
-            &mut native.endnote
+            &mut reserved.endnote
         };
-        *slot = Some(NativeNoteSeparatorStoriesWire {
+        *slot = Some(ReservedNoteSeparatorStoriesWire {
             separator: ordinary.into_wire()?,
             continuation_separator: continuation.into_wire()?,
             continuation_notice: notice.into_wire()?,
@@ -215,8 +215,8 @@ pub(super) fn validate(
     }
     // One new retained container per document. Moved payloads keep their
     // cumulative acquisition charges; nothing in it is a second copy.
-    budget.charge(std::mem::size_of::<NativeNoteSeparatorsWire>())?;
-    settings.native_separators = Some(Box::new(native));
+    budget.charge(std::mem::size_of::<ReservedNoteSeparatorsWire>())?;
+    settings.reserved_separators = Some(Box::new(reserved));
     Ok(Some(settings))
 }
 
@@ -485,7 +485,7 @@ mod tests {
                 settings.footnote_continuation_separator,
                 Some(docx_model::NoteSeparatorMark::Short)
             );
-            let stories = settings.native_separators.unwrap().footnote.unwrap();
+            let stories = settings.reserved_separators.unwrap().footnote.unwrap();
             let continuation = stories.continuation_separator.rule.unwrap();
             assert_eq!(
                 continuation.mark,
@@ -517,8 +517,8 @@ mod tests {
     }
 
     #[test]
-    fn admitted_separator_formatting_moves_into_the_private_wire() {
-        use docx_model::{NativeNoteSeparatorStoryClass as Class, NoteSeparatorMark as Mark};
+    fn admitted_separator_formatting_moves_into_the_shared_wire() {
+        use docx_model::NoteSeparatorMark as Mark;
         for notice in ["", "\r\r"] {
             let bytes = styled_source(notice);
             let cfb = CompoundFile::open(&bytes).unwrap();
@@ -527,27 +527,17 @@ mod tests {
             // Retention leaves the scalar marks that select the drawn rule.
             assert_eq!(settings.footnote_separator, Some(Mark::Short));
             assert_eq!(settings.footnote_continuation_separator, Some(Mark::Full));
-            let native = settings.native_separators.unwrap();
-            assert!(native.endnote.is_none());
-            let stories = native.footnote.unwrap();
-            for (story, mark, start) in [
-                (&stories.separator, Mark::Short, 0),
-                (&stories.continuation_separator, Mark::Full, 3),
+            let reserved = settings.reserved_separators.unwrap();
+            assert!(reserved.endnote.is_none());
+            let stories = reserved.footnote.unwrap();
+            for (story, mark) in [
+                (&stories.separator, Mark::Short),
+                (&stories.continuation_separator, Mark::Full),
             ] {
-                assert_eq!(story.class, Class::Rule);
-                assert_eq!(
-                    (story.content_start_cp, story.content_end_cp, story.guard_cp),
-                    (start, start + 2, Some(start + 2))
-                );
                 let rule = story.rule.as_ref().unwrap();
                 assert_eq!(rule.mark, Some(mark));
-                assert_eq!(rule.source.header_cp, start);
                 assert_eq!(rule.control.run.as_ref().unwrap().font_size, 14.0);
-                // The content paragraph mark is its own character, not the
-                // control and not the guard.
                 let paragraph = story.paragraph.as_ref().unwrap();
-                assert_eq!(paragraph.source.header_cp, start + 1);
-                assert_ne!(paragraph.source.fc, rule.source.fc);
                 assert_eq!(paragraph.paragraph.default_font_size, Some(14.0));
                 let content_mark = paragraph.content_mark.as_ref().unwrap();
                 assert_eq!(content_mark.run.as_ref().unwrap().font_size, 14.0);
@@ -555,17 +545,35 @@ mod tests {
             let notice_story = &stories.continuation_notice;
             assert!(notice_story.rule.is_none());
             if notice.is_empty() {
-                assert_eq!(notice_story.class, Class::Empty);
-                assert!(notice_story.guard_cp.is_none() && notice_story.paragraph.is_none());
+                assert!(notice_story.paragraph.is_none());
             } else {
-                assert_eq!(notice_story.class, Class::ParagraphOnly);
-                assert_eq!(notice_story.guard_cp, Some(7));
                 let paragraph = notice_story.paragraph.as_ref().unwrap();
-                assert_eq!(paragraph.source.header_cp, 6);
                 let content_mark = paragraph.content_mark.as_ref().unwrap();
                 assert_eq!(content_mark.run.as_ref().unwrap().font_size, 14.0);
             }
         }
+        // The content paragraph mark is its own character, not the control
+        // and not the guard: acquisition addresses them separately.
+        let bytes = styled_source("\r\r");
+        let cfb = CompoundFile::open(&bytes).unwrap();
+        crate::doc::with_acquired_doc(&cfb, |mut facts| {
+            let headers = facts.headers.as_ref().unwrap();
+            let mut budget = super::super::ModelBudget::new(1024 * 1024);
+            for (slot, start) in [(0, 0), (1, 3)] {
+                let story =
+                    super::separators::acquire(headers, slot, &mut facts.formatting, &mut budget)?;
+                assert_eq!(story.source.content_cp, start..start + 2);
+                assert_eq!(story.source.guard_cp, Some(start + 2));
+                assert_eq!(story.rule.as_ref().unwrap().source.cp, start);
+                assert_eq!(story.paragraph.as_ref().unwrap().source.cp, start + 1);
+            }
+            let notice =
+                super::separators::acquire(headers, 2, &mut facts.formatting, &mut budget)?;
+            assert_eq!(notice.source.guard_cp, Some(7));
+            assert_eq!(notice.paragraph.as_ref().unwrap().source.cp, 6);
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]
@@ -600,10 +608,10 @@ mod tests {
             .unwrap()
         };
         let (result, used) = validate(limit);
-        assert!(result.unwrap().unwrap().native_separators.is_some());
+        assert!(result.unwrap().unwrap().reserved_separators.is_some());
         // Moved paragraph/run payloads were charged by acquisition; only the
         // one boxed container is new.
-        let container = std::mem::size_of::<docx_model::NativeNoteSeparatorsWire>();
+        let container = std::mem::size_of::<docx_model::ReservedNoteSeparatorsWire>();
         assert_eq!(used, acquired + container);
         assert_eq!(validate(used - 1).0.unwrap_err(), "OUTPUT_TOO_LARGE");
     }
@@ -706,8 +714,8 @@ mod tests {
         assert_eq!(settings["footnoteContinuationSeparator"], "none");
         for role in ["separator", "continuationSeparator", "continuationNotice"] {
             assert_eq!(
-                settings["nativeSeparators"]["footnote"][role]["class"],
-                "empty"
+                settings["reservedSeparators"]["footnote"][role],
+                serde_json::json!({})
             );
         }
     }

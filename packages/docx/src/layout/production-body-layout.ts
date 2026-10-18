@@ -36,7 +36,7 @@ import type {
   FloatRegistryEntryPt,
   FloatRegistrySnapshotPt,
   DrawingMLCollisionEntryPt,
-  NativeSectionFlow,
+  SectionFlow,
   NoteLayout,
   NoteSeparatorLayout,
   ParagraphLayout,
@@ -79,11 +79,11 @@ import {
   noteSeparatorOccurrence,
   placeNoteSeparatorOccurrence,
   reservedNoteSeparatorRole,
-} from './native-note-separators.js';
+} from './reserved-note-separators.js';
 import { selectedNoteSeparatorRole } from './selected-note-separators.js';
 import { sourceKey } from './source-key.js';
 import type {
-  NativeNoteSeparatorDefinitionInput,
+  ReservedNoteSeparatorDefinitionInput,
   SelectedNoteSeparatorDefinitionInput,
 } from './body-layout-input.js';
 import {
@@ -194,7 +194,7 @@ export function createProductionBodyLayoutRuntime(
   ): string => `${imagePath}${colorReplaceFrom ? `|clr:${colorReplaceFrom}` : ''}`
     + `${duotone ? `|duo:${duotone.clr1}:${duotone.clr2}` : ''}`;
 /** Retained default separator band of the shared note story layout. It applies
- * only where no native reserved separator definition owns the note kind. */
+ * only where no reserved separator definition owns the note kind. */
 const FOOTNOTE_SEPARATOR_GAP_PT = 6;
 const BODY_HOST_FLOW_PAGE_TRANSLATION = Object.freeze({ xPt: 0, yPt: 0 });
 
@@ -227,9 +227,9 @@ function buildMeasureState(
   resolvedLocalFonts: Readonly<Record<string, ResolvedFontMetric>> = {},
   layoutServices: LayoutServices,
   layoutOptions?: LayoutOptions,
-  nativeSectionFlow?: NativeSectionFlow,
+  sectionFlow?: SectionFlow,
 ): BodyAcquisitionState {
-  const sectionLayout = resolveSectionLayoutContext(layoutSettings, section, nativeSectionFlow);
+  const sectionLayout = resolveSectionLayoutContext(layoutSettings, section, sectionFlow);
   // Acquisition always uses the document-scoped service owner supplied by the
   // private body kernel, so its text and vertical measurement capabilities have
   // one auditable lineage and fingerprint.
@@ -461,7 +461,7 @@ function buildMeasureState(
     // `physicalPageWidthPt` is the physical page width in canonical points.
     // The direction flags are getters on the current `sectionLayout`, so they
     // follow each owner section. An all-rotated `btLr` section (including a
-    // native BtoT section) keeps horizontal glyph metrics through
+    // bottomToTop section flow) keeps horizontal glyph metrics through
     // `verticalAllRotated`; only upright-vertical sections plan vertical
     // glyphs. The physical anchor frame is seeded here from the section this
     // state is built from and rebuilt from each acquisition location's own
@@ -481,12 +481,12 @@ function buildMeasureState(
 /** Physical page frame of one section context for DrawingML anchors and
  * upright tables, derived only from that context: its logical page box is
  * un-swapped with its own frame (the established clockwise mapping, or a
- * native flow's canonical matrix). Horizontal contexts have no frame. */
+ * section flow's canonical matrix). Horizontal contexts have no frame. */
 function physicalAnchorFrameOf(
   section: DeepReadonly<SectionLayoutContext>,
 ): PhysicalAnchorFrame | undefined {
   if (!isVerticalTextDirection(section.textDirection)) return undefined;
-  const phys = physicalSectionGeometry(section.geometry, section.nativeSectionFlow);
+  const phys = physicalSectionGeometry(section.geometry, section.sectionFlow);
   return {
     pageWidth: phys.pageWidth,
     pageHeight: phys.pageHeight,
@@ -495,7 +495,7 @@ function physicalAnchorFrameOf(
     marginTop: bodyMarginInsetPt(phys.marginTop),
     marginBottom: bodyMarginInsetPt(phys.marginBottom),
     physicalPageWidthPt: phys.pageWidth,
-    ...(section.nativeSectionFlow ? { nativeSectionFlow: section.nativeSectionFlow } : {}),
+    ...(section.sectionFlow ? { sectionFlow: section.sectionFlow } : {}),
   };
 }
 
@@ -691,7 +691,7 @@ function acquireBodyStoryLayout(
 ): StoryLayout {
   const { source, services } = dependencies;
   const root = bodyStoryRoot(source, request.source);
-  // A native reserved or DOCX selected separator root is a shared source
+  // A reserved or DOCX selected separator root is a shared source
   // definition, not a numbered (continued) note: it has no number and no note
   // cursor. Its closed run-free shape has no page-dependent content, so one
   // acquisition per width/section/font context serves every page occurrence.
@@ -863,7 +863,7 @@ function layoutBodyStory(
   // transform — the inverse of the transform that paints the story's layer
   // (a vertical section's note), the identity for a horizontal or upright
   // physical story. Margin facts are the ones this story's state holds. A
-  // native section flow selects its own (counter-clockwise) frame through
+  // section flow fact selects its own (counter-clockwise) frame through
   // sectionWritingMode and the same native physical geometry its anchors use
   // (physicalAnchorFrameOf); the text-direction token alone never decides it.
   const storyPageFrames = request.pageFrames ?? ((): StoryPageFrames => {
@@ -877,7 +877,7 @@ function layoutBodyStory(
     };
     const physical = writingMode === 'horizontal-tb'
       ? held
-      : physicalSectionGeometry(held, request.section.nativeSectionFlow);
+      : physicalSectionGeometry(held, request.section.sectionFlow);
     const toStory = physicalToLogicalMatrix(
       writingMode,
       { widthPt: physical.pageWidth, heightPt: physical.pageHeight },
@@ -1643,13 +1643,13 @@ function layoutBodyNotes(
       path: [],
     };
     const noteSettings = context.source.bodyLayoutInput.noteLayoutSettings;
-    // A native producer's reserved stories replace the scalar library band
+    // A producer's reserved stories replace the scalar library band
     // for their note kind. First-on-page ownership is singular; the role
     // (ordinary versus continuing) selects the definition, whose own mark
     // selects Short/Full.
-    const nativeDefinitions = noteSettings?.nativeSeparatorRoles?.[request.kind];
-    const leading = first && nativeDefinitions
-      ? acquireNativeNoteSeparator(context, request, nativeDefinitions[
+    const reservedDefinitions = noteSettings?.reservedSeparatorRoles?.[request.kind];
+    const leading = first && reservedDefinitions
+      ? acquireReservedNoteSeparator(context, request, reservedDefinitions[
         request.continuing === true ? 'continuationSeparator' : 'separator'
       ], noteTopPt, `${request.kind}:${id}:page:${request.pageIndex}:separator`)
       : undefined;
@@ -1659,7 +1659,7 @@ function layoutBodyNotes(
     // scalar policy below; the rule sits at the midpoint of the story's mark
     // line box, not in its spacing. Bare and missing stories keep the scalar
     // band, whose rule stays at the band midpoint.
-    const selectedDefinition = first && !nativeDefinitions && request.kind === 'footnote'
+    const selectedDefinition = first && !reservedDefinitions && request.kind === 'footnote'
       ? noteSettings?.footnoteSeparatorStories?.[
         request.continuing === true ? 'continuationSeparator' : 'separator'
       ]
@@ -1667,7 +1667,7 @@ function layoutBodyNotes(
     const selectedBand = selectedDefinition
       ? acquireSelectedNoteSeparatorBand(context, request, selectedDefinition, noteTopPt)
       : undefined;
-    const separatorHeightPt = nativeDefinitions
+    const separatorHeightPt = reservedDefinitions
       ? leading?.advancePt ?? 0
       : selectedBand?.advancePt ?? (first ? FOOTNOTE_SEPARATOR_GAP_PT : 0);
     const ruleYPt = noteTopPt + (selectedBand?.ruleOffsetPt ?? separatorHeightPt / 2);
@@ -1720,7 +1720,7 @@ function layoutBodyNotes(
     const separatorMode = request.kind === 'footnote'
       ? request.continuing ? noteSettings?.footnoteContinuationSeparator : noteSettings?.footnoteSeparator
       : noteSettings?.endnoteSeparator;
-    const separator = first && !nativeDefinitions && separatorMode !== 'none'
+    const separator = first && !reservedDefinitions && separatorMode !== 'none'
       ? Object.freeze([
           Object.freeze({
             edge: 'top' as const,
@@ -1796,13 +1796,13 @@ function layoutBodyNotes(
   return Object.freeze(notes);
 }
 
-/** Acquire one native reserved separator story at the band cursor through
+/** Acquire one reserved separator story at the band cursor through
  * the shared story/paragraph pipeline and project its page occurrence. An
  * empty, guard-only or fully hidden story owns no flow, so none is retained. */
-function acquireNativeNoteSeparator(
+function acquireReservedNoteSeparator(
   context: BodySessionDependencies,
   request: Parameters<NonNullable<BodyLayoutSession['layoutNotes']>>[0],
-  definition: NativeNoteSeparatorDefinitionInput,
+  definition: ReservedNoteSeparatorDefinitionInput,
   yPt: number,
   occurrenceId: string,
 ): NoteSeparatorLayout | undefined {
@@ -2696,12 +2696,12 @@ function acquireCompleteBodyTextBoxStory(
 ): ReturnType<CompleteTextBoxStoryAcquirer> {
   // An upright physical text box is horizontal: it keeps the owner section's
   // physical page box but not that section's native frame.
-  const { nativeSectionFlow, ...sectionLayout } = owner.sectionLayout;
+  const { sectionFlow, ...sectionLayout } = owner.sectionLayout;
   const section =
     request.coordinateSpace === 'upright-physical'
       ? {
           ...sectionLayout,
-          geometry: physicalSectionGeometry(owner.sectionLayout.geometry, nativeSectionFlow),
+          geometry: physicalSectionGeometry(owner.sectionLayout.geometry, sectionFlow),
           textDirection: 'lrTb',
         }
       : owner.sectionLayout;
@@ -2736,7 +2736,7 @@ function openConcreteBodyLayoutSession(
     vAlign: input.section.verticalAlignment,
   };
   const section = isVerticalTextDirection(physicalSection.textDirection)
-    ? verticalLayoutSection(physicalSection, input.section.nativeSectionFlow)
+    ? verticalLayoutSection(physicalSection, input.section.sectionFlow)
     : physicalSection;
   const state = buildMeasureState(
     measureContext,
@@ -2746,7 +2746,7 @@ function openConcreteBodyLayoutSession(
     resolvedLocalFonts,
     services,
     options,
-    input.section.nativeSectionFlow,
+    input.section.sectionFlow,
   );
   // Markup view only: resolve tracked-change author colours once per
   // session from the main story's document run order (first-appearance
@@ -3555,14 +3555,14 @@ function physicalColumnTopPt(
   state: AnchorFloatRegistrationState,
   frame: PhysicalAnchorFrame,
 ): number {
-  return frame.nativeSectionFlow == null
+  return frame.sectionFlow == null
     ? state.contentX
     : frame.pageHeight - (state.contentX + state.contentW);
 }
 
 /** Project a box resolved on the upright physical page into the section's
  * logical frame. The Transitional vertical frame keeps its established
- * clockwise projection; a native BtoT frame applies the inverse of its
+ * clockwise projection; a bottomToTop section frame applies the inverse of its
  * counter-clockwise matrix (logical x = page height - physical y, logical
  * y = physical x). */
 function physicalAnchorBoxToLogical(
@@ -3572,7 +3572,7 @@ function physicalAnchorBoxToLogical(
   w: number,
   h: number,
 ): { x: number; y: number; w: number; h: number } {
-  if (frame.nativeSectionFlow == null) {
+  if (frame.sectionFlow == null) {
     return physicalToLogicalAnchorBox(x, y, w, h, frame.physicalPageWidthPt);
   }
   return { x: frame.pageHeight - (y + h), y: x, w: h, h: w };
@@ -3580,13 +3580,13 @@ function physicalAnchorBoxToLogical(
 
 /** Relabel physical dist* padding with the logical edges of the box. Clockwise:
  * physical top/bottom are logical left/right and physical right/left are
- * logical top/bottom. Native BtoT: physical bottom/top are logical left/right
+ * logical top/bottom. bottomToTop: physical bottom/top are logical left/right
  * and physical left/right are logical top/bottom. */
 function physicalDistToLogical(
   frame: PhysicalAnchorFrame,
   dist: Readonly<{ dl: number; dr: number; dt: number; db: number }>,
 ): { dl: number; dr: number; dt: number; db: number } {
-  return frame.nativeSectionFlow == null
+  return frame.sectionFlow == null
     ? { dl: dist.dt, dr: dist.db, dt: dist.dr, db: dist.dl }
     : { dl: dist.db, dr: dist.dt, dt: dist.dl, db: dist.dr };
 }
@@ -3629,13 +3629,13 @@ function physicalAnchorState(
  * directions are applied by the table itself either way. */
 function tableCellOwnerState(state: BodyAcquisitionState): BodyAcquisitionState {
   if (!state.uprightPhysicalTable) return state;
-  const { nativeSectionFlow, ...section } = state.sectionLayout;
+  const { sectionFlow, ...section } = state.sectionLayout;
   return {
     ...(verticalPhysicalContentState(state) as BodyAcquisitionState),
     uprightPhysicalTable: false,
     sectionLayout: {
       ...section,
-      geometry: physicalSectionGeometry(state.sectionLayout.geometry, nativeSectionFlow),
+      geometry: physicalSectionGeometry(state.sectionLayout.geometry, sectionFlow),
       textDirection: 'lrTb',
     },
   };

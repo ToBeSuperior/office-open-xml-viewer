@@ -140,7 +140,7 @@ pub(crate) fn parse_style_matrix_fill_from_source(
         StyleMatrixLookup::Missing => return None,
         StyleMatrixLookup::Entry(entry) => entry,
     };
-    let entry_xml = entry.to_xml();
+    let entry_xml = entry.to_xml().ok()?;
     let document = roxmltree::Document::parse(&entry_xml).ok()?;
     let theme = theme_source.colors();
     let placeholder_color = parse_color_node_tint(style_ref, theme, TintMode::PowerPointLinear);
@@ -201,6 +201,9 @@ pub(crate) fn parse_style_matrix_fill(
 
     let placeholder_color = parse_color_node_tint(style_ref, theme, PowerPointLinear);
 
+    // Shared style-reparse budget (see `ooxml_common::theme::to_xml`),
+    // charged before the wrapper is materialized.
+    ooxml_common::theme::charge_style_reparse(fragment.len() + 160).ok()?;
     let wrapped = format!(
         r#"<root xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">{fragment}</root>"#
     );
@@ -546,6 +549,11 @@ pub(crate) fn parse_style_matrix_effects(
         theme,
         ooxml_common::color::TintMode::PowerPointLinear,
     );
+    // Shared style-reparse budget (see `ooxml_common::theme::to_xml`),
+    // charged before the wrapper is materialized.
+    if ooxml_common::theme::charge_style_reparse(fragment.len() + 80).is_err() {
+        return StyleMatrixEffects::default();
+    }
     let wrapped = format!(
         r#"<root xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">{fragment}</root>"#
     );

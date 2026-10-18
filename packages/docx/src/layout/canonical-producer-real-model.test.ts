@@ -1567,38 +1567,34 @@ function sizedMeasureContext(): CanvasRenderingContext2D {
   return context as unknown as CanvasRenderingContext2D;
 }
 
-/** Native (MS-DOC 2.3.3) separator wire, shaped as the legacy producer emits it. */
-const nativeAddress = (headerCp: number) => ({ headerCp, fc: 0x800 + headerCp * 2, prm: 0, paragraphStyle: 0 });
-const nativeRun = (fontSize: number, color: string | null = null) => ({
+/** Reserved separator wire, shaped as a producer emits it. */
+const reservedRun = (fontSize: number, color: string | null = null) => ({
   text: '', bold: false, italic: false, underline: false, strikethrough: false, fontSize, color,
   fontFamily: 'serif', isLink: false, background: null, vertAlign: null, hyperlink: null,
 });
-const nativeParagraph = (markPt: number, overrides: Record<string, unknown> = {}) => ({
+const reservedParagraph = (markPt: number, overrides: Record<string, unknown> = {}) => ({
   alignment: 'left', indentLeft: 0, indentRight: 0, indentFirst: 0, spaceBefore: 0, spaceAfter: 0,
   lineSpacing: null, numbering: null, tabStops: [], runs: [], defaultFontSize: markPt,
   defaultFontFamily: 'serif', widowControl: false,
   paragraphMarkFontFacts: { fontFamily: 'serif', fontSize: markPt }, ...overrides,
 });
-function nativeRule(mark: 'short' | 'full', cp: number, options: Readonly<{
+function reservedRule(mark: 'short' | 'full', options: Readonly<{
   controlPt?: number; markPt?: number; color?: string; paragraph?: Record<string, unknown>;
 }> = {}) {
   const markPt = options.markPt ?? 10;
   return {
-    class: 'rule', contentStartCp: cp, contentEndCp: cp + 2, guardCp: cp + 2,
-    rule: { mark, control: { run: nativeRun(options.controlPt ?? 10, options.color ?? null) }, source: nativeAddress(cp) },
+    rule: { mark, control: { run: reservedRun(options.controlPt ?? 10, options.color ?? null) } },
     paragraph: {
-      paragraph: nativeParagraph(markPt, options.paragraph), contentMark: { run: nativeRun(markPt) },
-      source: nativeAddress(cp + 1),
+      paragraph: reservedParagraph(markPt, options.paragraph), contentMark: { run: reservedRun(markPt) },
     },
   };
 }
-const nativeNotice = (cp: number) => ({
-  class: 'paragraphOnly', contentStartCp: cp, contentEndCp: cp + 1, guardCp: cp + 1,
-  paragraph: { paragraph: nativeParagraph(10), contentMark: { run: nativeRun(10) }, source: nativeAddress(cp) },
+const reservedNotice = () => ({
+  paragraph: { paragraph: reservedParagraph(10), contentMark: { run: reservedRun(10) } },
 });
-const nativeEmpty = (cp: number) => ({ class: 'empty', contentStartCp: cp, contentEndCp: cp });
+const reservedEmpty = () => ({});
 
-function nativeNotePages(
+function reservedNotePages(
   stories: Readonly<{ separator: unknown; continuationSeparator: unknown; continuationNotice: unknown }>,
   options: Readonly<{ notes?: number; continuation?: boolean }> = {},
 ): NoteLayout[][] {
@@ -1616,7 +1612,7 @@ function nativeNotePages(
     endnotes: [], fontFamilyClasses: {},
     __noteLayoutSettings: {
       footnoteSeparator: 'short', footnoteContinuationSeparator: 'full',
-      nativeSeparators: { footnote: stories },
+      reservedSeparators: { footnote: stories },
     },
   } as unknown as DocxDocumentModel;
   const services = createLayoutServices(model, {
@@ -1661,8 +1657,8 @@ function mixedNoteLayout(notice: unknown, options: Readonly<{ fillers?: number; 
     endnotes: [], fontFamilyClasses: {},
     __noteLayoutSettings: {
       footnoteSeparator: 'short', footnoteContinuationSeparator: 'full',
-      nativeSeparators: { footnote: {
-        separator: nativeRule('short', 0), continuationSeparator: nativeRule('full', 3), continuationNotice: notice,
+      reservedSeparators: { footnote: {
+        separator: reservedRule('short'), continuationSeparator: reservedRule('full'), continuationNotice: notice,
       } },
     },
   } as unknown as DocxDocumentModel;
@@ -1671,25 +1667,25 @@ function mixedNoteLayout(notice: unknown, options: Readonly<{ fillers?: number; 
   }) };
 }
 
-describe('native note separator consumer', () => {
+describe('reserved note separator consumer', () => {
   const stories = (separator: unknown) => ({
-    separator, continuationSeparator: nativeRule('full', 3), continuationNotice: nativeEmpty(6),
+    separator, continuationSeparator: reservedRule('full'), continuationNotice: reservedEmpty(),
   });
   const leadingOf = (separator: unknown) => {
-    const note = nativeNotePages(stories(separator))[0]![0]!;
-    if (!note.leading) throw new Error('Expected a retained native separator occurrence');
+    const note = reservedNotePages(stories(separator))[0]![0]!;
+    if (!note.leading) throw new Error('Expected a retained reserved separator occurrence');
     return { note, leading: note.leading };
   };
 
   it.each([
-    // Fresh 180pt region: body 20 + native separator 10 + 13 lines of note 1
+    // Fresh 180pt region: body 20 + reserved separator 10 + 13 lines of note 1
     // + the later note's 1-line minimum + ONE continuation notice 10 = 180.
     { pageHeight: 200, heads: [13, 1], bandPt: 160 },
     // Fresh 60pt region, exact fit: body 20 + separator 10 + one line of each
     // note + one notice = 60. Both notes then continue together on every
     // following page under the continuation separator and one notice.
     { pageHeight: 80, heads: [1, 1], bandPt: 40 },
-  ])('reserves the single native notice once for a widow unit with two continuing references (page $pageHeight)', ({
+  ])('reserves the single reserved notice once for a widow unit with two continuing references (page $pageHeight)', ({
     pageHeight, heads, bandPt,
   }) => {
     // A widow-controlled two-line paragraph references a 20-line note from
@@ -1714,18 +1710,18 @@ describe('native note separator consumer', () => {
     };
     const lineCount = (note: NoteLayout) => note.story.blocks
       .reduce((sum, block) => sum + (block.kind === 'paragraph' ? block.lines.length : 0), 0);
-    const notice = nativeNotice(6);
+    const notice = reservedNotice();
     const exactMark = { lineSpacing: { value: 10, rule: 'exact', explicit: true } };
     const model = {
-      ...mixedNoteLayout(nativeEmpty(6)).model,
-      section: { ...mixedNoteLayout(nativeEmpty(6)).model.section, pageHeight },
+      ...mixedNoteLayout(reservedEmpty()).model,
+      section: { ...mixedNoteLayout(reservedEmpty()).model.section, pageHeight },
       body: [body],
       footnotes: [{ id: '1', content: noteLines('1') }, { id: '2', content: noteLines('2') }],
-      __noteLayoutSettings: { nativeSeparators: { footnote: {
-        separator: nativeRule('short', 0, { paragraph: exactMark }),
-        continuationSeparator: nativeRule('full', 3, { paragraph: exactMark }),
+      __noteLayoutSettings: { reservedSeparators: { footnote: {
+        separator: reservedRule('short', { paragraph: exactMark }),
+        continuationSeparator: reservedRule('full', { paragraph: exactMark }),
         continuationNotice: { ...notice, paragraph: { ...notice.paragraph,
-          paragraph: nativeParagraph(10, exactMark) } },
+          paragraph: reservedParagraph(10, exactMark) } },
       } } },
     } as unknown as DocxDocumentModel;
     const layout = layoutDocument(model, createLayoutServices(model, {
@@ -1756,8 +1752,8 @@ describe('native note separator consumer', () => {
     });
   });
 
-  it('charges a native notice in the reference-line note plan', () => {
-    // This is the native producer wire boundary, not a normal DOCX parser
+  it('charges a reserved notice in the reference-line note plan', () => {
+    // This is the reserved-story producer wire boundary, not a normal DOCX parser
     // fixture or an Office pagination oracle. Exact authored line heights
     // make separator, note, notice, and body ownership independently visible.
     const exact = (text: string, height = 10) => ({
@@ -1769,19 +1765,19 @@ describe('native note separator consumer', () => {
       { type: 'break', breakType: 'line' }, ...exact('B02').runs,
     ] as DocParagraph['runs'];
     const layout = (remainingTwips: number, withNotice: boolean, continuation = true) => {
-      const notice = nativeNotice(6);
+      const notice = reservedNotice();
       const measuredNotice = { ...notice, paragraph: { ...notice.paragraph,
-        paragraph: nativeParagraph(10, { lineSpacing: { value: 10, rule: 'exact', explicit: true } }),
+        paragraph: reservedParagraph(10, { lineSpacing: { value: 10, rule: 'exact', explicit: true } }),
       } };
       const model = {
-        ...mixedNoteLayout(nativeEmpty(6)).model,
-        section: { ...mixedNoteLayout(nativeEmpty(6)).model.section, pageHeight: 160 + remainingTwips / 20 },
+        ...mixedNoteLayout(reservedEmpty()).model,
+        section: { ...mixedNoteLayout(reservedEmpty()).model.section, pageHeight: 160 + remainingTwips / 20 },
         body: [exact('P', 140), body],
         footnotes: [{ id: '7', content: Array.from({ length: 4 }, (_, index) => exact(`N${index + 1};`)) }],
-        __noteLayoutSettings: { nativeSeparators: { footnote: {
-          separator: nativeRule('short', 0, { paragraph: { lineSpacing: { value: 10, rule: 'exact', explicit: true } } }),
-          continuationSeparator: nativeRule('full', 3, { paragraph: { lineSpacing: { value: 10, rule: 'exact', explicit: true } } }),
-          continuationNotice: withNotice ? measuredNotice : nativeEmpty(6),
+        __noteLayoutSettings: { reservedSeparators: { footnote: {
+          separator: reservedRule('short', { paragraph: { lineSpacing: { value: 10, rule: 'exact', explicit: true } } }),
+          continuationSeparator: reservedRule('full', { paragraph: { lineSpacing: { value: 10, rule: 'exact', explicit: true } } }),
+          continuationNotice: withNotice ? measuredNotice : reservedEmpty(),
         } } },
       } as unknown as DocxDocumentModel;
       return layoutDocument(model, createLayoutServices(model, {
@@ -1818,9 +1814,9 @@ describe('native note separator consumer', () => {
     expect(layout(1000, true, false).pages[0]!.layers.notes).toEqual([]);
   });
 
-  it('consumes control and content-mark CHPX and paragraph PAPX through the paragraph pipeline', () => {
-    const { note, leading } = leadingOf(nativeRule('short', 0));
-    // The native occurrence owns the rule; the modern scalar band is unused.
+  it('consumes control, content-mark and paragraph properties through the paragraph pipeline', () => {
+    const { note, leading } = leadingOf(reservedRule('short'));
+    // The reserved occurrence owns the rule; the modern scalar band is unused.
     expect(note.separator).toEqual([]);
     expect(note.advancePt).toBeCloseTo(leading.advancePt + note.story.advancePt);
     expect(note.story.flowBounds.yPt).toBeCloseTo(leading.flowBounds.yPt + leading.advancePt);
@@ -1829,16 +1825,16 @@ describe('native note separator consumer', () => {
     expect(leading.paragraph?.lines.flatMap((line) => line.placements.map((placement) => placement.kind)))
       .toEqual(['anchor-host', 'anchor-host']);
     // Each participant's own size reaches the shared line box.
-    expect(leadingOf(nativeRule('short', 0, { controlPt: 30 })).leading.advancePt)
+    expect(leadingOf(reservedRule('short', { controlPt: 30 })).leading.advancePt)
       .toBeGreaterThan(leading.advancePt + 5);
-    expect(leadingOf(nativeRule('short', 0, { markPt: 30 })).leading.advancePt)
+    expect(leadingOf(reservedRule('short', { markPt: 30 })).leading.advancePt)
       .toBeGreaterThan(leading.advancePt + 5);
     // Authored paragraph spacing is real flow, charged once.
-    expect(leadingOf(nativeRule('short', 0, { paragraph: { spaceAfter: 12 } })).leading.advancePt)
+    expect(leadingOf(reservedRule('short', { paragraph: { spaceAfter: 12 } })).leading.advancePt)
       .toBeCloseTo(leading.advancePt + 12);
     // Indentation moves the paragraph's own placements; the rule keeps the
     // existing W/3 Short span from the main-story start.
-    const indented = leadingOf(nativeRule('short', 0, { paragraph: { indentLeft: 20 } })).leading;
+    const indented = leadingOf(reservedRule('short', { paragraph: { indentLeft: 20 } })).leading;
     expect(indented.paragraph?.lines[0]?.placements[0]?.bounds?.xPt)
       .toBeCloseTo((leading.paragraph?.lines[0]?.placements[0]?.bounds?.xPt ?? 0) + 20);
     expect(indented.rule?.segment).toEqual(leading.rule?.segment);
@@ -1851,18 +1847,18 @@ describe('native note separator consumer', () => {
     const line = leading.paragraph!.lines[0]!;
     expect(leading.rule!.segment.from.yPt).toBeCloseTo(line.bounds.yPt + line.bounds.heightPt / 2);
     // The control's own colour is the rule ink.
-    expect(leadingOf(nativeRule('full', 0, { color: 'FF0000' })).leading.rule?.segment)
+    expect(leadingOf(reservedRule('full', { color: 'FF0000' })).leading.rule?.segment)
       .toMatchObject({ color: '#FF0000' });
   });
 
   it('owns one role-selected rule per page and a notice only on continuing fragments', () => {
-    const render = (notice: unknown) => nativeNotePages({
-      separator: nativeRule('short', 0),
+    const render = (notice: unknown) => reservedNotePages({
+      separator: reservedRule('short'),
       // An explicit Short continuation mark is kept independently of its role.
-      continuationSeparator: nativeRule('short', 3),
+      continuationSeparator: reservedRule('short'),
       continuationNotice: notice,
     }, { notes: 8, continuation: true });
-    const pages = render(nativeNotice(6));
+    const pages = render(reservedNotice());
     const notes = pages.flat();
     expect(notes.length).toBeGreaterThan(1);
     for (const page of pages) {
@@ -1886,25 +1882,23 @@ describe('native note separator consumer', () => {
     });
     // The notice reserve can only shorten the admitted prefix.
     const admitted = (layout: NoteLayout[][]) => layout.flat()[0]!.story.blocks.length;
-    expect(admitted(pages)).toBeLessThanOrEqual(admitted(render(nativeEmpty(6))));
-    expect(render(nativeEmpty(6)).flat().every((note) => note.trailing === undefined)).toBe(true);
+    expect(admitted(pages)).toBeLessThanOrEqual(admitted(render(reservedEmpty())));
+    expect(render(reservedEmpty()).flat().every((note) => note.trailing === undefined)).toBe(true);
     // An intact note never carries a notice.
-    const intact = nativeNotePages({ ...stories(nativeRule('short', 0)), continuationNotice: nativeNotice(6) },
+    const intact = reservedNotePages({ ...stories(reservedRule('short')), continuationNotice: reservedNotice() },
       { continuation: true });
     expect(intact.flat()).toHaveLength(1);
     expect(intact[0]![0]!.trailing).toBeUndefined();
   });
-  it('measures a visible paragraph-only notice through its own content-mark CHPX', () => {
+  it('measures a visible paragraph-only notice through its own content-mark properties', () => {
     const notice = (mark: Record<string, unknown> | null, overrides: Record<string, unknown> = {}) => ({
-      class: 'paragraphOnly', contentStartCp: 6, contentEndCp: 7, guardCp: 7,
       paragraph: {
-        paragraph: nativeParagraph(10, overrides),
-        contentMark: mark ? { run: { ...nativeRun(10), ...mark } } : {},
-        source: nativeAddress(6),
+        paragraph: reservedParagraph(10, overrides),
+        contentMark: mark ? { run: { ...reservedRun(10), ...mark } } : {},
       },
     });
-    const trailingOf = (continuationNotice: unknown) => nativeNotePages({
-      separator: nativeRule('short', 0), continuationSeparator: nativeRule('full', 3), continuationNotice,
+    const trailingOf = (continuationNotice: unknown) => reservedNotePages({
+      separator: reservedRule('short'), continuationSeparator: reservedRule('full'), continuationNotice,
     }, { notes: 8, continuation: true }).flat()[0]!.trailing;
     const plain = trailingOf(notice({}));
     if (!plain) throw new Error('Expected a reserved continuation notice');
@@ -1923,14 +1917,14 @@ describe('native note separator consumer', () => {
     const placements = plain.paragraph!.lines.flatMap((line) => line.placements);
     expect(placements.filter((placement) => placement.kind === 'text')).toEqual([]);
     expect(placements.every((placement) => placement.bounds?.widthPt === 0)).toBe(true);
-    // A vanished mark and a guard-only story own no notice occurrence.
+    // A vanished mark and an empty story own no notice occurrence.
     expect(trailingOf(notice(null, { markVanish: true }))).toBeUndefined();
-    expect(trailingOf({ class: 'guardOnly', contentStartCp: 6, contentEndCp: 6, guardCp: 6 })).toBeUndefined();
+    expect(trailingOf(reservedEmpty())).toBeUndefined();
   });
 
   it('composes a raised rule control or mark with the other participant unmasked', () => {
     const raised = (control: Record<string, unknown>, mark: Record<string, unknown>) => {
-      const story = nativeRule('short', 0, { controlPt: 14, markPt: 9 }) as {
+      const story = reservedRule('short', { controlPt: 14, markPt: 9 }) as {
         rule: { control: { run: Record<string, unknown> } };
         paragraph: { contentMark: { run: Record<string, unknown> } };
       };
@@ -1953,17 +1947,17 @@ describe('native note separator consumer', () => {
   });
 
   it('acquires a small-caps rule control through its transformed probe at full metric size', () => {
-    const story = nativeRule('short', 0) as { rule: { control: { run: Record<string, unknown> } } };
+    const story = reservedRule('short') as { rule: { control: { run: Record<string, unknown> } } };
     story.rule.control.run.smallCaps = true;
     // Small caps transform the probe's display text; acquisition must still
     // succeed and keep the existing full-size metric policy.
-    expect(leadingOf(story).leading.advancePt).toBeCloseTo(leadingOf(nativeRule('short', 0)).leading.advancePt);
+    expect(leadingOf(story).leading.advancePt).toBeCloseTo(leadingOf(reservedRule('short')).leading.advancePt);
   });
 
   it('keeps one band-final notice when a later short note joins a continuing page', async () => {
     const notes = (layout: ReturnType<typeof layoutDocument>) => layout.pages.map((page) =>
       page.layers.notes.filter((node): node is NoteLayout => node.kind === 'note'));
-    const { model, services } = mixedNoteLayout(nativeNotice(6));
+    const { model, services } = mixedNoteLayout(reservedNotice());
     const layout = layoutDocument(model, services(), { currentDateMs: 0 });
     const pages = notes(layout);
     const first = pages[0]!;
@@ -1992,7 +1986,7 @@ describe('native note separator consumer', () => {
         .toHaveLength(index + 2 < pages.length ? 1 : 0);
     });
     // The sliced driver retains the same ownership.
-    const slicedSource = layoutSourceStore(mixedNoteLayout(nativeNotice(6)).model);
+    const slicedSource = layoutSourceStore(mixedNoteLayout(reservedNotice()).model);
     const sliced = await layoutDocumentInputAsync(slicedSource.bodyLayoutInput,
       createLayoutServices(slicedSource, {
         measureContext: sizedMeasureContext(), allowFootnoteContinuation: true,
@@ -2000,7 +1994,7 @@ describe('native note separator consumer', () => {
     expect(sliced).toEqual(layout);
     // Without a notice paragraph nothing is reserved or painted for it; both
     // notes are still retained once.
-    const empty = mixedNoteLayout(nativeEmpty(6));
+    const empty = mixedNoteLayout(reservedEmpty());
     const plain = notes(layoutDocument(empty.model, empty.services(), { currentDateMs: 0 })).flat();
     expect(plain.every((note) => note.trailing === undefined)).toBe(true);
     expect(plain.filter((note) => note.source.storyInstance === '8')).toHaveLength(1);
@@ -2010,7 +2004,7 @@ describe('native note separator consumer', () => {
 
 describe('multiple pending footnote continuations', () => {
   it('preserves deferred cursors when an earlier continuation fills the page band', async () => {
-    const base = mixedNoteLayout(nativeNotice(6));
+    const base = mixedNoteLayout(reservedNotice());
     const model = {
       ...base.model,
       footnotes: base.model.footnotes!.map((note) => note.id === '8'

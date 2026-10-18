@@ -8,7 +8,7 @@ import {
   normalizeInternalDocumentModel,
   normalizeOwnedInternalDocumentModel,
   documentTypographySettingsInput,
-  nativeNoteSeparatorParagraphAcquisitionInput,
+  reservedNoteSeparatorParagraphAcquisitionInput,
   selectedNoteSeparatorParagraphAcquisitionInput,
   tableSourceAcquisitionInput,
   type InternalShapeRun,
@@ -17,10 +17,10 @@ import {
 import type { BodyAcquisitionInputProjections } from './layout/acquisition-input-projections.js';
 import type {
   BodyLayoutInput,
-  NativeNoteSeparatorRolesInput,
+  ReservedNoteSeparatorRolesInput,
   SelectedNoteSeparatorDefinitionsInput,
 } from './layout/body-layout-input.js';
-import { normalizeNativeNoteSeparators } from './layout/native-note-separators.js';
+import { normalizeReservedNoteSeparators } from './layout/reserved-note-separators.js';
 import { normalizeSelectedNoteSeparators } from './layout/selected-note-separators.js';
 import {
   sealLayoutSourceStore,
@@ -379,21 +379,21 @@ function canonicalOwnedFinalParts(
 }
 
 /** The sealed layout input keeps canonical separator definitions only; the
- * raw parser-boundary wire (native CP/FC/PAPX, DOCX story paragraphs) never
+ * raw parser-boundary wire (reserved stories, DOCX story paragraphs) never
  * reaches layout. */
 function withCanonicalNoteSeparators(
   input: BodyLayoutInput,
-  roles: NativeNoteSeparatorRolesInput | undefined,
+  roles: ReservedNoteSeparatorRolesInput | undefined,
   stories: SelectedNoteSeparatorDefinitionsInput | undefined,
 ): BodyLayoutInput {
   const settings = input.noteLayoutSettings;
-  if (settings?.nativeSeparators === undefined && settings?.footnoteSeparatorParagraphs === undefined) return input;
-  const { nativeSeparators: _nativeWire, footnoteSeparatorParagraphs: _storyWire, ...retained } = settings;
+  if (settings?.reservedSeparators === undefined && settings?.footnoteSeparatorParagraphs === undefined) return input;
+  const { reservedSeparators: _reservedWire, footnoteSeparatorParagraphs: _storyWire, ...retained } = settings;
   return {
     ...input,
     noteLayoutSettings: {
       ...retained,
-      ...(roles ? { nativeSeparatorRoles: roles } : {}),
+      ...(roles ? { reservedSeparatorRoles: roles } : {}),
       ...(stories ? { footnoteSeparatorStories: stories } : {}),
     },
   };
@@ -538,17 +538,17 @@ function buildLayoutSourceModelAdapter(
       input: tableSourceAcquisitionInput(table),
     }));
   }, (body, source) => { textBoxStories.push({ body, source }); });
-  // MS-DOC 2.3.3 reserved separator stories: validate and normalize the raw
+  // Reserved separator stories: validate and normalize the raw
   // wire once, then register their paragraphs in the same canonical registry
   // and fact list as every other paragraph. They join no note list.
-  const nativeSeparators = normalizeNativeNoteSeparators(
-    bodyLayoutInput.noteLayoutSettings?.nativeSeparators,
-    nativeNoteSeparatorParagraphAcquisitionInput,
+  const reservedSeparators = normalizeReservedNoteSeparators(
+    bodyLayoutInput.noteLayoutSettings?.reservedSeparators,
+    reservedNoteSeparatorParagraphAcquisitionInput,
   );
   // Ordinary DOCX formatted footnote separator stories: their own selected
-  // roots, registered the same way. A native producer never emits them.
+  // roots, registered the same way. A reserved-story producer never emits them.
   const settings = bodyLayoutInput.noteLayoutSettings;
-  if (nativeSeparators?.roles.footnote && settings?.footnoteSeparatorParagraphs !== undefined) {
+  if (reservedSeparators?.roles.footnote && settings?.footnoteSeparatorParagraphs !== undefined) {
     throw new Error('Native and DOCX footnote separator stories cannot both be retained');
   }
   const selectedSeparators = normalizeSelectedNoteSeparators(
@@ -560,7 +560,7 @@ function buildLayoutSourceModelAdapter(
     selectedNoteSeparatorParagraphAcquisitionInput,
   );
   const reservedNoteStories = [
-    ...(nativeSeparators?.stories ?? []),
+    ...(reservedSeparators?.stories ?? []),
     ...(selectedSeparators?.stories ?? []),
   ].map(({ source, body }) => {
     body.forEach((retained, index) => {
@@ -611,7 +611,7 @@ function buildLayoutSourceModelAdapter(
   // the complete private parser model reachable for the store lifetime.
   const source = sealLayoutSourceStore({
     bodyLayoutInput: withCanonicalNoteSeparators(
-      bodyLayoutInput, nativeSeparators?.roles, selectedSeparators?.definitions,
+      bodyLayoutInput, reservedSeparators?.roles, selectedSeparators?.definitions,
     ),
     blockRepository: {
       body: canonicalDocument.body as unknown as readonly LayoutStoryBlock[],

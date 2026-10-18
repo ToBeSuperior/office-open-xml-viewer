@@ -565,7 +565,7 @@ fn resolve_style_line_ref(
         }
         ooxml_common::theme::StyleMatrixLookup::Entry(entry) => entry,
     };
-    let entry_xml = entry.to_xml();
+    let entry_xml = entry.to_xml().ok()?;
     let document = roxmltree::Document::parse(&entry_xml).ok()?;
     let line = document.root_element().children().find(|node| {
         node.is_element()
@@ -606,7 +606,9 @@ fn style_line_ref_is_explicit_no_line(
     let StyleMatrixLookup::Entry(entry) = format_scheme.lookup_line_ref(index) else {
         return false;
     };
-    let entry_xml = entry.to_xml();
+    let Ok(entry_xml) = entry.to_xml() else {
+        return false;
+    };
     let Ok(document) = roxmltree::Document::parse(&entry_xml) else {
         return false;
     };

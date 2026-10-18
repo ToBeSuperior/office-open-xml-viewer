@@ -132,7 +132,7 @@ export function bodyTableAcquisitionState(
  * logical block band [cursor y, cursor y + grid width] of a vertical section
  * (§17.6.20). The Transitional clockwise frame maps it to physical x = page
  * width − logical y − grid width and starts it at the column top (physical
- * y = logical x). A native BtoT frame maps logical y to physical x unchanged
+ * y = logical x). A counter-clockwise section frame maps logical y to physical x unchanged
  * and its column starts at the bottom (physical y = page height − logical x),
  * so the block ends there. That native placement is generic library policy
  * transformed through the section's own frame. No comparison with a
@@ -144,7 +144,7 @@ function uprightBlockPhysicalOrigin(
   gridWidthPt: number,
   physicalHeightPt: number,
 ): Readonly<{ xPt: number; yPt: number }> {
-  return physical.nativeSectionFlow == null
+  return physical.sectionFlow == null
     ? { xPt: physical.physicalPageWidthPt - cursorPt.yPt - gridWidthPt, yPt: cursorPt.xPt }
     : { xPt: cursorPt.yPt, yPt: physical.pageHeight - cursorPt.xPt - physicalHeightPt };
 }
@@ -158,7 +158,7 @@ function uprightColumnPhysicalTopPt(
   cursorPt: Readonly<{ xPt: number }>,
   inlineExtentPt: number,
 ): number {
-  return physical.nativeSectionFlow == null
+  return physical.sectionFlow == null
     ? cursorPt.xPt
     : physical.pageHeight - (cursorPt.xPt + inlineExtentPt);
 }
@@ -171,7 +171,7 @@ function uprightPhysicalRectToLogical(
   section: BodyAcquisitionState['sectionLayout'],
   rect: LayoutRect,
 ): LayoutRect {
-  if (physical.nativeSectionFlow == null) {
+  if (physical.sectionFlow == null) {
     return Object.freeze({
       xPt: rect.yPt,
       yPt: physical.physicalPageWidthPt - rect.xPt - rect.widthPt,
@@ -1592,7 +1592,7 @@ function measureOwnerHost(
  *   enters the logical body registry through the inverse of the section's
  *   upright projection (uprightPhysicalRectToLogical: clockwise, logical
  *   inline = physical y and logical block start = physical page width −
- *   physical right edge; native BtoT, its own counter-clockwise inverse), so
+ *   physical right edge; a section flow, its own counter-clockwise inverse), so
  *   notBeside blocks the vertical lines crossing the host's physical span.
  * Cell content is acquired and reacquired by `acquisitionOwner`, the
  * upright physical owner of the whole table (bodyTableAcquisitionState).

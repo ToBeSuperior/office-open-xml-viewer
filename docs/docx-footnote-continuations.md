@@ -94,13 +94,13 @@ and endnote stories keep the 6pt band, with the rule at its midpoint.
 General authored
 separator text, paragraph borders or shading, and mark-run formatting that
 differs from the paragraph mark are not yet retained; they use the existing DOCX
-default rule. This is not permission for a native
+default rule. This is not permission for another
 producer to discard separator formatting: it must admit its formatting class
 and special-character semantics before emitting the closed shared rule fact.
-Native CP-empty, guard-only and paragraph-only stories are not implicitly
+Its empty and paragraph-only reserved stories are not implicitly
 equivalent to DOCX default or bare-empty facts. Ordinary DOCX continuation
 notices keep no story geometry, and they and endnote continuation are outside
-this footnote continuation contract. The native (MS-DOC) footnote continuation
+this footnote continuation contract. A producer-supplied reserved continuation
 notice has its own closed contract: only an empty or paragraph-only notice story
 is admitted (notice text is rejected), with its acquired paragraph and mark
 formatting. When a footnote continues, that paragraph is laid out as a story
