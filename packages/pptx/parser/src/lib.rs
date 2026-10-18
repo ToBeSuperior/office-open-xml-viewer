@@ -4079,9 +4079,184 @@ mod tests {
         );
         assert!(markdown.contains(r"\<img src=x"), "{markdown}");
         assert!(
-            markdown.contains(r"\!\[p\](https://t.example/p.png)"),
+            markdown.contains(r"\!\[p\](https\://t.example/p.png)"),
             "{markdown}"
         );
+    }
+
+    /// Slide titles, body text, table cells, equations, speaker notes and
+    /// review comments carry document text into the Markdown projection. The
+    /// output, parsed as GFM (tables, strikethrough, extended autolinks), may
+    /// contain only the converter's own structure: the document text forms no
+    /// table, link, autolink, heading, list, strikethrough, code or HTML node,
+    /// and a lone CR cannot end a comment quote.
+    #[test]
+    fn markdown_document_text_forms_no_markdown_structure() {
+        use std::io::{Read, Write};
+        const INLINE: &str = "&lt;img src=x onerror=alert(1)&gt; [x](javascript:alert(1)) https://evil.example/ www.evil.example a@evil.example ~~del~~ &amp;copy; `c`";
+        const INLINE_TEXT: &str = "<img src=x onerror=alert(1)> [x](javascript:alert(1)) https://evil.example/ www.evil.example a@evil.example ~~del~~ &copy; `c`";
+        const LINES: &str = "alpha&#13;&#13;```&#13;| a | b |&#13;| :-- | --: |&#13;forged | row&#13;# h&#13;&#160;# nbsp&#13;&#xFEFF;# bom&#13;&gt; q&#13;- item&#13;1. item&#13;===&#13;    Cost: 50% &amp; tax&#13;&#9;Tabbed: 2&#13;&#160;&#160;Kept nbsp&#13;&#x3000;Kept ideographic&#13;&#x2003;# Kept em";
+        let text_shape = |id: u32, ph: &str, paragraphs: &str| {
+            format!(
+                r#"<p:sp><p:nvSpPr><p:cNvPr id="{id}" name="S{id}"/><p:cNvSpPr/><p:nvPr>{ph}</p:nvPr></p:nvSpPr><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1000000" cy="1000000"/></a:xfrm></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/>{paragraphs}</p:txBody></p:sp>"#
+            )
+        };
+        let para =
+            |text: &str| format!(r#"<a:p><a:r><a:t xml:space="preserve">{text}</a:t></a:r></a:p>"#);
+        let cell = |text: &str| {
+            format!(
+                r#"<a:tc><a:txBody><a:bodyPr/><a:p><a:r><a:t xml:space="preserve">{text}</a:t></a:r></a:p></a:txBody><a:tcPr/></a:tc>"#
+            )
+        };
+        let body = [
+            para(INLINE),
+            para("| a | b |"),
+            para("| :-- | --: |"),
+            para("forged | row"),
+            para("&#160;# forged nbsp"),
+            para("&#xFEFF;# forged bom"),
+            para("- forged item"),
+            para("```"),
+            r#"<a:p><a:r><a:t>intro</a:t></a:r><a:br/><a:r><a:t xml:space="preserve">    Body cost: 50% &amp; tax</a:t></a:r></a:p>"#.to_string(),
+            r#"<a:p><a:r><a:t>intro</a:t></a:r><a:br/><a:r><a:t xml:space="preserve">  </a:t></a:r><a:r><a:t xml:space="preserve">  Split indent: 1</a:t></a:r></a:p>"#.to_string(),
+            r#"<a:p><a:r><a:t>intro</a:t></a:r><a:br/><a:r><a:t xml:space="preserve">&#9;Body tab: 2</a:t></a:r></a:p>"#.to_string(),
+            r#"<a:p><a:pPr lvl="2"/><a:r><a:t>Deep plain: 3</a:t></a:r></a:p>"#.to_string(),
+            r#"<a:p><a:r><a:t>First</a:t></a:r><a:br/><a:r><a:t xml:space="preserve">&#160;&#160;Second nbsp</a:t></a:r></a:p>"#.to_string(),
+            r#"<a:p><a:r><a:t>First</a:t></a:r><a:br/><a:r><a:t xml:space="preserve">&#x3000;</a:t></a:r><a:r><a:t xml:space="preserve"># Second ideographic</a:t></a:r></a:p>"#.to_string(),
+            r#"<a:p><a:r><a:t>First</a:t></a:r><a:br/><a:r><a:t xml:space="preserve">  </a:t></a:r><a:r><a:t xml:space="preserve">&#x2003;Second em</a:t></a:r></a:p>"#.to_string(),
+            r#"<a:p><a:r><a:t>ww</a:t></a:r><a:r><a:t>w.split.example</a:t></a:r></a:p>"#.to_string(),
+            r#"<a:p><mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:a14="http://schemas.microsoft.com/office/drawing/2010/main" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"><mc:Choice Requires="a14"><a14:m><m:oMath><m:r><m:t>&lt;img src=x onerror=alert(2)&gt; https://evil.example/</m:t></m:r></m:oMath></a14:m></mc:Choice><mc:Fallback/></mc:AlternateContent></a:p>"#.to_string(),
+        ]
+        .concat();
+        let slide_sp = [
+            text_shape(
+                2,
+                r#"<p:ph type="title"/>"#,
+                &para(&format!("{INLINE} #")),
+            ),
+            format!(
+                r#"<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="3" name="T"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="0" y="0"/><a:ext cx="1000000" cy="1000000"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table"><a:tbl><a:tblGrid><a:gridCol w="500000"/><a:gridCol w="500000"/></a:tblGrid><a:tr h="100000">{}{}</a:tr></a:tbl></a:graphicData></a:graphic></p:graphicFrame>"#,
+                cell(INLINE),
+                cell("a|b&#13;# forged, 50% done"),
+            ),
+            text_shape(4, "", &body),
+        ]
+        .concat();
+        let rels = r#"<Relationship Id="rNotes" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesSlide" Target="../notesSlides/notesSlide1.xml"/><Relationship Id="rComments" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="../comments/comment1.xml"/>"#;
+        let base = build_align_pptx_with_rels(&slide_sp, "", "", rels, "", "");
+        let notes = format!(
+            r#"<p:notes xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:cSld><p:spTree><a:p><a:r><a:t xml:space="preserve">{INLINE}&#13;{LINES}</a:t></a:r></a:p></p:spTree></p:cSld></p:notes>"#
+        );
+        let comments = format!(
+            r#"<p:cmLst xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cm authorId="0"><p:text>{INLINE}&#13;{LINES}</p:text></p:cm></p:cmLst>"#
+        );
+        let mut source = zip::ZipArchive::new(Cursor::new(base)).unwrap();
+        let mut data = Vec::new();
+        {
+            let mut writer = zip::ZipWriter::new(Cursor::new(&mut data));
+            let options = zip::write::SimpleFileOptions::default();
+            for index in 0..source.len() {
+                let mut entry = source.by_index(index).unwrap();
+                let name = entry.name().to_owned();
+                let mut body = Vec::new();
+                entry.read_to_end(&mut body).unwrap();
+                writer.start_file(name, options).unwrap();
+                writer.write_all(&body).unwrap();
+            }
+            for (name, xml) in [
+                ("ppt/notesSlides/notesSlide1.xml", &notes),
+                ("ppt/comments/comment1.xml", &comments),
+            ] {
+                writer.start_file(name, options).unwrap();
+                writer.write_all(xml.as_bytes()).unwrap();
+            }
+            writer.finish().unwrap();
+        }
+
+        let markdown = to_markdown_native(&data).expect("markdown projects");
+        let gfm = ooxml_common::markdown::gfm_check::summarize(&markdown);
+
+        assert_eq!(
+            gfm.headings,
+            [
+                format!("{INLINE_TEXT} # (slide 1)"),
+                "Speaker notes".to_string(),
+                "Review comments".to_string(),
+                "Slide 1 — Comment 1".to_string(),
+            ],
+            "{markdown}"
+        );
+        assert_eq!(gfm.tables, 1, "{markdown}");
+        assert_eq!(
+            gfm.table_cells,
+            [INLINE_TEXT.to_string(), "a|b# forged, 50% done".to_string()],
+            "{markdown}"
+        );
+        assert_eq!(gfm.block_quotes, 1, "{markdown}");
+        assert_eq!(
+            (gfm.links, gfm.images, gfm.html, gfm.strikethrough, gfm.code),
+            (0, 0, 0, 0, 0),
+            "{markdown}"
+        );
+        assert_eq!((gfm.list_items, gfm.thematic_breaks), (0, 0), "{markdown}");
+        for literal in [
+            INLINE_TEXT,
+            "| a | b |",
+            "| :-- | --: |",
+            "forged | row",
+            "# forged nbsp",
+            "# forged bom",
+            "- forged item",
+            "```",
+            "www.split.example",
+            "<img src=x onerror=alert(2)> https://evil.example/",
+            "# h",
+            "> q",
+            "1. item",
+            "===",
+            "Cost: 50% & tax",
+            "Tabbed: 2",
+            "\u{a0}\u{a0}Kept nbsp",
+            "\u{3000}Kept ideographic",
+            "\u{2003}# Kept em",
+            "Body cost: 50% & tax",
+            "Split indent: 1",
+            "Body tab: 2",
+            "Deep plain: 3",
+            "\u{a0}\u{a0}Second nbsp",
+            "\u{3000}# Second ideographic",
+            "\u{2003}Second em",
+        ] {
+            assert!(gfm.text.contains(literal), "{literal:?} in {markdown}");
+        }
+        // The lone CRs in the comment keep every line inside the quote.
+        assert!(
+            markdown.contains("> alpha\n> \n> \\`\\`\\`\n"),
+            "{markdown}"
+        );
+    }
+
+    /// A BOM before indentation at the start of a slide's first paragraph is
+    /// dropped with that indentation: renderers strip the BOM, which would
+    /// otherwise expose an indented code block showing the escapes.
+    #[test]
+    fn markdown_line_start_bom_cannot_expose_an_indented_code_block() {
+        for runs in [
+            r#"<a:r><a:t xml:space="preserve">&#xFEFF;    Cost: 1</a:t></a:r>"#,
+            r#"<a:r><a:t xml:space="preserve">&#xFEFF;</a:t></a:r><a:r><a:t xml:space="preserve">&#9;Cost: 1</a:t></a:r>"#,
+        ] {
+            let slide_sp = format!(
+                r#"<p:sp><p:nvSpPr><p:cNvPr id="5" name="Body"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1000000" cy="1000000"/></a:xfrm></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p>{runs}</a:p></p:txBody></p:sp>"#
+            );
+            let data = build_align_pptx(&slide_sp, "", "");
+
+            let markdown = to_markdown_native(&data).expect("markdown projects");
+            let gfm = ooxml_common::markdown::gfm_check::summarize(&markdown);
+
+            assert_eq!(gfm.headings, ["Slide 1"], "{markdown:?}");
+            assert_eq!(gfm.code, 0, "{markdown:?}");
+            assert_eq!(gfm.text.trim(), "Slide 1\nCost: 1", "{markdown:?}");
+        }
     }
 
     fn build_align_pptx(slide_sp: &str, layout_extra_sp: &str, master_txstyles: &str) -> Vec<u8> {
