@@ -33,6 +33,7 @@ vi.mock('@silurus/ooxml-core', async importOriginal => ({
   ...await importOriginal<typeof import('@silurus/ooxml-core')>(),
   loadOfficeFontFallbacks: workerMocks.metrics,
   unloadOfficeFontFallbacks: workerMocks.unloadLocal,
+  loadNativeRouteSentinels: async () => [],
 }));
 vi.mock('@silurus/ooxml-core/internal/model-source', async importOriginal => ({
   ...await importOriginal<typeof import('@silurus/ooxml-core/internal/model-source')>(),

@@ -183,6 +183,8 @@ export type RenderWorkerResponse =
   // worker that parses vertical East-Asian content opens a bounded model stream
   // so the proxy can continue through main-thread rendering instead of silently
   // painting horizontal glyph forms or receiving one monolithic JSON value.
+  // The same continuation serves a worker realm that cannot register the
+  // native-route sentinels (native-route-line-metrics.ts).
   | ({
       type: 'mainThreadVerticalFallback';
       id: number;

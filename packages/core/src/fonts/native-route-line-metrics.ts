@@ -572,22 +572,30 @@ function measurePair(fonts: readonly [string, string], cluster: string): (readon
 const sameGeometry = (a: readonly number[], b: readonly number[]) =>
   a.every((value, index) => Number.isFinite(value) && Object.is(value, b[index]));
 
+/** Scalars for which CSS Fonts 4 §5.4 lets an engine choose a face outside
+ * the family-list order: emoji presentation (Extended_Pictographic, emoji
+ * modifiers, regional indicators, keycap and tag sequences, ZWJ sequences)
+ * and variation selectors. Any part of such a cluster may bypass both
+ * sentinels through presentation-based system fallback, which no sentinel
+ * can observe, so these clusters are outside the evidence boundary. */
+const PRESENTATION_SELECTED =
+  /[\p{Extended_Pictographic}\p{Emoji_Modifier}\p{Regional_Indicator}\u200d\u20e3\ufe00-\ufe0f\u{e0020}-\u{e007f}\u{e0100}-\u{e01ef}]/u;
+
 /** Whether the route's first available family (or an absent family before
  * it) draws every part of `cluster`; undefined when the realm cannot judge.
  *
- * The comparison is evidence only for a cluster the engine actually routes
- * through the CSS family list. An engine may draw some clusters outside it
- * (CSS Fonts 4 §5.4 cluster matching lets emoji presentation and unsupported
- * variation sequences use system fallback), which would make both sentinel
- * routes agree without the listed face drawing anything. So the cluster must
- * first pass a control: with a sentinel as the only family, the two
- * registrations must give different geometry, i.e. a sentinel demonstrably
- * draws the cluster when no listed face does. A cluster failing the control
- * is not owned (the span keeps its Canvas box). Each sentinel has its own
- * private context, so a font string is parsed only when the route changes. */
+ * The comparison is evidence only for scalars the engine routes through the
+ * CSS family list. Clusters with presentation-selected scalars (see above)
+ * are not owned. Every other cluster must first pass a control: with a
+ * sentinel as the only family, the two registrations must give different
+ * geometry, i.e. a sentinel demonstrably draws the cluster when no listed
+ * face does. A cluster failing either is not owned (the span keeps its
+ * Canvas box). Each sentinel has its own private context, so a font string
+ * is parsed only when the route changes. */
 export function nativeRouteClusterOwned(
   fonts: readonly [string, string], cluster: string,
 ): boolean | undefined {
+  if (PRESENTATION_SELECTED.test(cluster)) return false;
   let routed = sentinelControls.get(cluster);
   if (routed === undefined) {
     const control = measurePair(SENTINEL_ONLY_FONTS, cluster);

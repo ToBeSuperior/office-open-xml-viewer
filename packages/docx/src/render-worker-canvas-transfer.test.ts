@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   store: {},
   paginationFailure: undefined as 'before-publication' | 'after-publication' | 'abort' | undefined,
   registeredFonts: new Set<FontFace>(),
+  nativeSentinels: [] as FontFace[] | null,
 }));
 
 class FakeDocxArchive {
@@ -44,6 +45,7 @@ vi.mock('@silurus/ooxml-core', async (load) => ({
   unloadOfficeFontFallbacks: (faces: FontFace[]) => {
     for (const face of faces) mocks.registeredFonts.delete(face);
   },
+  loadNativeRouteSentinels: async () => mocks.nativeSentinels,
 }));
 vi.mock('./document-pull-worker.js', async (load) => ({
   ...await load<typeof import('./document-pull-worker.js')>(),
@@ -180,6 +182,7 @@ afterEach(() => {
   mocks.render.mockReset();
   mocks.paginationFailure = undefined;
   mocks.registeredFonts.clear();
+  mocks.nativeSentinels = [];
   FakeOffscreenCanvas.created = [];
 });
 
@@ -240,6 +243,20 @@ describe('DOCX render worker bitmap surface', () => {
     expect(worker.received).not.toContainEqual(expect.objectContaining({ type: 'layoutPartial', forId: 101 }));
     expect(mocks.registeredFonts.size).toBe(0);
     await expect(document.renderPageToBitmap(0, { dpr: 1 })).rejects.toThrow('Document not loaded');
+  });
+
+  it('continues on the main thread when this realm cannot register the route sentinels', async () => {
+    // Main mode admits measured native-route lines with its own sentinels; a
+    // worker that cannot register them must not lay the document out without
+    // them, or the two modes would paginate differently.
+    const { worker, dispatch } = await loadWorker(false);
+    mocks.nativeSentinels = null;
+    await dispatch({
+      type: 'parse', id: 101, data: new ArrayBuffer(1), defaultCurrentDateMs: 0,
+      resourcePolicy: { maxArchiveEntryBytes: null, maxTotalInflatedBytes: null, maxArchiveEntries: null },
+    });
+    expect(worker.received).toContainEqual(expect.objectContaining({ type: 'mainThreadVerticalFallback', id: 101 }));
+    expect(worker.received).not.toContainEqual(expect.objectContaining({ type: 'parsedMeta', id: 101 }));
   });
 
   it('suppresses ordinary progressive cancellation responses', async () => {
