@@ -128,7 +128,7 @@ export function renderScatterChart(
   const titleTopPad = titleBand.topPad;
   const xAxLabelFontPx = axisLabelPx(chart.catAxisFontSizeHpt, h, ptToPx);
   const yAxLabelFontPx = axisLabelPx(chart.valAxisFontSizeHpt, h, ptToPx);
-  const leg = measuredLegendReserve(ctx, chart, w, h, 0.22, ptToPx);
+  const leg = measuredLegendReserve(ctx, chart, w, h, ptToPx);
   const { legRightW, legLeftW, legTopH, legBottomH } = chartLegendBands(
     leg, chart.legendOverlay === true,
   );
@@ -184,6 +184,7 @@ export function renderScatterChart(
     ? (chartTextFontSizePx(secondaryX.fontSizeHpt, ptToPx) ?? xAxLabelFontPx)
       + categoryTickLabelGapPx(xAxLabelFontPx) + 2
     : 0;
+  // Fixed gutter fractions: library policy, see ChartPad in layout.ts.
   const pad = {
     t: titleBand.bandH + legTopH + yAxLabelFontPx / 2 + 2 + secondaryXLabelHeight,
     r: legRightW + w * 0.05 + secondaryYLabelWidth,
@@ -192,7 +193,6 @@ export function renderScatterChart(
   };
   const { plotRect: { px0, py0, pw, ph } } = computeChartFrame(chart, x, y, w, h, ptToPx, {
     titleBand,
-    legendSideReserveFrac: 0.22,
     legendReserve: leg,
     pad,
     honorPlotAreaManualLayout: true,

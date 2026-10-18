@@ -1,7 +1,6 @@
 import type {
   BodyElement,
   DocNote,
-  DocRun,
   EmbeddedFontRef,
   SectionProps,
   TblpPr,

@@ -108,23 +108,17 @@ export function runLineBreakerPass(input: LineBreakerPassInput): LayoutLine[] {
     ctx,
     segs,
     maxWidth,
-    firstIndent,
     scale,
     tabStops,
     wrapCtx,
     fontFamilyClasses,
-    tabOriginPx,
     kinsoku,
     characterGrid,
     defaultTabPt,
-    marginRightPx,
     baseRtl,
-    isJustified,
-    stretchLastLine,
     startBoundary,
     widthPolicy,
     verticalGlyphMeasurement,
-    overflowPunct,
     passContext,
   } = input;
 
@@ -420,6 +414,13 @@ export function runLineBreakerPass(input: LineBreakerPassInput): LayoutLine[] {
     retractCurrentLineForLeadingKinsoku,
     keepLeadingKinsokuWithCurrentLine,
   };
+  // The first numbered line's body indent may be resolved against its float
+  // window (placeNumberingFirstLine); every first-line reader sees it.
+  Object.defineProperty(operationState, 'firstIndent', {
+    get: () => breakerState.firstIndentOverride ?? input.firstIndent,
+    enumerable: true,
+  });
+
   startLine(lineHeadRequirement());
 
   iterateBreakOpportunities(operationState, {

@@ -22,6 +22,10 @@
  * content never selects, extends or rewrites a module URL or its config.
  */
 
+import { throwIfAborted } from '../internal/abort.js';
+
+const ABORT_MESSAGE = 'model source load was aborted';
+
 export type ModelSourceTarget = 'docx' | 'xlsx' | 'pptx';
 
 /** Scalar configuration passed verbatim to a source module. */
@@ -209,6 +213,47 @@ export function beginModelSourceLoad(
   }
 }
 
+/** How {@link modelSourceWorker} rewrites one format's worker protocol. */
+export interface ModelSourceWorkerOptions {
+  /** The format worker protocol's message discriminator field. */
+  readonly discriminator: 'type' | 'kind';
+  readonly load: AdmittedModelSourceLoad;
+  /** The selected-source `parse` message that replaces the ordinary one. */
+  parseMessage(wire: Record<string, unknown>): unknown;
+  /** Format-owned member overrides (for example message listeners). An
+   *  `undefined` result falls through to the worker's own member. */
+  member?(target: Worker, key: string | symbol): unknown;
+}
+
+/**
+ * Decorate only the selected-source worker; the ordinary bridge stays
+ * unchanged. The source owner initializes itself, so `init` is dropped, and
+ * `parse` is replaced by the format's source parse message, transferring the
+ * load's transferables after the caller's.
+ */
+export function modelSourceWorker(worker: Worker, options: ModelSourceWorkerOptions): Worker {
+  return new Proxy(worker, {
+    get(target, key) {
+      if (key === 'postMessage') return (message: unknown, transfer?: Transferable[]) => {
+        if (typeof message === 'object' && message !== null) {
+          const wire = message as Record<string, unknown>;
+          const kind = wire[options.discriminator];
+          if (kind === 'init') return;
+          if (kind === 'parse') {
+            target.postMessage(options.parseMessage(wire), [...(transfer ?? []), ...options.load.transfer]);
+            return;
+          }
+        }
+        target.postMessage(message, transfer ?? []);
+      };
+      const member = options.member?.(target, key);
+      if (member !== undefined) return member;
+      const value = Reflect.get(target, key, target);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+}
+
 /**
  * A source archive may return a view into a larger buffer, shared memory, or
  * memory it still owns. Copy the exact byte range into a standalone, library
@@ -335,7 +380,7 @@ export async function openModelSourceModule<TArchive>(
   transfer: readonly Transferable[] = [],
 ): Promise<OpenedModelSourceModule<TArchive>> {
   const sourceModule = validateModelSourceModuleDescriptor(descriptor);
-  throwIfAborted(signal);
+  throwIfAborted(signal, ABORT_MESSAGE);
   const namespace: unknown = await import(/* @vite-ignore */ sourceModule.moduleUrl);
   const open = typeof namespace === 'object' && namespace !== null
     ? (namespace as Partial<ModelSourceModule>).openModelSource
@@ -343,7 +388,7 @@ export async function openModelSourceModule<TArchive>(
   if (typeof open !== 'function') {
     throw new TypeError('model source module must export openModelSource()');
   }
-  throwIfAborted(signal);
+  throwIfAborted(signal, ABORT_MESSAGE);
   const opened: unknown = await open(bytes, sourceModule.config, signal, transfer);
   if (typeof opened !== 'object' || opened === null) {
     throw new TypeError('openModelSource() must return an object');
@@ -362,7 +407,7 @@ export async function openModelSourceModule<TArchive>(
   try {
     const archive = validateArchive(record.archive);
     const viewDefaults = validateViewDefaults(record.viewDefaults);
-    throwIfAborted(signal);
+    throwIfAborted(signal, ABORT_MESSAGE);
     return Object.freeze({ archive, viewDefaults, close: closeOnce });
   } catch (error) {
     try { closeOnce(); } catch {}
@@ -431,11 +476,4 @@ function isPlainRecord(value: unknown): value is object {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
   const prototype: unknown = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
-}
-
-function throwIfAborted(signal: AbortSignal | undefined): void {
-  if (!signal?.aborted) return;
-  const error = new Error('model source load was aborted');
-  error.name = 'AbortError';
-  throw error;
 }

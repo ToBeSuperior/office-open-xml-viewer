@@ -12,6 +12,7 @@ import {
   wordSnapToCharsEastAsianCellCount,
   wordIdeographicSpaceLineEndAllowanceCount,
   wordJustifiedInterwordCompressionFactor,
+  WORD_RUBY_LINE_ASCENT,
 } from '../layout/line-compatibility.js';
 import {
   type LayoutImageSeg,
@@ -20,6 +21,7 @@ import {
   type LayoutTabSeg,
   type LayoutTextSeg,
   type LineBoundary,
+  type WrapLayoutCtx,
 } from './model.js';
 import { createLineBreakerState, type GapTransaction, type GapWindow } from './break-queue.js';
 import {
@@ -362,6 +364,44 @@ export function performStartLine(operationState: PassOperationState, requirement
   placeLineWindow(operationState, transaction, null);
 }
 
+/** Windows Word 16.0 controls (issue #1883: decimal, bullet, picture and long
+ * markers; left/right/center lvlJc; tab/space/nothing suffixes; custom stops;
+ * hanging, first-line and zero indents; 72-360pt floats on either side, distR
+ * 0-30pt, RTL) show a numbered first line beside a float placed exactly like a
+ * plain paragraph that starts with the marker text: the leading edge is
+ * max(max(indent, wrap) + firstLine, wrap), the marker is aligned there and its
+ * suffix tab advances to the paragraph's absolute stops (hanging stop, custom
+ * stops, then default stops from the margin). Lines whose leading edge the
+ * window leaves where the indents put it keep the precomputed body offset. */
+function placeNumberingFirstLine(
+  operationState: PassOperationState,
+  numbering: NonNullable<WrapLayoutCtx['numberingFirstLine']>,
+  hangingOffset: number,
+): void {
+  const { breakerState, maxWidth, baseRtl } = operationState;
+  const base = baseRtl
+    ? maxWidth - (breakerState.lineXOffset + breakerState.lineMaxWidth)
+    : breakerState.lineXOffset;
+  const windowEdge = base + hangingOffset;
+  const authored = numbering.authoredFirstIndentPx;
+  const leadingEdge = Math.max(Math.max(0, windowEdge) + authored, windowEdge);
+  if (leadingEdge <= authored) {
+    breakerState.firstIndentOverride = undefined;
+    breakerState.numberingFirstLine = undefined;
+    return;
+  }
+  const bodyIndent = Math.max(leadingEdge, numbering.bodyIndentAt(leadingEdge));
+  // The breaker reads a line's window start as origin + min(0, first indent).
+  // The body indent is never negative here, so re-anchor the origin at the
+  // window's real leading edge (keeping its trailing edge) before charging it.
+  if (!baseRtl) breakerState.lineXOffset += hangingOffset;
+  breakerState.lineMaxWidth -= hangingOffset;
+  breakerState.firstIndentOverride = bodyIndent - windowEdge;
+  breakerState.numberingFirstLine = {
+    leadingEdgePx: leadingEdge, bodyIndentPx: bodyIndent, lineStartOffsetPx: bodyIndent - windowEdge,
+  };
+}
+
 /** Search the first admissible window for the transaction's requirement:
  * a later gap on the continuation baseline, else a new physical line. */
 function placeLineWindow(
@@ -380,7 +420,9 @@ function placeLineWindow(
   // The measured-line contract still carries the authored firstIndent: restore
   // it in the returned width so fit/tab arithmetic and planLine consume the
   // same safe window, including the mirrored logical start of RTL paragraphs.
-  const hangingOffset = breakerState.isFirst ? Math.min(0, firstIndent) : 0;
+  const numbering = breakerState.isFirst ? wrapCtx.numberingFirstLine : undefined;
+  const hangingOffset = breakerState.isFirst
+    ? Math.min(0, numbering ? numbering.authoredFirstIndentPx : firstIndent) : 0;
   const lineBandX = wrapCtx.paraX + (baseRtl ? 0 : hangingOffset);
   const lineBandWidth = maxWidth - hangingOffset;
   const reference = {
@@ -465,6 +507,7 @@ function placeLineWindow(
   breakerState.currentLineTopY = accepted.topY;
   breakerState.lineXOffset = accepted.xOffset;
   breakerState.lineMaxWidth = accepted.maxWidth;
+  if (numbering) placeNumberingFirstLine(operationState, numbering, hangingOffset);
   // A trailing-indent extension exists only beside an unnarrowed band, and
   // only where no exclusion intersects it on this line (§20.4.2.17–.19).
   const extension = marginExtensionWidth(operationState);
@@ -764,6 +807,8 @@ export function performFlush(
         }
       : undefined;
   breakerState.lines.push({
+    ...(breakerState.isFirst && breakerState.numberingFirstLine
+      ? { numberingFirstLine: breakerState.numberingFirstLine } : {}),
     physicalLineIndex: breakerState.physicalLineIndex,
     ...(justifiedCompressionApplies(operationState)
       ? {
@@ -890,6 +935,7 @@ export function performAddToLine(
   let committedWidth = w;
   if ('text' in s) {
     const kind = snapToCharsClass(s, characterGrid);
+    // `word-snap-to-chars-script-block-allocation`
     const naturalWidth = s.snapGridNaturalWidthPx ?? w;
     if (kind && snapPitchPx != null) {
       s.snapGridClass = kind;
@@ -1535,9 +1581,12 @@ export function performTextSegmentBox(
   // height; native reference sides are policy geometry only. Ruby and an
   // authored baseline position compose additional boxes outside either
   // simple OpenType projection, so retain measured sides for those inputs.
+  // A ruby base with an authored hpsRaise keeps its own design sides: the
+  // guide only raises the ascent (WORD_RUBY_LINE_ASCENT below). Ruby without
+  // hpsRaise is outside that measured class and keeps measured sides.
   const designOwnsSides =
+    (!s.ruby || s.ruby.hpsRaisePt != null) &&
     (s.resolvedResourceVerticalMetric || s.referenceFontVerticalMetric) &&
-    !s.ruby &&
     (s.position ?? 0) === 0 &&
     s.resolvedDesignAscentRatio != null &&
     s.resolvedDesignDescentRatio != null;
@@ -1549,7 +1598,7 @@ export function performTextSegmentBox(
     else if (positionPx < 0) descent -= positionPx;
   }
   if (s.ruby && (!s.textBoxLineFloor || s.textBoxVertical)) {
-    ascent += rubyAscentReservePx(
+    const reserve = rubyAscentReservePx(
       s.ruby.fontSizePt,
       s.ruby.hpsRaisePt,
       scale,
@@ -1557,6 +1606,14 @@ export function performTextSegmentBox(
       ctx,
       fontFamilyClasses,
     );
+    void WORD_RUBY_LINE_ASCENT;
+    // WORD_RUBY_LINE_ASCENT: with an authored hpsRaise the guide's em box
+    // stands that far above the base baseline, and the line's ascent is the
+    // larger of the base ascent and the guide's top. Without hpsRaise the
+    // retained ink-derived reserve keeps its established additive form.
+    ascent = s.ruby.hpsRaisePt != null
+      ? Math.max(ascent, reserve + s.ruby.fontSizePt * scale)
+      : ascent + reserve;
   }
   return { width, height: s.fontSize, ascent, descent };
 }
@@ -1639,6 +1696,7 @@ export function performTabFollowWidth(operationState: PassOperationState, q: Lay
   return segAdvance(q);
 }
 
+// `word-decimal-tab-separator-resolution`
 export function performDecimalAlignmentPoint(
   segments: readonly LayoutSeg[],
 ): Readonly<{ segmentIndex: number; charOffset: number }> | null {

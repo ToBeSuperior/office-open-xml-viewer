@@ -18,7 +18,9 @@
 // drawn as its Unicode vertical presentation form where one exists (、。 and
 // the fullwidth brackets) and otherwise as the character turned 90° clockwise
 // inside its 1 em cell, which is how those faces design the remaining forms
-// (ー ～ ＝ ＿ ￣ ｜ … ‥ ‐ arrows ― ∥).
+// (ー ～ ＝ ＿ ￣ ｜ … ‥ ‐ arrows ― ∥). A vertical glyph from vrt2-only coverage
+// (`nominal`, e.g. Yu Gothic / Meiryo ∥) stands unturned as its horizontal
+// glyph in the presentation-form frame (#1827 controls; see stacked-faces.ts).
 //
 // §20.1.10.82 names decoration styles but does not place them in stacked text.
 // PowerPoint electronic PDF controls (Arial 18/24/32pt, both modes, mixed sizes
@@ -32,17 +34,19 @@
 
 import {
   layoutStackedText,
+  paintStackedRotated,
+  paintStackedVerticalForm,
   STACKED_CELL_FACTOR,
+  stackedClusters,
   stackedFaceBox,
-  stackedSidewaysCharacter,
-  stackedVerticalGlyph,
+  stackedUprightBaseline,
+  stackedVerticalGlyphText,
   type DrawingMlInputRun,
   type DrawingMlLineSpacing,
   type DrawingMlTextRect,
   type StackedGlyph,
   type StackedParagraph,
 } from '@silurus/ooxml-core/internal/drawingml-text';
-import { graphemeClusterOffsets, verticalBracketFormSubstitute, verticalFormSubstitute } from '@silurus/ooxml-core';
 import type { HyperlinkTarget } from '@silurus/ooxml-core';
 
 /** The segment fields stacked layout and paint read (renderer's LayoutSegment). */
@@ -141,6 +145,8 @@ function faceBox(ctx: Ctx2D, style: StackedSegmentStyle): { ascent: number; desc
 interface Measured<T> extends StackedGlyph<T> {
   box: { ascent: number; descent: number };
   cell: number;
+  /** A vertical glyph drawn unturned as its horizontal glyph. */
+  nominal?: true;
 }
 
 function makeMeasurer<T extends StackedSegmentStyle>(ctx: Ctx2D) {
@@ -164,36 +170,16 @@ function makeMeasurer<T extends StackedSegmentStyle>(ctx: Ctx2D) {
       : latinBox ? latinBox.ascent + latinBox.descent : cellEm;
     const thickness = Math.max(cell, STACKED_CELL_FACTOR * latinEm * style.sizePx);
     const spc = style.letterSpacingPx ?? 0;
-    const out: Measured<T>[] = [];
-    // One stacked cell per grapheme cluster: a base with its combining marks
-    // or variation selectors (é, か + ゙) stands in one cell, measured and
-    // painted together. The cluster takes the class of its base character:
-    // every measured sideways character is a single code point, and a mark
-    // attached to it (for example a variation selector) does not change how
-    // PowerPoint turns the base.
-    let start = 0;
-    const ends = graphemeClusterOffsets(text);
-    ends.push(text.length);
-    for (const end of ends) {
-      const ch = text.slice(start, end);
-      start = end;
-      if (!ch) continue;
-      const cp = ch.codePointAt(0) ?? 0;
-      let kind: Measured<T>['kind'] = 'upright';
-      let advance = cell;
-      if (!upright && stackedSidewaysCharacter(cp)) {
-        if (stackedVerticalGlyph(family, cp, /\bbold\b/.test(style.font), /\bitalic\b/.test(style.font))) {
-          kind = 'verticalGlyph';
-          advance = style.sizePx;
-        } else {
-          kind = 'rotated';
-          ctx.font = style.font;
-          advance = ctx.measureText(ch).width;
-        }
-      }
-      out.push({ text: ch, style, kind, advance: advance + spc, thickness, space: ch === ' ', box, cell });
-    }
-    return out;
+    const face = { family, bold: /\bbold\b/.test(style.font), italic: /\bitalic\b/.test(style.font) };
+    return stackedClusters(text, face, {
+      upright: cell,
+      verticalGlyph: style.sizePx,
+      rotated: (ch) => {
+        ctx.font = style.font;
+        return ctx.measureText(ch).width;
+      },
+    }, upright).map(({ text: ch, kind, advance, nominal }) => (
+      { text: ch, style, kind, advance: advance + spc, thickness, space: ch === ' ', box, cell, ...(nominal ? { nominal } : {}) }));
   };
 }
 
@@ -306,27 +292,20 @@ export function renderStackedText<T extends StackedSegmentStyle>(
     if (style.noFill) return;
     ctx.fillStyle = marker && body.markerPaint
       ? body.markerPaint(markerParagraph, axisX, cellTop + g.cell - box.descent * size) : style.color;
-    const cp = g.text.codePointAt(0) ?? 0;
     if (g.kind === 'upright') {
       ctx.textAlign = 'center';
       ctx.textBaseline = 'alphabetic';
-      const baseline = cellTop + g.cell - box.descent * size;
+      const baseline = stackedUprightBaseline(cellTop, g.cell, box, size);
       strike(g.text, axisX, baseline, true);
       if (!g.space) ctx.fillText(g.text, axisX, baseline);
     } else if (g.kind === 'verticalGlyph') {
-      // A presentation form replaces a lone character only; a cluster with a
-      // mark keeps its own glyphs and takes the turned fallback.
-      const single = String.fromCodePoint(cp) === g.text;
-      const form = single ? verticalFormSubstitute(cp) ?? verticalBracketFormSubstitute(cp) : null;
-      const left = axisX - (box.ascent + box.descent) * size / 2;
+      // A `vert` cluster with a mark has no presentation form and takes the
+      // turned fallback.
+      const form = stackedVerticalGlyphText(g);
       if (form !== null) {
-        ctx.textAlign = 'left';
-        ctx.textBaseline = 'alphabetic';
-        const text = String.fromCodePoint(form);
-        const baseline = cellTop + box.ascent * size;
-        strike(text, left, baseline);
-        ctx.fillText(text, left, baseline);
+        paintStackedVerticalForm(ctx, form, axisX, cellTop, box, size, (left, baseline) => strike(form, left, baseline));
       } else {
+        const left = axisX - (box.ascent + box.descent) * size / 2;
         ctx.save();
         ctx.translate(left + size / 2, cellTop + size / 2);
         ctx.rotate(Math.PI / 2);
@@ -348,14 +327,7 @@ export function renderStackedText<T extends StackedSegmentStyle>(
         ctx.restore();
       }
     } else {
-      ctx.save();
-      ctx.translate(axisX - (box.ascent - box.descent) * size / 2, cellTop);
-      ctx.rotate(Math.PI / 2);
-      ctx.textAlign = 'left';
-      ctx.textBaseline = 'alphabetic';
-      strike(g.text, 0, 0);
-      ctx.fillText(g.text, 0, 0);
-      ctx.restore();
+      paintStackedRotated(ctx, g.text, axisX, cellTop, box, size, () => strike(g.text, 0, 0));
     }
   };
   let glyphIndex = 0;

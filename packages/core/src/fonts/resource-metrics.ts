@@ -56,33 +56,6 @@ export interface ResolvedFontMetric {
   synthesized?: boolean;
 }
 
-/** Project one concrete OpenType face into renderer-neutral design metrics.
- * Identity and face selection stay with the resource loader; this function
- * deliberately accepts no family name. */
-export function openTypeDesignLineRatios(metrics: Readonly<{
-  unitsPerEm: number;
-  hheaAscent: number;
-  hheaDescent: number;
-  hheaLineGap: number;
-}>): Readonly<{
-  lineHeightRatio: number;
-  designAscentRatio: number;
-  designDescentRatio: number;
-  lineGapRatio: number;
-}> | null {
-  if (!(Number.isFinite(metrics.unitsPerEm) && metrics.unitsPerEm > 0)) return null;
-  const ascent = Math.max(0, metrics.hheaAscent);
-  const descent = Math.max(0, -metrics.hheaDescent);
-  const lineGap = Math.max(0, metrics.hheaLineGap);
-  if (!(ascent + descent + lineGap > 0)) return null;
-  return Object.freeze({
-    lineHeightRatio: (ascent + descent + lineGap) / metrics.unitsPerEm,
-    designAscentRatio: ascent / metrics.unitsPerEm,
-    designDescentRatio: descent / metrics.unitsPerEm,
-    lineGapRatio: lineGap / metrics.unitsPerEm,
-  });
-}
-
 export function normalizeFontMetricFamily(family: string): string {
   return family.trim().toLowerCase();
 }

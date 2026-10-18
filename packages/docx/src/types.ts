@@ -935,7 +935,7 @@ export interface ShapeRun {
     absolutePerspective: boolean;
   };
   /** Normalized [0,1] custom-geometry sub-paths. Empty when `presetGeometry`
-   *  is set; the renderer chooses between buildCustomPath and buildShapePath. */
+   *  is set; the renderer then uses core's preset geometry resolver. */
   subpaths: PathCmd[][];
   /** ECMA-376 §20.1.9.15 per-path `fill` mode and `stroke` flag, parallel to
    *  `subpaths`; absent when every path uses the defaults. */
@@ -945,7 +945,8 @@ export interface ShapeRun {
     stroke?: false;
   }>;
   /** OOXML <a:prstGeom prst> name (e.g. "rect", "ellipse", "rtTriangle").
-   *  When set the renderer calls core's buildShapePath with `adjValues`. */
+   *  When set the renderer resolves it through core's ECMA-376 preset engine
+   *  with `adjValues`. */
   presetGeometry?: string | null;
   /** <a:gd name="adj{n}"> values from prstGeom/avLst in adj1..adj8 order.
    *  `null` preserves omitted named guides so the preset engine can use the
@@ -1249,9 +1250,8 @@ export interface DocxTextRun {
   underline: boolean;
   /** ECMA-376 §17.3.2.40 `<w:u w:val>` — the raw ST_Underline (§17.18.99) style
    *  value (`double` / `thick` / `dotted` / `wave` / `dashLong` / …). Absent for
-   *  the plain single rule (or no underline). The renderer normalizes this
-   *  WordprocessingML vocabulary to the shared DrawingML ST_TextUnderlineType
-   *  (§20.1.10.82) that `core.drawUnderline` dispatches on. */
+   *  the plain single rule (or no underline). Layout resolves this
+   *  WordprocessingML vocabulary into retained decoration geometry. */
   underlineStyle?: string;
   /** ECMA-376 §17.3.2.40 `<w:u w:color>` — underline-only colour (hex 6, or the
    *  literal `auto`). Absent ⇒ the underline follows the glyph colour. */

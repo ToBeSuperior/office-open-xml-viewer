@@ -1,7 +1,86 @@
 import type { CanvasFontRoute, ResolvedFontMetric } from '@silurus/ooxml-core';
 import { localFontMetricCoversText, normalizeFontMetricFamily } from '@silurus/ooxml-core';
 import type { FontResolution } from '../layout/font-service.js';
-import { referenceFontLineMetrics } from '../reference-font-line-metrics.js';
+import type { TextLayoutService } from '../layout/text.js';
+import { referenceFontLineMetrics, type ReferenceFontLineMetrics } from '../reference-font-line-metrics.js';
+import { LIBRARY_SYNTHESIZED_FACE_LINE_GEOMETRY } from '../layout/line-compatibility.js';
+
+/** Text that proves which face a native route paints (#1848). */
+export interface SynthesizedFaceProbe {
+  readonly text: TextLayoutService;
+  readonly probe: string;
+}
+
+const EAST_ASIAN_PROBE_SCRIPT = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\p{Script=Bopomofo}]/u;
+
+type FaceTuple = Readonly<{ weight: number; style: 'normal' | 'italic' }>;
+
+/** CSS Fonts Level 4 §5.2 step 4 over the family's loaded faces: style
+ * narrows first (italic, then normal; no oblique faces are loaded), then
+ * weight: above 500 heavier ascending then lighter descending; below 400
+ * lighter descending then heavier ascending; 400–500 heavier up to 500, then
+ * lighter descending, then above 500 ascending. */
+function cssMatchedFace<T extends FaceTuple>(faces: readonly T[], weight: number, style: 'normal' | 'italic'): T | undefined {
+  for (const candidateStyle of style === 'italic' ? ['italic', 'normal'] as const : ['normal', 'italic'] as const) {
+    const sameStyle = faces.filter((face) => face.style === candidateStyle);
+    if (sameStyle.length === 0) continue;
+    const lighter = sameStyle.filter((face) => face.weight < weight).sort((a, b) => b.weight - a.weight);
+    const heavier = sameStyle.filter((face) => face.weight > weight).sort((a, b) => a.weight - b.weight);
+    const exact = sameStyle.filter((face) => face.weight === weight);
+    const order = weight > 500 ? [...exact, ...heavier, ...lighter]
+      : weight < 400 ? [...exact, ...lighter, ...heavier]
+      : [...exact, ...heavier.filter((face) => face.weight <= 500), ...lighter,
+        ...heavier.filter((face) => face.weight > 500)];
+    return order[0];
+  }
+  return undefined;
+}
+
+/**
+ * Catalog vertical geometry for a selected face: the exact tuple, or, for a
+ * native route of an installed family whose tuple has no catalog entry (bold
+ * of a face catalogued only at 400, such as MS Mincho), the geometry of the
+ * loaded exact local() face that the route is PROVED to paint. The proof
+ * rasterizes probe glyphs of the span's script class through the native route
+ * and through a private
+ * family holding only that loaded face; CSS Fonts Level 4 §5.2 makes the
+ * private family synthesize the missing tuple from that one face. Pixel
+ * identity shows the native route paints the same synthesized face, whose
+ * vertical tables (and so its Word 1.3 × usWin Far-East line, #1832) are the
+ * loaded face's. A difference means another face paints (a genuine styled face
+ * absent from the catalog, or a fallback face), and the span keeps its own
+ * Canvas box. Catalog absence alone is never treated as synthesis.
+ */
+export function authoredReferenceVerticalMetric(
+  selected: FontResolution,
+  synthesis?: SynthesizedFaceProbe,
+): ReferenceFontLineMetrics | undefined {
+  void LIBRARY_SYNTHESIZED_FACE_LINE_GEOMETRY;
+  const exact = referenceFontLineMetrics(selected.requestedFamily, selected.weight, selected.style);
+  if (exact || !synthesis?.text.sameGlyphRaster
+    || selected.source !== 'native' || selected.installedFamily !== true) return exact;
+  const faces = synthesis.text.exactLocalFaces?.(selected.requestedFamily) ?? [];
+  const matched = cssMatchedFace(faces, selected.weight, selected.style);
+  // Glyph ownership: the span's own graphemes (and the raster probe's) must
+  // come from the matched exact source, not from a fallback face.
+  if (!matched?.coverageProbeFamily || !synthesis.text.ownsGlyphs) return undefined;
+  const reference = referenceFontLineMetrics(selected.requestedFamily, matched.weight, matched.style);
+  // Face identity is a property of the route and tuple, as for the regular
+  // catalog tuple this extends (which admits a native installed route without
+  // per-glyph proof). One fixed probe per script class bounds the work to a
+  // few rasterizations per document instead of one per distinct span.
+  const probe = EAST_ASIAN_PROBE_SCRIPT.test(synthesis.probe) ? '国あ' : 'Hxg';
+  const owned = (text: string) => synthesis.text.ownsGlyphs!({
+    text, weight: selected.weight, style: selected.style, coverageProbeFamily: matched.coverageProbeFamily!,
+  });
+  return reference && owned(probe) && owned(synthesis.probe) && synthesis.text.sameGlyphRaster({
+    text: probe,
+    weight: selected.weight,
+    style: selected.style,
+    route: selected.route,
+    faceFamily: matched.resolvedFamily,
+  }) ? reference : undefined;
+}
 
 /** Vertical admission shared by ordinary text and numbering markers. Resource
  * identity, tuple ambiguity and glyph coverage are resolved before this gate.
@@ -11,13 +90,14 @@ export function selectedFontLineMetric(
   localFont: ResolvedFontMetric | undefined,
   naturalMetricAllowed: boolean,
   referenceMetricAllowed = true,
+  synthesis?: SynthesizedFaceProbe,
 ) {
   const resourceMetric = (naturalMetricAllowed || localFont?.designAscentRatio == null)
     && (localFont?.lineHeightRatio != null || localFont?.designAscentRatio != null
       || localFont?.eastAsianLineHeightRatio != null) ? localFont : undefined;
   const referenceMetric = naturalMetricAllowed && referenceMetricAllowed && !resourceMetric
     && mayUseAuthoredReferenceVerticalMetric(selected)
-    ? referenceFontLineMetrics(selected.requestedFamily, selected.weight, selected.style)
+    ? authoredReferenceVerticalMetric(selected, synthesis)
     : undefined;
   return { resourceMetric, referenceMetric, lineMetric: resourceMetric ?? referenceMetric };
 }

@@ -1,6 +1,6 @@
 import type { LineSpacing } from '../types';
 import type { CanvasFontRoute, ResolvedFontMetric } from '@silurus/ooxml-core';
-import { measureResolvedCanvasFontBoxRatio } from '@silurus/ooxml-core';
+import { measureResolvedCanvasFontBoxRatio, SYNTHETIC_ASCENT_EM, SYNTHETIC_DESCENT_EM } from '@silurus/ooxml-core';
 import type { NumberingMarkerShapeInput } from '../layout/types.js';
 import type { MeasurementTextContext } from '../layout/measurement-capabilities.js';
 import type { ParagraphLayoutSource, TextLayoutService } from '../layout/text.js';
@@ -9,7 +9,7 @@ import { wordDegenerateLineSpacingIsSingle, wordEastAsianGridLineCells, wordFarE
 import { type DocGridCtx, type LayoutLine } from './model.js';
 import { isGridLineRule } from './advance.js';
 import { buildFont, getDefaultFontFamily, getDefaultFontSize } from './font-routes.js';
-import { allowsReferenceFontMetric, indexedFontMetrics, mayUseAuthoredReferenceVerticalMetric, selectResourceMetric } from './font-metrics.js';
+import { allowsReferenceFontMetric, authoredReferenceVerticalMetric, indexedFontMetrics, mayUseAuthoredReferenceVerticalMetric, selectResourceMetric } from './font-metrics.js';
 
 /**
  * ECMA-376 §17.6.5 docGrid line grid — number of whole grid CELLS a
@@ -217,7 +217,7 @@ export function lineBoxHeight(
 
 /** Natural single-line height in px for an empty paragraph (no rendered text). */
 export function emptyLineNaturalPx(fontSizePt: number, scale: number): { asc: number; desc: number } {
-  return { asc: fontSizePt * scale * 0.8, desc: fontSizePt * scale * 0.2 };
+  return { asc: fontSizePt * scale * SYNTHETIC_ASCENT_EM, desc: fontSizePt * scale * SYNTHETIC_DESCENT_EM };
 }
 
 
@@ -226,8 +226,8 @@ export function measuredLineMetrics(
   fallbackEmPx: number,
 ): { ascent: number; descent: number } {
   return {
-    ascent: m.fontBoundingBoxAscent ?? m.actualBoundingBoxAscent ?? fallbackEmPx * 0.8,
-    descent: m.fontBoundingBoxDescent ?? m.actualBoundingBoxDescent ?? fallbackEmPx * 0.2,
+    ascent: m.fontBoundingBoxAscent ?? m.actualBoundingBoxAscent ?? fallbackEmPx * SYNTHETIC_ASCENT_EM,
+    descent: m.fontBoundingBoxDescent ?? m.actualBoundingBoxDescent ?? fallbackEmPx * SYNTHETIC_DESCENT_EM,
   };
 }
 
@@ -411,11 +411,7 @@ export function paragraphMarkLineMetrics(
       && allowsReferenceFontMetric(indexedFontMetrics(
         textLayoutService.fontMetrics ?? textLayoutService.localMetrics ?? {},
       ), selectedFont)
-      ? referenceFontLineMetrics(
-          selectedFont.requestedFamily,
-          selectedFont.weight,
-          selectedFont.style,
-        )
+      ? authoredReferenceVerticalMetric(selectedFont, { text: textLayoutService, probe: markProbe })
       : undefined;
     if (naturalMetricAllowed && !resolvedLocalFont && !referenceMarkMetric
       && selectedFont?.source === 'native' && ctx) {
@@ -530,6 +526,7 @@ export function paragraphMarkLineMetrics(
       )
     : ordinaryAdvancePx;
   const advancePx = useFeLayout
+    // `word-use-fe-layout-empty-mark-grid-allocation`
     ? wordUseFeLayoutParagraphMarkGridAdvancePx({
         ordinaryAdvancePx,
         allocatedGridAdvancePx,

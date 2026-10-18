@@ -9,6 +9,7 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
 
+use ooxml_common::markdown::{escape_text, split_lines, TextContext};
 use serde_json::Value;
 
 use crate::types::SharedString;
@@ -23,7 +24,7 @@ pub(crate) fn render_sheet(
     limit: u64,
 ) -> Result<(), u64> {
     let name = sheet["name"].as_str().unwrap_or("(unnamed)");
-    let _ = writeln!(out, "## {}\n", name);
+    let _ = writeln!(out, "## {}\n", escape_text(name, TextContext::Heading));
     if out.len() as u64 > limit {
         return Err(out.len() as u64);
     }
@@ -145,16 +146,13 @@ pub(crate) fn render_sheet(
 
 fn write_table_row(out: &mut String, row: &[&str], n_cols: usize) {
     let cells: Vec<String> = (0..n_cols)
-        .map(|i| row.get(i).map(|s| escape_cell(s)).unwrap_or_default())
+        .map(|i| {
+            row.get(i)
+                .map(|s| escape_text(s, TextContext::TableCell))
+                .unwrap_or_default()
+        })
         .collect();
     let _ = writeln!(out, "| {} |", cells.join(" | "));
-}
-
-fn escape_cell(s: &str) -> String {
-    // Pipe is the only inline-table metachar in GFM cells. Newlines must also
-    // be flattened or they break the row — collapse to a literal `<br>` so the
-    // user sees the line structure.
-    s.replace('|', "\\|").replace('\n', "<br>")
 }
 
 fn cell_display<'a>(cell: &'a Value, shared_strings: &'a [SharedString]) -> Cow<'a, str> {
@@ -340,8 +338,8 @@ pub(crate) fn render_sheet_comments(
         let _ = writeln!(
             out,
             "### {} — {}{}\n",
-            escape_heading_text(sheet_name),
-            escape_heading_text(cell),
+            escape_text(sheet_name, TextContext::Heading),
+            escape_text(cell, TextContext::Heading),
             status
         );
         let text = comment["rootText"]
@@ -383,42 +381,27 @@ pub(crate) fn render_sheet_comments(
 }
 
 /// Upper bound of what [`write_quoted_comment`] appends: escaping at most
-/// doubles the author, and every text line gains the prefix, a space and a
-/// newline.
+/// doubles the author and the text, and every text line gains the prefix, a
+/// space and a newline.
 fn quoted_comment_bound(author: &str, text: &str, prefix: &str) -> u64 {
-    let lines = text.bytes().filter(|&b| b == b'\n').count() as u64 + 1;
+    let lines = ooxml_common::markdown::line_count_bound(text);
     (2 * author.len() as u64)
-        .saturating_add(text.len() as u64)
+        .saturating_add(2 * text.len() as u64)
         .saturating_add(lines.saturating_mul(prefix.len() as u64 + 2))
         .saturating_add(3 * prefix.len() as u64 + 32)
 }
 
 fn write_quoted_comment(author: &str, text: &str, prefix: &str, status: &str, out: &mut String) {
-    let author = escape_inline_text(&author.replace(['\r', '\n'], " "));
+    let author = escape_text(&author.replace(['\r', '\n'], " "), TextContext::Inline);
     let _ = writeln!(out, "{prefix} **{author}**{status}");
     let _ = writeln!(out, "{prefix}");
     if text.is_empty() {
         let _ = writeln!(out, "{prefix}");
     } else {
-        for line in text.lines() {
-            let _ = writeln!(out, "{prefix} {line}");
+        for line in split_lines(text) {
+            let _ = writeln!(out, "{prefix} {}", escape_text(line, TextContext::Inline));
         }
     }
-}
-
-fn escape_heading_text(value: &str) -> String {
-    value
-        .replace(['\r', '\n'], " ")
-        .replace('\\', "\\\\")
-        .replace('#', "\\#")
-}
-
-fn escape_inline_text(value: &str) -> String {
-    value
-        .replace('\\', "\\\\")
-        .replace('*', "\\*")
-        .replace('_', "\\_")
-        .replace('`', "\\`")
 }
 
 #[cfg(test)]
@@ -526,6 +509,18 @@ mod tests {
             .expect_err("over budget");
         assert!(observed > 1 << 20);
         assert!(out.len() < (1 << 20) + 64 * 1024, "{}", out.len());
+    }
+
+    /// The admission bound covers the worst-case expansion: every lone CR
+    /// starts a prefixed line and every character is escaped.
+    #[test]
+    fn comment_bound_covers_lone_cr_lines_and_escaping() {
+        for text in ["\r".repeat(512), "#\r".repeat(256), "&~".repeat(256)] {
+            let mut out = String::new();
+            write_quoted_comment("*_", &text, ">>", " (resolved)", &mut out);
+            let bound = quoted_comment_bound("*_", &text, ">>");
+            assert!(out.len() as u64 <= bound, "{} > {bound}", out.len());
+        }
     }
 
     /// One oversized comment is rejected from its size bound before any of

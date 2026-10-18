@@ -186,7 +186,7 @@ export function createCfReport(
 /** Internal per-invocation report delivery (Viewer only). Symbol-keyed so it
  *  never appears in public options and is removed before any worker post. */
 export type CfReportSink = (report: XlsxConditionalFormattingReport) => void;
-export const XLSX_CF_REPORT_SINK: unique symbol = Symbol('xlsx-cf-report-sink');
+const XLSX_CF_REPORT_SINK: unique symbol = Symbol('xlsx-cf-report-sink');
 type WithCfReportSink = { [XLSX_CF_REPORT_SINK]?: CfReportSink };
 
 export function withCfReportSink<T extends object>(options: T, sink: CfReportSink): T {

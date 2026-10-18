@@ -63,7 +63,6 @@ import {
   WORD_TABLE_CELL_IGNORES_GRID_RIGHT_INDENT_ADJUSTMENT,
   WORD_THAI_DISTRIBUTE_CLUSTER_POLICY,
   WORD_UNIFORM_RUN_POSITION_LEADING,
-  wordAutoMultipleCenterBoxPx,
   wordBalancedConsecutiveSpaceCellApplies,
   wordBalancedLinesAndCharsGridDeltaFactor,
   wordBalancedSpaceCellAdjustmentApplies,
@@ -71,7 +70,6 @@ import {
   wordEastAsianGridLineCells,
   wordFarEastSingleLinePx,
   wordOpenTypeAutoLineRatios,
-  wordFirstJustifiedContentSegment,
   wordGridAtLeastLineHeightPx,
   wordGridRightIndentAdjustmentPt,
   wordUseFeLayoutParagraphMarkGridAdvancePx,
@@ -79,12 +77,10 @@ import {
   wordDocumentCharacterCompressionApplies,
   wordJapanesePunctuationRetainedExtentPt,
   wordNumberingSuffixAcceptsCoincidentListTab,
-  wordRubyUniformLineHeightPx,
   wordSnapToCharsEastAsianCellCount,
   wordSourceRunSpaceContinuesSequence,
   wordContainerAllowsGridRightIndentAdjustment,
   wordUniformRunPositionPaintPt,
-  wordVisibleLineMetricPx,
 } from './line-compatibility.js';
 import {
   WORD_AUTO_TEXT_CONTRAST_EFFECTIVE_BACKGROUND,
@@ -145,11 +141,9 @@ import {
   WORD_VERTICAL_SECTION_UPRIGHT_BLOCK_TABLE,
   wordAlignedTableOriginPt,
   wordAutofitEmptyParagraphHasNoIntrinsicContent,
-  wordAuthoredAutoRowHeightUsesFloor,
   wordAuthoredBorderParticipates,
   wordClipsOverPageCantSplitRow,
   wordRelocatesParallelParagraphRowCut,
-  wordDropsTrailingStructuralCellMarker,
   wordExactRowFloorPt,
   wordExactRowVerticalClipBounds,
   wordSpacedCellInsideBorderOverridesTable,
@@ -158,6 +152,7 @@ import {
   wordTableMarginValuePt,
   wordTableRowHeightRule,
 } from './table-compatibility.js';
+import { isStructuralTrailingParagraph } from './table-cell-blocks.js';
 
 describe('defineCompatibilityRule', () => {
   it('retains explicit Microsoft evidence as immutable data', () => {
@@ -218,6 +213,11 @@ describe('defineCompatibilityRule', () => {
       evidence: { kind: 'regression-test', reference: 'a test somewhere' },
       description: 'Invalid regression evidence',
     })).toThrow(/path#test-title/);
+    expect(() => defineCompatibilityRule({
+      id: 'bad-library-policy-reference',
+      evidence: { kind: 'library-policy', reference: 'a test somewhere' },
+      description: 'Library policy without a pinning test',
+    })).toThrow(/path#test-title/);
   });
 
   it('records the approved Word section btLr page-frame difference', () => {
@@ -246,7 +246,7 @@ describe('defineCompatibilityRule', () => {
     ];
 
     expect(rules.map((rule) => (
-      rule.evidence.kind === 'regression-test' ? rule.evidence.reference : null
+      'reference' in rule.evidence ? rule.evidence.reference : null
     ))).toEqual([
       'packages/docx/src/layout/coordinate-space.test.ts#maps Transitional text direction %s to %s',
       'packages/docx/src/pagination.test.ts#ignores a terminal last-column break before a hard page boundary',
@@ -313,7 +313,7 @@ describe('float compatibility evidence', () => {
   it('names the established different-paragraph displacement policy', () => {
     expect(WORD_FLOAT_DIFFERENT_PARAGRAPH_DISPLACEMENT).toMatchObject({
       id: 'word-float-different-paragraph-displacement',
-      evidence: { kind: 'regression-test' },
+      evidence: { kind: 'library-policy' },
     });
   });
 
@@ -776,20 +776,6 @@ describe('layout compatibility inventory', () => {
     expect(markGridAdvance({ rule: 'atLeast', value: -1, explicit: true }, false)).toBe(16);
     expect(wordDegenerateLineSpacingIsSingle('exact', 0)).toBe(true);
     expect(wordDegenerateLineSpacingIsSingle('atLeast', 0)).toBe(false);
-    expect(wordAutoMultipleCenterBoxPx(true, false, 10, 12, 24)).toBe(12);
-    expect(wordAutoMultipleCenterBoxPx(true, true, 10, 12, 6)).toBe(6);
-    expect(wordVisibleLineMetricPx(20, 8)).toBe(8);
-    expect(wordVisibleLineMetricPx(20, undefined)).toBe(20);
-    expect(wordFirstJustifiedContentSegment(
-      [{ text: '  ' }, { text: 'body' }],
-      false,
-    )).toBe(1);
-    expect(wordFirstJustifiedContentSegment(
-      [{ text: '  ' }, { text: 'body' }],
-      true,
-    )).toBe(0);
-    expect(wordRubyUniformLineHeightPx(true, [12, 18, 14])).toBe(18);
-    expect(wordRubyUniformLineHeightPx(false, [12, 18, 14])).toBe(0);
     expect(wordRtlAmbiguousCharacter('.')).toBe(true);
     expect(wordRtlAmbiguousCharacter('A')).toBe(false);
     expect(wordKashidaFinalFormApplies(3, 3)).toBe(true);
@@ -807,9 +793,6 @@ describe('layout compatibility inventory', () => {
     expect(wordTableBorderWeight('unknown', 2)).toBe(0);
     expect(wordTableRowHeightRule('auto', false)).toBe('atLeast');
     expect(wordTableRowHeightRule('auto', true)).toBe('auto');
-    expect(wordAuthoredAutoRowHeightUsesFloor('auto', 0)).toBe(true);
-    expect(wordAuthoredAutoRowHeightUsesFloor('auto', Number.POSITIVE_INFINITY)).toBe(true);
-    expect(wordAuthoredAutoRowHeightUsesFloor('atLeast', 10)).toBe(false);
     expect(wordTableCellSpacingValuePt('pct', null)).toBe(0);
     expect(wordTableCellSpacingValuePt('dxa', 4)).toBe(4);
     expect(wordTableMarginValuePt({
@@ -824,29 +807,14 @@ describe('layout compatibility inventory', () => {
   });
 
   it('drops only an empty trailing paragraph after a non-paragraph cell block', () => {
-    expect(wordDropsTrailingStructuralCellMarker({
-      contentLength: 2,
-      previousKind: 'table',
-      lastKind: 'paragraph',
-      lastParagraphRunCount: 0,
-    })).toBe(true);
-    expect(wordDropsTrailingStructuralCellMarker({
-      contentLength: 2,
-      previousKind: 'paragraph',
-      lastKind: 'paragraph',
-      lastParagraphRunCount: 0,
-    })).toBe(false);
-    expect(wordDropsTrailingStructuralCellMarker({
-      contentLength: 2,
-      previousKind: 'table',
-      lastKind: 'paragraph',
-      lastParagraphRunCount: 1,
-    })).toBe(false);
-    expect(wordDropsTrailingStructuralCellMarker({
-      contentLength: 1,
-      previousKind: undefined,
-      lastKind: 'paragraph',
-      lastParagraphRunCount: 0,
-    })).toBe(false);
+    type CellContent = Parameters<typeof isStructuralTrailingParagraph>[0];
+    const content = (...blocks: readonly object[]) => blocks as unknown as CellContent;
+    const table = { type: 'table' };
+    const empty = { type: 'paragraph', runs: [] };
+    const filled = { type: 'paragraph', runs: [{}] };
+    expect(isStructuralTrailingParagraph(content(table, empty), 1)).toBe(true);
+    expect(isStructuralTrailingParagraph(content(empty, empty), 1)).toBe(false);
+    expect(isStructuralTrailingParagraph(content(table, filled), 1)).toBe(false);
+    expect(isStructuralTrailingParagraph(content(empty), 0)).toBe(false);
   });
 });

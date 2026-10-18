@@ -291,7 +291,7 @@ export function projectedMergeRole(
 
 function semanticRowFloor(row: TableRowLayoutInput): number {
   if (row.heightRule === 'exact') {
-    // Compatibility-owned exact-row floor.
+    // `word-exact-row-height-bottom-padding`: compatibility-owned exact-row floor.
     return wordExactRowFloorPt(
       row.heightPt,
       row.cells.map((cell) => cell.margins.bottomPt),
@@ -578,6 +578,7 @@ function ownerGrid(
   return { owners, occupancy };
 }
 
+// `word-vertical-merge-terminal-border`: the terminal continuation cell owns the bottom edge.
 function terminalMergeCell(
   input: TableLayoutInput,
   owner: CellOwner,
@@ -854,6 +855,7 @@ function materializeBorders(
           ].some(({ side, directEdge }) => {
               const owner = side.owner;
               if (!owner) return false;
+              // `word-spaced-cell-inside-border-conflict`
               return wordSpacedCellInsideBorderOverridesTable({
                 spacingPt: boundarySpacingPt,
                 directStyle: owner.input.borders[directEdge]?.authoredStyle,
@@ -1503,6 +1505,7 @@ function materializeTableRow(
       );
     }
     const availableContentHeightPt = physicalContentHeightPt;
+    // `word-cell-vertical-alignment-ink-block`: align the ink block, not the line boxes.
     const topInkOffsetPt = cell.margins.topPt - Math.min(0, flow.inkTopPt);
     const inkOffsetPt = flow.inkHeightPt >= availableContentHeightPt
       ? topInkOffsetPt
@@ -1520,6 +1523,7 @@ function materializeTableRow(
       heightPt: availableContentHeightPt,
     };
     const cellFlowBounds = { xPt: cellXPt, yPt: cellTopPt, widthPt: cellWidthPt, heightPt: cellHeightPt };
+    // `word-exact-row-vertical-clip-only`
     const clipBounds = cell.verticalMerge !== 'continue' && exactOwnedSpan
       ? wordExactRowVerticalClipBounds(
           cellFlowBounds,

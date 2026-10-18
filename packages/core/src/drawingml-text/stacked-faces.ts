@@ -75,13 +75,53 @@ export function stackedSidewaysCharacter(cp: number): boolean {
 }
 
 /**
- * Whether the requested face covers a sideways character with a GSUB `vert`
- * single substitution (all scripts/languages). Library policy uses `vert` only,
- * excluding `vrt2`: Yu Gothic's U+2225 therefore rotates (#1827). Covered glyphs
- * stand upright in a 1 em cell; uncovered/unknown faces rotate by their horizontal
- * advance. Coverage comes from reference metadata, not the host's selected font.
+ * Where a stacked vertical glyph comes from: `vert`, the face's GSUB `vert`
+ * substitute (drawn as the face designs it for vertical text); `nominal`, the
+ * character's own horizontal glyph, standing unturned in the 1 em cell.
  */
+export type StackedVerticalGlyphSource = 'vert' | 'nominal';
+
+/**
+ * How the requested face renders a sideways character as a vertical glyph,
+ * or undefined when it rotates by its horizontal advance. Coverage comes from
+ * the generated reference metadata (all scripts/languages), not the host's
+ * selected font.
+ *
+ * - `vert` coverage: the vertical glyph.
+ * - `vrt2` coverage that `vert` lacks, outside Basic Latin (U+0080 and
+ *   above): the nominal glyph, upright in a 1 em cell. Basic Latin uses
+ *   `vert` only.
+ *
+ * Evidence (#1827): PowerPoint for Microsoft 365 16.0.20430 on Windows,
+ * electronic-distribution tagged PDF (SaveAs ppSaveAsPDF), of a synthetic
+ * wordArtVert deck at 32 pt, regular and bold, in Yu Gothic (Regular,
+ * Medium, Light), Yu Gothic UI (Regular, Semibold), Meiryo, Meiryo UI and
+ * Yu Mincho, with MS Gothic and MS Mincho as controls; text A ∥ （ ー and
+ * ASCII ()[]<>{}. In every Yu Gothic / Meiryo / Yu Mincho cut, whose ∥
+ * (U+2225) is covered by vrt2 only, ∥ stood unturned as its horizontal glyph
+ * (as wide as its horizontal advance), advanced 1 em and shared the left
+ * edge of the （ vertical form; it did not take the turned vrt2 design.
+ * MS Gothic and MS Mincho cover ∥ in vert and drew that turned vertical
+ * design. The ASCII brackets, vrt2-only in Yu Gothic, Meiryo and Yu Mincho,
+ * were turned in every face. The Basic Latin bound is the smallest font-data
+ * rule consistent with these controls. Consequence, unverified (macOS fonts
+ * outside the Office set): Hiragino cuts whose U+2010 ‐ is vrt2-only draw it
+ * upright too.
+ */
+export function stackedVerticalGlyphSource(
+  family: string,
+  cp: number,
+  bold = false,
+  italic = false,
+): StackedVerticalGlyphSource | undefined {
+  if (!STACKED_SIDEWAYS.has(cp)) return undefined;
+  const profile = stackedProfile(family, bold, italic);
+  const ch = String.fromCodePoint(cp);
+  if (profile?.stackedVerticalGlyphs?.includes(ch)) return 'vert';
+  return cp >= 0x80 && profile?.stackedVrt2OnlyGlyphs?.includes(ch) ? 'nominal' : undefined;
+}
+
+/** Whether a sideways character stands as a vertical glyph (1 em cell) rather than rotating. */
 export function stackedVerticalGlyph(family: string, cp: number, bold = false, italic = false): boolean {
-  if (!STACKED_SIDEWAYS.has(cp)) return false;
-  return stackedProfile(family, bold, italic)?.stackedVerticalGlyphs?.includes(String.fromCodePoint(cp)) ?? false;
+  return stackedVerticalGlyphSource(family, cp, bold, italic) !== undefined;
 }

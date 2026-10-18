@@ -184,7 +184,6 @@ export class XlsxWorkbook {
    *  across viewport renders. */
   private readonly _fetchImage = (path: string, mime: string): Promise<Blob> =>
     this.getImageWithinArchiveOperation(path, mime);
-  private resourcePolicy: NormalizedOoxmlResourcePolicy | null = null;
   /** Normalized per-session worksheet admission policy. */
   private worksheetPolicy: NormalizedXlsxWorksheetPolicy = DEFAULT_XLSX_WORKSHEET_POLICY;
   /** Opt-in OMML equation engine, injected once at {@link load}. Every
@@ -340,7 +339,6 @@ export class XlsxWorkbook {
         await loaded._loadDelimitedText(
           callerBuffer === buffer ? buffer.slice(0) : buffer,
           opts,
-          resourceOptions.policy,
           delimited,
         );
         if (mode === 'main') {
@@ -462,7 +460,6 @@ export class XlsxWorkbook {
     await this.worksheetPullClient?.cancelAll('closed');
     this.worksheetPullClient = null;
     this.generation = (this.generation ?? 0) + 1;
-    this.resourcePolicy = resourcePolicy;
     this.workerTimeoutMs = opts.workerTimeoutMs;
     this.googleSubstitutes = opts.useGoogleFonts === true;
     this.cjkFallback = resolveCjkFallback(opts.cjkFallback);
@@ -574,14 +571,12 @@ export class XlsxWorkbook {
   private async _loadDelimitedText(
     data: ArrayBuffer,
     opts: LoadOptions,
-    resourcePolicy: NormalizedOoxmlResourcePolicy,
     options: ResolvedDelimitedTextOptions,
   ): Promise<void> {
     const worksheetPolicy = normalizeXlsxWorksheetPolicy(opts);
     const bridge = this.requireBridge();
     this.worksheetPolicy = worksheetPolicy;
     this.delimitedTextBacked = true;
-    this.resourcePolicy = resourcePolicy;
     this.workerTimeoutMs = opts.workerTimeoutMs;
     this.googleSubstitutes = opts.useGoogleFonts === true;
     this.cjkFallback = resolveCjkFallback(opts.cjkFallback);

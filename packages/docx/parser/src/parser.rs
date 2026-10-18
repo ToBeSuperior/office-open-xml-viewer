@@ -3540,17 +3540,7 @@ fn find_internal_rel_target_by_types(
         return None;
     }
     let doc = parse_guarded(rels_xml).ok()?;
-    doc.root_element()
-        .children()
-        .filter(|node| node.is_element() && node.tag_name().name() == "Relationship")
-        .filter(|node| matches!(node.attribute("TargetMode"), None | Some("Internal")))
-        .find_map(|node| {
-            let relationship_type = node.attribute("Type")?;
-            relationship_types
-                .contains(&relationship_type)
-                .then_some(())?;
-            node.attribute("Target").map(str::to_owned)
-        })
+    ooxml_common::rels::find_internal_rel_target_by_types(&doc, relationship_types)
 }
 
 /// Parse `word/fontTable.xml` and build maps from font name to family class and pitch.
@@ -5437,7 +5427,10 @@ fn load_chart_map(
         // rels (`word/charts/_rels/chartN.xml.rels`,
         // Office 2011 / MS-ODRAWXML 2012 `chartStyle`). Resolve+read it best-effort;
         // legacy `<c:>` charts ignore it (their title size is inline).
-        let related_parts = load_chart_related_parts(zip, &path);
+        let related_parts = ooxml_common::chart::load_chart_related_parts(
+            |part| read_zip_string(zip, part).ok(),
+            &path,
+        );
         // CT_BaseStylesOverride replaces present schemes for this chart only;
         // preserve the document's theme and the other charts' inherited values.
         let local_theme = related_parts.theme_override_xml.as_deref().map(|xml| {
@@ -5464,7 +5457,13 @@ fn load_chart_map(
             &related_parts.image_relationships,
             &theme.chart_images,
         );
-        let user_shapes_xml = load_chart_user_shapes_xml(zip, &path, &xml);
+        let user_shapes_xml = parse_guarded(&xml).ok().and_then(|chart_doc| {
+            ooxml_common::chart::load_chart_user_shapes_xml(
+                |part| read_zip_string(zip, part).ok(),
+                &path,
+                &chart_doc,
+            )
+        });
         let Some(reporter) = limit_reporter.as_ref() else {
             continue;
         };
@@ -5509,104 +5508,6 @@ fn load_chart_map(
         }
     }
     chart_map
-}
-
-/// Read the chartStyle part (`styleN.xml`) associated with a chart part at
-/// `chart_path` (e.g. `word/charts/chart6.xml`), following that part's own
-/// relationships (`word/charts/_rels/chart6.xml.rels`) to the
-/// Office 2011 or MS-ODRAWXML 2012 `chartStyle` target. Returns `None` when the chart
-/// has no chartStyle relationship or the part cannot be read (the chartEx
-/// title then falls back to its inline size, or the renderer's default).
-struct ChartRelatedParts {
-    theme_override_xml: Option<String>,
-    style_xml: Option<String>,
-    color_style_xml: Option<String>,
-    image_relationships: ooxml_common::chart::ChartImageRelationships,
-}
-
-fn load_chart_related_parts(zip: &mut Zip, chart_path: &str) -> ChartRelatedParts {
-    let mut result = ChartRelatedParts {
-        theme_override_xml: None,
-        style_xml: None,
-        color_style_xml: None,
-        image_relationships: Default::default(),
-    };
-    let rels_path = relationship_part_path(chart_path);
-    let Ok(rels_xml) = read_zip_string(zip, &rels_path) else {
-        return result;
-    };
-    let relationships = ooxml_common::rels::parse_rels(&rels_xml);
-    result.image_relationships.insert_parsed_relationships(
-        ooxml_common::chart::ChartImageSource::Chart,
-        chart_path,
-        &relationships,
-    );
-    let internal_target = |suffix: &str| {
-        relationships.values().find(|relationship| {
-            relationship.mode == ooxml_common::rels::TargetMode::Internal
-                && relationship
-                    .relationship_type
-                    .as_deref()
-                    .is_some_and(|kind| kind.ends_with(suffix))
-        })
-    };
-    if let Some(relationship) = internal_target("/themeOverride") {
-        if let Some(path) = relationship.resolve_part(chart_path) {
-            result.theme_override_xml = read_zip_string(zip, &path).ok();
-        }
-    }
-    let style_relationship = relationships.values().find(|relationship| {
-        relationship.mode == ooxml_common::rels::TargetMode::Internal
-            && relationship
-                .relationship_type
-                .as_deref()
-                .is_some_and(ooxml_common::chart::is_chart_style_relationship_type)
-    });
-    if let Some(style_relationship) = style_relationship {
-        // A target naming no part reads like a missing chartStyle part.
-        let style_path = style_relationship.resolve_part(chart_path);
-        result.style_xml =
-            Some(read_part_string(zip, style_path.as_deref()).unwrap_or_else(|_| "\0".to_owned()));
-        if let Some(style_path) = style_path.as_deref() {
-            if let Ok(style_rels_xml) = read_zip_string(zip, &relationship_part_path(style_path)) {
-                let style_relationships = ooxml_common::rels::parse_rels(&style_rels_xml);
-                result.image_relationships.insert_parsed_relationships(
-                    ooxml_common::chart::ChartImageSource::Style,
-                    style_path,
-                    &style_relationships,
-                );
-            }
-        }
-    }
-    if let Some(color_relationship) =
-        internal_target(ooxml_common::chart::CHART_COLOR_STYLE_REL_TYPE_SUFFIX)
-    {
-        let color_path = color_relationship.resolve_part(chart_path);
-        result.color_style_xml =
-            Some(read_part_string(zip, color_path.as_deref()).unwrap_or_else(|_| "\0".to_owned()));
-    }
-    result
-}
-
-fn load_chart_user_shapes_xml(zip: &mut Zip, chart_path: &str, chart_xml: &str) -> Option<String> {
-    let chart_doc = parse_guarded(chart_xml).ok()?;
-    let rid = chart_doc
-        .root_element()
-        .descendants()
-        .find(|node| node.is_element() && node.tag_name().name() == "userShapes")?
-        .attributes()
-        .find(|attribute| {
-            attribute.name() == "id"
-                && attribute
-                    .namespace()
-                    .is_some_and(|namespace| namespace.ends_with("/relationships"))
-        })?
-        .value();
-    let rels_xml = read_zip_string(zip, &relationship_part_path(chart_path)).ok()?;
-    let user_shapes_path = parse_opc_rels(&rels_xml)
-        .get(rid)?
-        .resolve_part(chart_path)?;
-    read_zip_string(zip, &user_shapes_path).ok()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -6247,6 +6148,8 @@ fn parse_paragraph_cond_at_depth_with_diagnostics(
     // inherited indent is not. Captured for all three axes (start/end/first-line) so the
     // de-list drop is symmetric for LTR and RTL.
     let direct_para = ppr_node.map(parse_para_fmt).unwrap_or_default();
+    // Style-chain tabs before the direct layer: a numbering level's tabs enter
+    // the cascade between them (see `tab_stops` below).
     let direct_indent_left = direct_para.indent_left;
     let direct_indent_first = direct_para.indent_first;
     let direct_indent_right = direct_para.indent_right;
@@ -6411,10 +6314,42 @@ fn parse_paragraph_cond_at_depth_with_diagnostics(
     // default `mathDefJc` (spec default `centerGroup`). The paragraph alignment
     // stays its natural text value (e.g. Tabletext = left).
 
-    let tab_stops = base_para
-        .tab_stops
-        .clone()
-        .unwrap_or_default()
+    // A numbering level's pPr tabs (§17.9.6) take the same layer as its
+    // indents (resolve_numbered_indent_axes), in the §17.7.2 order: document
+    // defaults and table formatting, then style-origin numbering, then the
+    // paragraph style, then directly selected numbering, then direct pPr. Each
+    // layer's clears remove lower stops at their positions.
+    let level_tabs = numbering
+        .as_ref()
+        .and_then(|num| num_map.get_level(num.num_id, num.level))
+        .and_then(|l| l.tab_stops.clone());
+    let tab_stops = match level_tabs.as_deref() {
+        Some(level_tabs) => {
+            let layer = |base: Vec<(f64, String, String)>, fmt: &ParaFmt| {
+                let kept: Vec<_> = base
+                    .into_iter()
+                    .filter(|(pos, _, _)| fmt.tab_clears.iter().all(|c| (c - pos).abs() > 0.05))
+                    .collect();
+                match &fmt.tab_stops {
+                    Some(stops) => merge_tab_stops(&kept, stops),
+                    None => kept,
+                }
+            };
+            let lower = style_map.resolve_para_below_style(table_style_id, cond);
+            let lower_tabs = lower.tab_stops.clone().unwrap_or_default();
+            let with_style_and_level = if direct_numbering {
+                merge_tab_stops(&layer(lower_tabs, &paragraph_style), level_tabs)
+            } else {
+                layer(merge_tab_stops(&lower_tabs, level_tabs), &paragraph_style)
+            };
+            match &direct_para.tab_stops {
+                Some(direct) => merge_tab_stops(&with_style_and_level, direct),
+                None => with_style_and_level,
+            }
+        }
+        None => base_para.tab_stops.clone().unwrap_or_default(),
+    };
+    let tab_stops = tab_stops
         .into_iter()
         .map(|(pos, alignment, leader)| TabStop {
             pos,
@@ -9902,13 +9837,7 @@ fn collect_drawing_extent_diagnostic(
     }
 }
 
-fn parse_on_off(value: &str) -> Option<bool> {
-    match value {
-        "1" | "true" | "on" => Some(true),
-        "0" | "false" | "off" => Some(false),
-        _ => None,
-    }
-}
+use ooxml_common::xml_node::parse_st_on_off as parse_on_off;
 
 fn anchor_emu_pt(value: Option<&str>) -> Option<f64> {
     value
@@ -11309,7 +11238,9 @@ fn parse_wsp_shape(
             .and_then(|n| n.attribute("prst"))
             .unwrap_or("rect")
             .to_string();
-        let adj_values = prst_node.map(parse_preset_adj).unwrap_or_default();
+        let adj_values = prst_node
+            .map(ooxml_common::preset_geometry::parse_preset_adj)
+            .unwrap_or_default();
         (Vec::new(), Vec::new(), Some(prst), adj_values)
     };
     if subpaths.is_empty() && preset_geometry.is_none() {
@@ -11468,61 +11399,6 @@ fn parse_wsp_shape(
         });
     }
     Some(shape)
-}
-
-/// Parse the adjust handles from a `<a:prstGeom>`'s `<a:avLst>` into an
-/// `adj1..adj8`-ordered vector. ECMA-376 §20.1.9.5: each
-/// `<a:gd name="adjN" fmla="val X"/>` supplies one handle. Matching is by name
-/// (`adj`/`adj1`, `adj2`, …) with a positional fallback for legacy unnamed
-/// lists, mirroring the pptx/xlsx parsers so the shared preset engine receives
-/// identical inputs. Trailing `None`s are trimmed.
-fn parse_preset_adj(prst_geom: roxmltree::Node) -> Vec<Option<f64>> {
-    let av = prst_geom
-        .children()
-        .find(|n| n.is_element() && n.tag_name().name() == "avLst");
-    let Some(av) = av else {
-        return Vec::new();
-    };
-    let gd_nodes: Vec<roxmltree::Node> = av
-        .children()
-        .filter(|n| n.is_element() && n.tag_name().name() == "gd")
-        .collect();
-    if gd_nodes.is_empty() {
-        return Vec::new();
-    }
-
-    let parse_val = |gd: &roxmltree::Node| -> Option<f64> {
-        gd.attribute("fmla")
-            .and_then(|f| f.strip_prefix("val "))
-            .and_then(|s| s.trim().parse::<f64>().ok())
-    };
-
-    let named = gd_nodes.iter().any(|n| n.attribute("name").is_some());
-    let mut out: Vec<Option<f64>> = (1..=8)
-        .map(|i| {
-            if named {
-                let key = format!("adj{i}");
-                gd_nodes
-                    .iter()
-                    .find(|n| {
-                        let name = n.attribute("name");
-                        if i == 1 {
-                            matches!(name, Some("adj") | Some("adj1"))
-                        } else {
-                            name == Some(key.as_str())
-                        }
-                    })
-                    .and_then(parse_val)
-            } else {
-                gd_nodes.get(i - 1).and_then(parse_val)
-            }
-        })
-        .collect();
-
-    while matches!(out.last(), Some(None)) {
-        out.pop();
-    }
-    out
 }
 
 /// The `<wps:txbx>`/`<wps:bodyPr>` body parsed off a shape. The complete
@@ -24165,30 +24041,6 @@ mod anchor_image_relative_from_tests {
     }
 
     #[test]
-    fn docx_chart_related_parts_preserve_missing_sidecar_relationships() {
-        use std::io::{Cursor, Write};
-        use zip::write::SimpleFileOptions;
-
-        let mut bytes = Vec::new();
-        {
-            let mut writer = zip::ZipWriter::new(Cursor::new(&mut bytes));
-            crate::parser::write_test_content_types(&mut writer);
-            writer
-                .start_file(
-                    "word/charts/_rels/chart9.xml.rels",
-                    SimpleFileOptions::default(),
-                )
-                .unwrap();
-            writer.write_all(br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rStyle" Type="http://schemas.microsoft.com/office/2011/relationships/chartStyle" Target="missing-style.xml"/><Relationship Id="rColors" Type="http://schemas.microsoft.com/office/2011/relationships/chartColorStyle" Target="missing-colors.xml"/></Relationships>"#).unwrap();
-            writer.finish().unwrap();
-        }
-        let mut archive = Zip::new(Cursor::new(bytes)).unwrap();
-        let related = load_chart_related_parts(&mut archive, "word/charts/chart9.xml");
-        assert_eq!(related.style_xml.as_deref(), Some("\0"));
-        assert_eq!(related.color_style_xml.as_deref(), Some("\0"));
-    }
-
-    #[test]
     fn docx_package_loads_classic_chart_style_roles() {
         use std::io::Write;
         use zip::write::SimpleFileOptions;
@@ -28253,18 +28105,6 @@ mod shape_preset_geometry_tests {
                 Some(-34190.0),
             ]
         );
-    }
-
-    #[test]
-    fn named_adjust_values_preserve_missing_guides_as_none() {
-        let shape = shape_with_prst_geom(
-            r#"<a:prstGeom prst="wedgeRectCallout"><a:avLst>
-                 <a:gd name="adj1" fmla="val 25000"/>
-                 <a:gd name="adj3" fmla="val 16667"/>
-               </a:avLst></a:prstGeom>"#,
-        );
-
-        assert_eq!(shape.adj_values, vec![Some(25000.0), None, Some(16667.0)]);
     }
 
     #[test]

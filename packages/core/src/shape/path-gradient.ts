@@ -211,7 +211,7 @@ export function isStrictlyStarShaped(polygons: Point[][], center: Point, box: Sh
  * regions, but do not determine a replacement region for negative extents.
  * Preserve the previous native midpoint approximation for this input class;
  * choosing a collapse point requires new Office boundary evidence (#1599). */
-export function hasInvertedPathShadeFocus(fill: GradientFill): boolean {
+function hasInvertedPathShadeFocus(fill: GradientFill): boolean {
   const rect = fill.fillToRect;
   return !!rect && ((rect.l ?? 0) + (rect.r ?? 0) > 1 || (rect.t ?? 0) + (rect.b ?? 0) > 1);
 }
@@ -355,7 +355,7 @@ function convexRowSpan(polygon: Point[], y: number): Array<[number, number]> {
  * crossings and the denominator zero; extrema are endpoints or roots of
  * the quadratic derivative. This includes folded bands' interior envelope,
  * which a quadrilateral bounding-box/edge crossing scan misses. */
-export function bandRowSpans(corners: Point[], y: number): Array<[number, number]> {
+function bandRowSpans(corners: Point[], y: number): Array<[number, number]> {
   const [a, b, outerB, outerA] = corners;
   const ax = outerA[0] - a[0]; const ay = outerA[1] - a[1];
   const bx = b[0] - a[0]; const by = b[1] - a[1];

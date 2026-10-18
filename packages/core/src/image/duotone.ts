@@ -115,7 +115,7 @@ export type OffscreenFactory = (w: number, h: number) => OffscreenSurface | null
  *  their own skia-backed factory. `OffscreenCanvas` already satisfies
  *  {@link OffscreenSurface} (it is an `ImageBitmapSource` with a 2D context), so
  *  no cast is needed. */
-export const defaultOffscreenFactory: OffscreenFactory = (w, h) => {
+const defaultOffscreenFactory: OffscreenFactory = (w, h) => {
   if (typeof OffscreenCanvas === 'undefined') return null;
   return new OffscreenCanvas(w, h);
 };

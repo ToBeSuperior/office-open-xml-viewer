@@ -28,6 +28,9 @@ export interface OfficeFontFallbackRoute {
   weight: number;
   style: 'normal' | 'italic';
   metric: ResolvedFontMetric;
+  /** Family of this exact source's size-adjust:0% registration, when a format
+   * prepared one: a scalar it owns shapes with zero advance. */
+  coverageProbeFamily?: string;
 }
 
 export interface LoadedOfficeFontFallbacks {

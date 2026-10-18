@@ -268,7 +268,7 @@ export function drawSecondaryValueAxis(
 /** Draw a secondary value-axis title. Both the duplicated combo-bar path and
  *  the shared line/area path use this helper, so the fixed 10pt
  *  fallback and +90° reading direction cannot drift. */
-export function drawSecondaryAxisTitle(
+function drawSecondaryAxisTitle(
   ctx: CanvasRenderingContext2D,
   chart: ChartModel,
   sec: SecondaryValueAxis,

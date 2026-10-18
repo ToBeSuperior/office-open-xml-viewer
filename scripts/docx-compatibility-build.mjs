@@ -54,7 +54,7 @@ export function stripDocxCompatibilityMetadata(code, file) {
         ? evidence.properties.find((member) => ts.isPropertyAssignment(member)
           && member.name.text === 'kind')?.initializer : undefined;
       const fields = kind && ts.isStringLiteralLike(kind)
-        && ['microsoft-note', 'regression-test'].includes(kind.text)
+        && ['microsoft-note', 'regression-test', 'library-policy'].includes(kind.text)
         ? ['kind', 'reference']
         : kind && ts.isStringLiteralLike(kind) && kind.text === 'office-observation'
           ? ['kind', 'syntheticFixtureId', 'application', 'version', 'platform'] : [];

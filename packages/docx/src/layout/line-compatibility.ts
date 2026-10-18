@@ -8,7 +8,7 @@ export const WORD_TAB_DISPLACED_READING_FRAME = defineCompatibilityRule({
     kind: 'regression-test',
     reference: 'packages/docx/src/layout/first-line-float-indent.test.ts#$kind $alignment ($count), rtl=$rtl, float=$float matches Word geometry',
   },
-  description: 'Issue #1672 controlled Word exports cover ordinary left/right/center/decimal tabs, one/two tabs, both paragraph directions and either float edge, with no-float counterexamples. Eligibility stays margin-relative (ECMA-376 §17.3.1.37), but an authored target moves with a float-displaced leading line edge. Library policy retains this observation only where text fits the available float band. Word also overflows some tab cells into floats or past the margin; that unspecified fallback is intentionally unsupported. Out-of-band targets break the line and following text uses ordinary legal-break and emergency fitting, without an overflow allowance or a fabricated wide reference band.',
+  description: 'Issue #1672 controlled Word exports cover ordinary left/right/center/decimal tabs, one/two tabs, both paragraph directions and either float edge, with no-float counterexamples. Eligibility stays margin-relative (ECMA-376 §17.3.1.37), but an authored target moves with a float-displaced leading line edge. Library policy retains this observation only where text fits the available float band. Word also overflows some tab cells into floats or past the margin; that unspecified fallback is intentionally unsupported. Out-of-band targets break the line and following text uses ordinary legal-break and emergency fitting, without an overflow allowance or a fabricated wide reference band. Evidence (observed Office behaviour): issue #1672 Word 16 controls, PR #1698; application build and platform not recorded.',
 });
 
 /** Projection of {@link WORD_TAB_DISPLACED_READING_FRAME}. The caller has already
@@ -27,7 +27,7 @@ export const WORD_POSITIONAL_TAB_AVAILABLE_BAND = defineCompatibilityRule({
     kind: 'regression-test',
     reference: 'packages/docx/src/layout/first-line-float-indent.test.ts#$kind $alignment ($count), rtl=$rtl, float=$float matches Word geometry',
   },
-  description: 'Issue #1672 Word exports cover all 36 positional-tab combinations of left/center/right alignment, margin/indent reference, LTR/RTL paragraph direction and no/left/right float. Word intersects the normative reference box (ECMA-376 §§17.3.3.23, 17.18.71, 17.18.73) with the available float band and aligns the following cell in reading order; no-float references remain unchanged. A target at the current pen is reachable without a line break; only a target behind it requires the next line. RTL must retain the positional descriptor through the bidi post-pass rather than resolving it as an ordinary tab.',
+  description: 'Issue #1672 Word exports cover all 36 positional-tab combinations of left/center/right alignment, margin/indent reference, LTR/RTL paragraph direction and no/left/right float. Word intersects the normative reference box (ECMA-376 §§17.3.3.23, 17.18.71, 17.18.73) with the available float band and aligns the following cell in reading order; no-float references remain unchanged. A target at the current pen is reachable without a line break; only a target behind it requires the next line. RTL must retain the positional descriptor through the bidi post-pass rather than resolving it as an ordinary tab. Evidence (observed Office behaviour): issue #1672 controls (36 combinations), PR #1698; application build and platform not recorded.',
 });
 
 /** Reference-box projection of {@link WORD_POSITIONAL_TAB_AVAILABLE_BAND}. */
@@ -58,10 +58,28 @@ export const WORD_FIXED_PARAGRAPH_AUTO_SPACING_STORED_MARGINS = defineCompatibil
 export const LIBRARY_ABSENT_FACE_FALLBACK_LINE_BOX = defineCompatibilityRule({
   id: 'library-absent-face-fallback-line-box',
   evidence: {
-    kind: 'regression-test',
+    kind: 'library-policy',
     reference: 'packages/docx/src/reference-font-layout.test.ts#sizes an absent authored face from its painting fallback, not the authored catalog',
   },
-  description: 'Library policy (user decision 2026-10-16), replacing the e3286ecb9 absent-face rule: when the authored face is not present on the viewing host, a native CSS family list paints with a browser fallback, and the span is sized from that painting face (its Canvas font box), never from the absent face\'s catalog line box. Word lays out with the authored face it has, so pagination differences from Office caused by the missing font are accepted. Present local faces use their measured host geometry first and the catalog only as a fallback; registered substitutes use their own geometry. The painting face of an absent face is the first available family of the native CSS list; its normal line (Canvas font box plus the CSS normal-line leading, measured per exact list and tuple in the document realm before layout and re-verified by the laying-out realm) sizes the clusters that face is proven to draw (native-route-line-metrics.ts). Clusters drawn by a later fallback, unidentified or unclassified faces, and Far East faces (whose Word allocation uses usWin, which CSS does not expose) keep the Canvas box. No viewer-OS or font-name branch is involved.',
+  description: 'Library policy (user decision 2026-10-16), replacing the e3286ecb9 absent-face rule: when the authored face is not present on the viewing host, a native CSS family list paints with a browser fallback, and the span is sized from that painting face (its Canvas font box), never from the absent face\'s catalog line box. Word lays out with the authored face it has, so pagination differences from Office caused by the missing font are accepted. Present local faces use their measured host geometry first and the catalog only as a fallback; registered substitutes use their own geometry. The painting face of an absent face is the first available family of the native CSS list; its normal line (Canvas font box plus the CSS normal-line leading, measured per exact list and tuple in the document realm before layout and re-verified by the laying-out realm) sizes the clusters that face is proven to draw (native-route-line-metrics.ts). Clusters drawn by a later fallback, unidentified or unclassified faces, and Far East faces (whose Word allocation uses usWin, which CSS does not expose) keep the Canvas box. No viewer-OS or font-name branch is involved. Library policy, no Office measurement: deliberate project decision (2026-10-16, PR #1844) to lay out with the face that actually paints; explicitly not an Office rule.',
+});
+
+export const LIBRARY_SYNTHESIZED_FACE_LINE_GEOMETRY = defineCompatibilityRule({
+  id: 'library-synthesized-face-line-geometry',
+  evidence: {
+    kind: 'regression-test',
+    reference: 'packages/docx/src/synthesized-face-line-geometry.test.ts#sizes a bold empty mark from the proved face: identical=$sameRaster',
+  },
+  description: 'Library evidence boundary (user decision 2026-10-18, issue #1848): the reference catalog holds some installed faces only at weight 400 (MS Mincho, for example), so a bold or italic run of such a family resolves to a native route without a catalog tuple. Catalog absence does not show that the host synthesizes the tuple: a genuine styled face may exist with different vertical tables, and Canvas cannot expose OS/2 usWin, which the Far-East 1.3 x usWin line needs. Instead the span is proved to paint a loaded face. Each installed Office face loaded through an exact local() name sits under a private family holding only that FontFace, so by CSS Fonts Level 4 section 5.2 font matching any weight/style request to that family selects it and the browser synthesizes the missing bold/oblique from it. Fixed probe glyphs of the span\'s script class (国あ for East Asian text, Hxg otherwise; 64px) are rasterized once per route and tuple through the native route and through that private family on this realm\'s Canvas. Every grapheme of the span and of the probe must also be owned by that exact source, shown by zero advance through its size-adjust:0% registration (the #1842 coverage probe, loaded for regular faces whose catalog family lacks a bold or italic face), since CSS font matching still falls back per glyph. Pixel-identical non-empty rasters of owned glyphs prove the native route paints the same synthesized face, so the catalog geometry of the CSS-matched loaded tuple applies, including its Far-East projection. Any raster or advance difference (a genuine styled face, another file, glyphs from a fallback face) is no proof and the span keeps its own Canvas box, as before. Main thread and worker each rasterize with their own Canvas and FontFaceSet over the same host fonts. Residual risk: a genuine styled face whose glyphs are pixel-identical to the synthesized regular face but whose vertical tables differ. Scope: only the span\'s own painted face and its paragraph mark are proved; the East Asian floor of a run painted in another slot is not, because a Word-exported page keeps a bold Latin heading\'s line when its East Asian slot names a regular-only face.',
+});
+
+export const WORD_RUBY_LINE_ASCENT = defineCompatibilityRule({
+  id: 'word-ruby-line-ascent',
+  evidence: {
+    kind: 'regression-test',
+    reference: 'packages/docx/src/ruby-hpsraise-render.test.ts#hpsRaise $raise pt with an 8pt guide over 12pt base text',
+  },
+  description: 'Windows Word 16.0 build 16.0.20430 #1885 controls: Latin (Arial 10pt), MS Mincho 10.5pt and ruby-only lines with MS Mincho guides at hps 6/10/14/20 (3-10pt), hpsRaise 0/10/18/20/24/28/30/38 and base 10/20pt, under single, auto 1.5, exact 18 and atLeast 18 spacing. ECMA-376 section 17.3.3.12 defines hpsRaise as the distance between base and guide text; Word places the guide baseline hpsRaise above the base baseline and the line ascent is max(base ascent, hpsRaise + guide size), over the base line descent (an MS Mincho base keeps its Far-East 1.3 em box sides). Automatic multiples pin the baseline to the top like text lines, exact 18pt lines keep four fifths, and atLeast lines keep the line descent above the bottom. Every measured line matches within 0.3pt. Yu Mincho controls agree where the host has the face; a missing face uses its painting fallback (LIBRARY_ABSENT_FACE_FALLBACK_LINE_BOX). Ruby without hpsRaise is unmeasured and keeps the retained ink-derived additive reserve.',
 });
 
 export const WORD_KERN_THRESHOLD_AUTHORITY = defineCompatibilityRule({
@@ -91,6 +109,26 @@ export function wordKerningApplies(
     && (thresholdPt > 0 || (thresholdPt === 0 && compatibilityMode !== 15));
 }
 
+export const WORD_ARABIC_PAIR_KERNING = defineCompatibilityRule({
+  id: 'word-arabic-pair-kerning',
+  evidence: {
+    kind: 'regression-test',
+    reference: 'packages/docx/src/arabic-kerning.test.ts#kerns Arabic text whatever w:kern says',
+  },
+  description: 'Windows Word 16.0 build 16.0.20430 #1850 controls with the Arabic supplemental fonts installed: "Z <Arabic run> X" paragraphs at 14pt in Sakkal Majalla, Traditional Arabic, Simplified Arabic, Arabic Typesetting, Arial, Times New Roman and Tahoma, three texts, w:kern absent/0/2/40 and enableOpenTypeFeatures off/on. Every Arabic run width is identical across all eight settings, and for the four faces whose GPOS kern feature has Arabic pairs it equals HarfBuzz shaping with kerning (within 0.15pt) rather than without (1.4-4.8pt wider), measured on the same Windows font files. Word therefore applies pair kerning to Arabic text unconditionally; ECMA-376 section 17.3.2.19 w:kern governs the other scripts (WORD_KERN_THRESHOLD_AUTHORITY). Arial, Times New Roman and Tahoma carry no Arabic kern pairs, so they cannot distinguish the rules. Only the Arabic script was measured; other complex scripts keep w:kern.',
+});
+
+/** WORD_ARABIC_PAIR_KERNING: Arabic-script text is always pair-kerned. The
+ * decision is per measured group or segment (Arabic text sits in runs of its
+ * own); a group that mixes in letters of another script is unmeasured. */
+export function wordArabicTextKerned(text: string): boolean {
+  void WORD_ARABIC_PAIR_KERNING;
+  // Only Arabic-script letters were measured: text mixing in letters of
+  // another script keeps the w:kern decision.
+  return /\p{Script=Arabic}/u.test(text)
+    && !/[^\p{Script=Arabic}\p{Script=Common}\p{Script=Inherited}]/u.test(text);
+}
+
 export const WORD_NUMBERING_MARKER_FIRST_LINE_UNION = defineCompatibilityRule({
   id: 'word-numbering-marker-first-line-union',
   evidence: {
@@ -100,7 +138,7 @@ export const WORD_NUMBERING_MARKER_FIRST_LINE_UNION = defineCompatibilityRule({
     version: '16.113.2 and 16.113.3',
     platform: 'macOS 27.0',
   },
-  description: 'In a non-grid paragraph with 1.15 automatic spacing, a text marker participates in the first-line ascent/descent union. Relative to a marker-free control, 8, 14, and 20 pt markers added 0, 1.68, and 7.68 pt to the line advance; changing the marker alone shifted subsequent paragraph baselines by the same amount. Added automatic leading follows the body text single-line height rather than scaling the taller marker box. A further 108-case Word matrix used three Latin body faces at 9 and 12 pt with smaller, larger, same-size, bold, and symbol-face markers. All 36 paired omitted-spacing and explicit-auto1 controls had identical marker-added advance; a 9 pt body with a same-size symbol-face marker gained about 0.72 pt in both modes. These controls support implicit marker participation, including a different marker face. They do not establish portable face identity or exact PDF baseline quantization. Library allocation uses the same selected-resource/reference vertical admission as body text, separately from Canvas advance and ink; pixel-rounded Canvas marker sides cannot inflate an otherwise precise same-face line. Exact spacing, grids, ruby, wrapping floats, picture markers, and continuation lines are outside the measured scope.',
+  description: 'In a non-grid paragraph with 1.15 automatic spacing, a text marker participates in the first-line ascent/descent union. Relative to a marker-free control, 8, 14, and 20 pt markers added 0, 1.68, and 7.68 pt to the line advance; changing the marker alone shifted subsequent paragraph baselines by the same amount. Added automatic leading follows the body text single-line height rather than scaling the taller marker box. A further 108-case Word matrix used three Latin body faces at 9 and 12 pt with smaller, larger, same-size, bold, and symbol-face markers. All 36 paired omitted-spacing and explicit-auto1 controls had identical marker-added advance; a 9 pt body with a same-size symbol-face marker gained about 0.72 pt in both modes. These controls support implicit marker participation, including a different marker face. They do not establish portable face identity or exact PDF baseline quantization. Library allocation uses the same selected-resource/reference vertical admission as body text, separately from Canvas advance and ink; pixel-rounded Canvas marker sides cannot inflate an otherwise precise same-face line. Exact spacing, grids, ruby, wrapping floats, picture markers, and continuation lines are outside the measured scope. Windows Word 16.0 build 16.0.20430 #1884 controls supersede the descent part for the selected Windows rule: with 6-20pt Symbol bullets and Arial numbers over Arial 10pt and Times New Roman 12pt text, auto 1/1.5/2 and atLeast 18/30/60, the marker raises the first line by its ascent (with line gap) only and the next line follows one text line below, so the marker descent and single-line height do not enter the union. atLeast lines use the same union, and wrapping floats do not suspend it (#1883 controls). An empty item\'s text marker joins its mark line the same way and the whole box follows an automatic multiple.',
 });
 
 export const WORD_PICTURE_BULLET_LINE_PARTICIPATION = defineCompatibilityRule({
@@ -307,19 +345,22 @@ export function wordUseFeLayoutParagraphMarkGridAdvancePx(
 export const WORD_CONTIGUOUS_UNDERLINE_GEOMETRY = defineCompatibilityRule({
   id: 'word-contiguous-underline-geometry',
   evidence: {
-    kind: 'regression-test',
+    kind: 'library-policy',
     reference: 'packages/docx/src/layout/paragraph.test.ts#keeps a solid underline continuous across floating-precision retained run seams',
   },
-  description: 'Adjacent compatible underlined source runs share one safe baseline and continuous authored cadence while style, color, and thickness boundaries remain distinct.',
+  description: 'Adjacent compatible underlined source runs share one safe baseline and continuous authored cadence while style, color, and thickness boundaries remain distinct. Library policy, no Office measurement: numerical robustness of contiguous underline seams (PR #1463) that keeps the ECMA-376 §17.3.2.40 geometry; not an Office claim.',
 });
 
 export const WORD_INLINE_OBJECT_GRID_LINE_ALLOCATION = defineCompatibilityRule({
   id: 'word-inline-object-grid-line-allocation',
   evidence: {
-    kind: 'regression-test',
-    reference: 'packages/docx/src/line-spacing-baseline.test.ts#advances the following paragraph with grid=%s, snap=%s, spacing=%j',
+    kind: 'office-observation',
+    syntheticFixtureId: 'inline-picture-grid-line-allocation',
+    application: 'Microsoft Word',
+    version: '16.0.20430',
+    platform: 'Windows',
   },
-  description: 'Word 16.0 build 20430 on Windows, compatibility mode 14, allocates a single-spaced inline-picture line to ceil(natural height / line pitch) whole cells and centers the object in the extra space. ECMA-376 §20.4.2.8 makes inline objects affect line height like glyphs; §17.6.5 and §17.3.1.32 define grid participation but not this tall-object rounding. Library policy reuses the existing grid allocation and centered baseline when inline pictures, charts or shapes supply the natural ascent and the font design height does not exceed that natural box, with automatic or omitted spacing. Smaller objects retain the taller text line\'s grid policy. The Office evidence establishes the single-spaced picture class only; automatic multiples and other inline payloads reuse that allocation without claiming separately measured Office parity. Off-grid, snap-disabled, exact and atLeast lines retain their existing paths; floating-anchor reference origins are independent.',
+  description: 'Word 16.0 build 20430 on Windows, compatibility mode 14, allocates a single-spaced inline-picture line to ceil(natural height / line pitch) whole cells and centers the object in the extra space. ECMA-376 §20.4.2.8 makes inline objects affect line height like glyphs; §17.6.5 and §17.3.1.32 define grid participation but not this tall-object rounding. Library policy reuses the existing grid allocation and centered baseline when inline pictures, charts or shapes supply the natural ascent and the font design height does not exceed that natural box, with automatic or omitted spacing. Smaller objects retain the taller text line\'s grid policy. The Office evidence establishes the single-spaced picture class only; automatic multiples and other inline payloads reuse that allocation without claiming separately measured Office parity. Off-grid, snap-disabled, exact and atLeast lines retain their existing paths; floating-anchor reference origins are independent. Evidence: issue #1674 / PR #1796 (a 221.2pt picture takes 240pt of grid).',
 });
 
 export const WORD_GRID_AT_LEAST_TALL_LINE_UNSNAPPED = defineCompatibilityRule({
@@ -328,7 +369,7 @@ export const WORD_GRID_AT_LEAST_TALL_LINE_UNSNAPPED = defineCompatibilityRule({
     kind: 'regression-test',
     reference: 'packages/docx/src/line-box-height.test.ts#does not round tall East Asian content up to an additional grid cell',
   },
-  description: 'An explicitly authored atLeast line on an active document grid keeps the maximum of its natural height, authored minimum, and one pitch instead of rounding tall content to another whole cell.',
+  description: 'An explicitly authored atLeast line on an active document grid keeps the maximum of its natural height, authored minimum, and one pitch instead of rounding tall content to another whole cell. Classification: normative reading of ECMA-376 §§17.3.1.33, 17.18.48 (atLeast) and 17.6.5; not a Word measurement.',
 });
 
 export const WORD_DEGENERATE_LINE_SPACING_SINGLE = defineCompatibilityRule({
@@ -355,19 +396,19 @@ export const WORD_AUTO_MULTIPLE_BASELINE_PIN = defineCompatibilityRule({
 export const WORD_MIXED_ANCHOR_VISIBLE_LINE_METRICS = defineCompatibilityRule({
   id: 'word-mixed-anchor-visible-line-metrics',
   evidence: {
-    kind: 'regression-test',
+    kind: 'library-policy',
     reference: 'packages/docx/src/anchor-host-metrics.test.ts#reserves host line height without using its zero-ink box for a visible run baseline',
   },
-  description: 'A zero-ink drawing anchor host reserves its line and grid height while visible neighboring glyphs retain their own ascent, descent, and design-line baseline.',
+  description: 'A zero-ink drawing anchor host reserves its line and grid height while visible neighboring glyphs retain their own ascent, descent, and design-line baseline. Library policy, no Office measurement: line metrics choice for mixed anchor and visible content (PR #1035); nothing measured.',
 });
 
 export const WORD_JUSTIFICATION_LEADING_INDENT_EXCLUSION = defineCompatibilityRule({
   id: 'word-justification-leading-indent-exclusion',
   evidence: {
-    kind: 'regression-test',
+    kind: 'library-policy',
     reference: 'packages/docx/src/text-distribute.test.ts#forwards (segs, slack, firstContentSi, lastDrawnSi) positionally',
   },
-  description: 'Keep leading whitespace used as a first-line text indent fixed while distributing justified-line slack across content in a left-to-right line.',
+  description: 'Keep leading whitespace used as a first-line text indent fixed while distributing justified-line slack across content in a left-to-right line. Library policy, no Office measurement: kept the existing behaviour in PR #483; nothing measured.',
 });
 
 export const WORD_COLLAPSIBLE_LINE_EDGE_VISIBLE_FIT = defineCompatibilityRule({
@@ -376,7 +417,7 @@ export const WORD_COLLAPSIBLE_LINE_EDGE_VISIBLE_FIT = defineCompatibilityRule({
     kind: 'regression-test',
     reference: 'packages/docx/src/run-split-invariance.test.ts#fits the visible justified prefix across a real formatting boundary in mode 14',
   },
-  description: 'Library fitting uses the visible prefix, excluding a collapsible U+0020 edge separator. ST_Jc (§17.18.44) defines inter-word justification, not an edge-space admission charge. Word mode-14 mixed-format Latin output retains a naturally fitting prefix when only its edge separator exceeds the band; mode-15 compression controls use the same visible prefix. Canonical joining must not turn formatting-only source seams into different admission decisions. This replaces an unsupported separator-charge policy, without adding compression to older modes. RTL separately retains the complete advance because its right-edge origin can otherwise move visible LTR cells outside the band. Other glyphs and authored fixed-width/atomic units retain their existing fit contracts.',
+  description: 'Library fitting uses the visible prefix, excluding a collapsible U+0020 edge separator. ST_Jc (§17.18.44) defines inter-word justification, not an edge-space admission charge. Word mode-14 mixed-format Latin output retains a naturally fitting prefix when only its edge separator exceeds the band; mode-15 compression controls use the same visible prefix. Canonical joining must not turn formatting-only source seams into different admission decisions. This replaces an unsupported separator-charge policy, without adding compression to older modes. RTL separately retains the complete advance because its right-edge origin can otherwise move visible LTR cells outside the band. Other glyphs and authored fixed-width/atomic units retain their existing fit contracts. Evidence (observed Office behaviour): Word compatibility-mode 14 output in PR #1703; application version not recorded.',
 });
 
 /** Visible-prefix projection of {@link WORD_COLLAPSIBLE_LINE_EDGE_VISIBLE_FIT}. */
@@ -719,10 +760,10 @@ export function wordIsOverflowPunctuation(
 export const WORD_RUBY_PARAGRAPH_UNIFORM_LINE_ADVANCE = defineCompatibilityRule({
   id: 'word-ruby-paragraph-uniform-line-advance',
   evidence: {
-    kind: 'regression-test',
+    kind: 'library-policy',
     reference: 'packages/docx/src/paragraph-measure.test.ts#uses one uniform snapped advance for every line in a ruby paragraph',
   },
-  description: 'Every line in a ruby-bearing paragraph uses the paragraph-wide maximum snapped line advance so its baseline rhythm remains uniform.',
+  description: 'Every line in a ruby-bearing paragraph uses the paragraph-wide maximum snapped line advance so its baseline rhythm remains uniform. Library policy, no Office measurement: uniform ruby paragraph line advance kept through a refactor (1bfaf434a); nothing measured.',
 });
 
 export const WORD_FIT_TEXT_INTER_CHARACTER_EXPANSION = defineCompatibilityRule({
@@ -731,7 +772,7 @@ export const WORD_FIT_TEXT_INTER_CHARACTER_EXPANSION = defineCompatibilityRule({
     kind: 'regression-test',
     reference: 'packages/docx/src/fit-text.test.ts#distributes (val − Σnatural)/(n−1) as the inter-character gap, no trailing gap',
   },
-  description: 'Expand a multi-character fitText region to its authored width by distributing the residual evenly across interior character gaps.',
+  description: 'Expand a multi-character fitText region to its authored width by distributing the residual evenly across interior character gaps. Evidence (observed Office behaviour): Word PDF of a corpus document in PR #918; [MS-OI29500] §2.1.78(d) supports ignoring authored spacing, not the even-gap formula.',
 });
 
 export const WORD_CJK_BOTH_INTER_CHARACTER_EXPANSION = defineCompatibilityRule({
@@ -740,7 +781,7 @@ export const WORD_CJK_BOTH_INTER_CHARACTER_EXPANSION = defineCompatibilityRule({
     kind: 'regression-test',
     reference: 'packages/docx/src/text-distribute.test.ts#§17.18.44: fills a wrapped pure-CJK line via inter-CJK pitch (expansion default)',
   },
-  description: 'Treat inter-CJK boundaries as eligible inter-word gaps when expanding a non-final both-justified line that contains no spaces.',
+  description: 'Treat inter-CJK boundaries as eligible inter-word gaps when expanding a non-final both-justified line that contains no spaces. Evidence (observed Office behaviour): Word PDF of a corpus document in PR #483; this departs from the literal ECMA-376 §17.18.44 both.',
 });
 
 export const WORD_THAI_DISTRIBUTE_CLUSTER_POLICY = defineCompatibilityRule({
@@ -749,7 +790,7 @@ export const WORD_THAI_DISTRIBUTE_CLUSTER_POLICY = defineCompatibilityRule({
     kind: 'regression-test',
     reference: 'packages/docx/src/thai-distribute.test.ts#fills non-final lines to the right margin under thaiDistribute',
   },
-  description: 'Expand non-final thaiDistribute lines at Thai grapheme-cluster boundaries while retaining a natural-width final line.',
+  description: 'Expand non-final thaiDistribute lines at Thai grapheme-cluster boundaries while retaining a natural-width final line. Classification: normative, ECMA-376 §17.18.44 thaiDistribute (inter-character distribution); the natural-width final line is library policy (PR #978).',
 });
 
 export const WORD_NUMERIC_DECIMAL_TAB_INFERENCE = defineCompatibilityRule({
@@ -758,7 +799,7 @@ export const WORD_NUMERIC_DECIMAL_TAB_INFERENCE = defineCompatibilityRule({
     kind: 'regression-test',
     reference: 'packages/docx/src/decimal-tab-autoalign.test.ts#right-aligns numbers of different digit counts at the decimal tab',
   },
-  description: 'Right-align an otherwise tab-less numeric paragraph at its leading decimal tab while leaving non-numeric and no-decimal-tab paragraphs unchanged.',
+  description: 'Right-align an otherwise tab-less numeric paragraph at its leading decimal tab while leaving non-numeric and no-decimal-tab paragraphs unchanged. Classification: Microsoft-note derived, [MS-OI29500] §2.1.556(d): Word inserts an implicit tab in a table cell that has a single decimal tab stop (origin PR #555). Paragraphs outside table cells are not covered by that note; the evidence stays a regression test until the section is catalogued and the scope narrowed.',
 });
 
 export const WORD_NUMBERING_MARKER_OVERFLOW_TAB_ADVANCE = defineCompatibilityRule({
@@ -767,16 +808,16 @@ export const WORD_NUMBERING_MARKER_OVERFLOW_TAB_ADVANCE = defineCompatibilityRul
     kind: 'regression-test',
     reference: 'packages/docx/src/numbered-marker-tab-advance.test.ts#advances the body past the marker to the next tab stop, not onto indentLeft',
   },
-  description: 'When a numbering marker overruns its hanging-indent budget, advance the body to the next reachable tab stop beyond the marker edge.',
+  description: 'When a numbering marker overruns its hanging-indent budget, advance the body to the next reachable tab stop beyond the marker edge. Classification: normative, ECMA-376 §17.9.28 suff tab with §17.3.1.37 tab stops; Word PDF of a corpus document in PR #555.',
 });
 
 export const WORD_NUMBERING_SUFFIX_COINCIDENT_LIST_TAB = defineCompatibilityRule({
   id: 'word-numbering-suffix-coincident-list-tab',
   evidence: {
-    kind: 'regression-test',
+    kind: 'library-policy',
     reference: 'packages/docx/src/layout/numbering-marker.test.ts#keeps a suffix tab on the list stop coincident with the marker end',
   },
-  description: 'For the tab synthesized by a numbering suffix, accept an authored numeric list tab coincident with the shaped marker end instead of advancing to the next automatic tab stop.',
+  description: 'For the tab synthesized by a numbering suffix, accept an authored numeric list tab coincident with the shaped marker end instead of advancing to the next automatic tab stop. Library policy, no Office measurement: coincident list-tab handling from PR #1080; no control.',
 });
 
 export const WORD_NUMBERING_MARKER_PARAGRAPH_MARK_FALLBACK = defineCompatibilityRule({
@@ -805,7 +846,7 @@ export const WORD_TAB_STOP_PAGE_EDGE_CLAMP = defineCompatibilityRule({
     kind: 'regression-test',
     reference: 'packages/docx/src/rtl-tab-stops.test.ts#pins a page number to the left text margin when the stop is past it',
   },
-  description: 'Clamp content assigned to a tab stop beyond the trailing text edge back onto that edge instead of placing ink outside the page content band.',
+  description: 'Clamp content assigned to a tab stop beyond the trailing text edge back onto that edge instead of placing ink outside the page content band. Evidence (observed Office behaviour): Word comparison of a corpus document (issues #820 and #830) in PR #835.',
 });
 
 export const WORD_DICTIONARY_SEA_ATOMIC_CHUNK = defineCompatibilityRule({
@@ -814,16 +855,16 @@ export const WORD_DICTIONARY_SEA_ATOMIC_CHUNK = defineCompatibilityRule({
     kind: 'regression-test',
     reference: 'packages/docx/src/sea-justified-fit.test.ts#Rule 2: a no-space chunk that fits a full line moves whole instead of splitting',
   },
-  description: 'Move a glued dictionary Southeast-Asian chunk to a fresh line whole when it fits that full line, using dictionary breaks only when the chunk itself is overlong.',
+  description: 'Move a glued dictionary Southeast-Asian chunk to a fresh line whole when it fits that full line, using dictionary breaks only when the chunk itself is overlong. Evidence (observed Office behaviour): Word PDF calibration fixture in issue #991 / PR #1003.',
 });
 
 export const WORD_OVERLONG_TOKEN_EMERGENCY_BREAK = defineCompatibilityRule({
   id: 'word-overlong-token-emergency-break',
   evidence: {
-    kind: 'regression-test',
+    kind: 'library-policy',
     reference: 'packages/docx/src/run-inline-formatting.test.ts#breaks a no-space token wider than the line at the character level',
   },
-  description: 'Emergency-break an overlong token at grapheme-safe character boundaries on an empty line so the complete token remains inside the content band.',
+  description: 'Emergency-break an overlong token at grapheme-safe character boundaries on an empty line so the complete token remains inside the content band. Library policy, no Office measurement: emergency break so an overlong token stays inside the column (PR #564); Word behaviour asserted, not measured.',
 });
 
 export const WORD_EXTERNAL_LINK_SYNTAX_BREAKS = defineCompatibilityRule({
@@ -874,10 +915,10 @@ export function wordExternalLinkSyntaxBreakOffsets(
 export const WORD_RUN_VERTICAL_ALIGN_BASELINE_SHIFT = defineCompatibilityRule({
   id: 'word-run-vertical-align-baseline-shift',
   evidence: {
-    kind: 'regression-test',
+    kind: 'library-policy',
     reference: 'packages/docx/src/run-char-metrics-render.test.ts#w:vertAlign raises superscript, lowers subscript, and leaves ordinary baselines unchanged',
   },
-  description: 'Retain the established run-level baseline displacement for vertically aligned text: superscript rises by 0.35 of its authored font size and subscript falls by 0.15, while the separately authored w:position remains additive.',
+  description: 'Retain the established run-level baseline displacement for vertically aligned text: superscript rises by 0.35 of its authored font size and subscript falls by 0.15, while the separately authored w:position remains additive. Library policy, no Office measurement: super/subscript shift of 0.35/0.15 em with the 0.65 size (PR #8); ECMA-376 §17.3.2.42 gives no amount, and the font rule (OS/2 ySuperscriptYOffset / ySubscriptYOffset) is not in the reference metrics table.',
 });
 
 export const WORD_UNIFORM_RUN_POSITION_LEADING = defineCompatibilityRule({
@@ -1002,47 +1043,6 @@ export function wordDegenerateLineSpacingIsSingle(
   return (rule === 'exact' || rule === 'auto') && value <= 0;
 }
 
-export function wordAutoMultipleCenterBoxPx(
-  autoMultiple: boolean,
-  compressedAuto: boolean,
-  glyphNaturalPx: number,
-  intendedSinglePx: number,
-  lineHeightPx: number,
-): number {
-  return autoMultiple && !compressedAuto
-    ? Math.max(glyphNaturalPx, intendedSinglePx)
-    : lineHeightPx;
-}
-
-export function wordVisibleLineMetricPx(
-  reservedMetricPx: number,
-  visibleMetricPx: number | undefined,
-): number {
-  return visibleMetricPx ?? reservedMetricPx;
-}
-
-export function wordFirstJustifiedContentSegment(
-  segments: readonly object[],
-  bidi: boolean,
-): number {
-  if (bidi) return 0;
-  for (let index = 0; index < segments.length; index += 1) {
-    const segment = segments[index];
-    const text = 'text' in segment && typeof segment.text === 'string'
-      ? segment.text
-      : undefined;
-    if (text === undefined || /\S/.test(text)) return index;
-  }
-  return 0;
-}
-
-export function wordRubyUniformLineHeightPx(
-  hasRuby: boolean,
-  lineHeightsPx: readonly number[],
-): number {
-  return hasRuby ? Math.max(0, ...lineHeightsPx) : 0;
-}
-
 export const WORD_LATIN_DESIGN_GRID_CELLS = defineCompatibilityRule({
   id: 'word-latin-design-grid-cells',
   evidence: { kind: 'office-observation', syntheticFixtureId: 'float-grid-picture-origin',
@@ -1067,7 +1067,7 @@ export const WORD_SPECIFIED_TEXT_LINE_BOX = defineCompatibilityRule({
     version: 'export build unrecorded (16.113.3 installed at measurement)',
     platform: 'macOS 27.0',
   },
-  description: 'Issue #1674: 636 printing-PDF pages, modes 14/15, no grid and 20pt lines/linesAndChars grids, Arial/Times New Roman/MS Mincho/Yu Mincho/Verdana/Calibri Latin glyphs. Exact 12/20/24/30pt lines put the baseline four fifths down the authored line, independent of the 10pt visible face or zero/one/two hosts; 30pt visible-text and 30pt-host diagnostics distinguish font ascent, centering and host-height hypotheses. Off-grid atLeast 24/40pt retains the normal design descent and places added leading before the normal line box. Grid-atLeast uses the same centered normal-cell box as explicit auto=1, with minimum leading before that box: 24pt minima remain 24pt for 10pt visible text, while oversized 30pt normal boxes reserve 40pt/60pt. A same-face floating host does not enlarge the admitted visible-text box, including the measured 30pt hosts. Independent readback of the complete source-bound matrix establishes these allocations and baselines. Fresh Word 16.113.3 mode-15 Arial-10pt controls with 13 lines, a 20pt grid, 40pt minima, three preceding-line phases, grid/snap-off/exact controls and line anchors distinguish device projection from layout: twelve text steps total exactly 480pt, with alternating 40.08/40.08/39.84pt or rotations, and anchors retain exact point advances. Do not accumulate the printing cadence or round the authored minimum to a grid-cell multiple. Explicit auto=1 diagnostics on an active grid use the same normal grid box; off-grid diagnostics already agree with the established path, which is preserved. PDF coordinates/font sizes are quantized to 0.24pt; this is export precision, not a layout correction. The exact-height evidence interval is 12 through 30pt; smaller captions do not isolate baseline placement from accumulated printing cadence, and heights outside this interval retain the established path. Scope is homogeneous regular unpositioned undecorated Latin text and matching paragraph-mark face/size with an admitted authored reference profile and a native or positively loaded installed Office local() face. Registered local aliases retain the authored family from the resolver; Application-provided SFNT, CSS, embedded, Google and substitute resources remain outside the evidence. Float-exclusion-conditioned origins are also excluded: a narrow side-gap Office counterexample has a different physical partition, so this round does not isolate its baseline from the wrap origin. Admission is paragraph-wide: a mixed-script or decorated continuation paragraph cannot switch contracts on its ASCII-only undecorated physical lines. Mixed scripts/font axes/faces/sizes, differing paragraph marks, decorated/hyperlink text, transformed text, ruby, inline objects, numbering and resource/fallback faces are unmeasured and retain the established path. Windows Word 16.0 build 16.0.20430 retest: Exact-height baseline offsets retain four fifths of the line. Yu Mincho no-grid atLeast 24pt with 10pt text has a 19.20pt baseline offset from paragraph shading top versus 20.16pt in the retained Mac PDF. Oversized 30pt text atLeast 24pt advances 50.16pt versus 42.96pt; 20pt auto1 diagnostics advance about 33.4pt versus 28.7pt. Adjudication (2026-10-16): read the selected host face tables and use the Windows result when identical vertical data yields different Office output. The tested Mac Office and Windows PDF Yu Mincho faces have hhea=(1802, -455, 1024), usWin=(2038, 598), UPM=2048. Windows matches 1.3 times usWin: 30pt atLeast 24pt advances 50.20pt with baseline offset 35.65pt; 10pt atLeast 24pt has offset 19.15pt, within 0.24pt PDF precision. The Mac hhea result remains historical evidence, not the selected policy. No viewer-OS or font-name selector is used. This establishes the tested regular static faces, not arbitrary Office versions, variable fonts or fallback resource identity.',
+  description: 'Issue #1674: 636 printing-PDF pages, modes 14/15, no grid and 20pt lines/linesAndChars grids, Arial/Times New Roman/MS Mincho/Yu Mincho/Verdana/Calibri Latin glyphs. Exact 12/20/24/30pt lines put the baseline four fifths down the authored line, independent of the 10pt visible face or zero/one/two hosts; 30pt visible-text and 30pt-host diagnostics distinguish font ascent, centering and host-height hypotheses. Off-grid atLeast 24/40pt retains the normal design descent and places added leading before the normal line box. Grid-atLeast uses the same centered normal-cell box as explicit auto=1, with minimum leading before that box: 24pt minima remain 24pt for 10pt visible text, while oversized 30pt normal boxes reserve 40pt/60pt. A same-face floating host does not enlarge the admitted visible-text box, including the measured 30pt hosts. Independent readback of the complete source-bound matrix establishes these allocations and baselines. Fresh Word 16.113.3 mode-15 Arial-10pt controls with 13 lines, a 20pt grid, 40pt minima, three preceding-line phases, grid/snap-off/exact controls and line anchors distinguish device projection from layout: twelve text steps total exactly 480pt, with alternating 40.08/40.08/39.84pt or rotations, and anchors retain exact point advances. Do not accumulate the printing cadence or round the authored minimum to a grid-cell multiple. Explicit auto=1 diagnostics on an active grid use the same normal grid box; off-grid diagnostics already agree with the established path, which is preserved. PDF coordinates/font sizes are quantized to 0.24pt; this is export precision, not a layout correction. The exact-height evidence interval is 12 through 30pt; smaller captions do not isolate baseline placement from accumulated printing cadence, and heights outside this interval retain the established path. Scope is homogeneous regular unpositioned undecorated Latin text and matching paragraph-mark face/size with an admitted authored reference profile and a native or positively loaded installed Office local() face. Registered local aliases retain the authored family from the resolver; Application-provided SFNT, CSS, embedded, Google and substitute resources remain outside the evidence. Float-exclusion-conditioned origins are also excluded: a narrow side-gap Office counterexample has a different physical partition, so this round does not isolate its baseline from the wrap origin. Admission is paragraph-wide: a mixed-script or decorated continuation paragraph cannot switch contracts on its ASCII-only undecorated physical lines. Mixed scripts/font axes/faces/sizes, differing paragraph marks, decorated/hyperlink text, transformed text, ruby, inline objects, numbering and resource/fallback faces are unmeasured and retain the established path. Windows Word 16.0 build 16.0.20430 retest: Exact-height baseline offsets retain four fifths of the line. Yu Mincho no-grid atLeast 24pt with 10pt text has a 19.20pt baseline offset from paragraph shading top versus 20.16pt in the retained Mac PDF. Oversized 30pt text atLeast 24pt advances 50.16pt versus 42.96pt; 20pt auto1 diagnostics advance about 33.4pt versus 28.7pt. Adjudication (2026-10-16): read the selected host face tables and use the Windows result when identical vertical data yields different Office output. The tested Mac Office and Windows PDF Yu Mincho faces have hhea=(1802, -455, 1024), usWin=(2038, 598), UPM=2048. Windows matches 1.3 times usWin: 30pt atLeast 24pt advances 50.20pt with baseline offset 35.65pt; 10pt atLeast 24pt has offset 19.15pt, within 0.24pt PDF precision. The Mac hhea result remains historical evidence, not the selected policy. No viewer-OS or font-name selector is used. This establishes the tested regular static faces, not arbitrary Office versions, variable fonts or fallback resource identity. Windows Word 16.0 build 16.0.20430 #1884 controls (Arial 10pt and Times New Roman 12pt text; exact 12/18/30pt, atLeast 18/30/60pt; 6-20pt Symbol bullets and Arial numbers) extend the class to numbered lines and to paragraph marks of another face at the same size, including an East Asian mark slot: plain, numbered and empty items all keep four fifths of an exact line and the text descent above the bottom of an atLeast line. A taller first-line marker joins the atLeast normal box by its ascent over the text descent (paragraph-measure.ts).',
 });
 
 /** Word observation, not the normative centered-text rule: ECMA-376

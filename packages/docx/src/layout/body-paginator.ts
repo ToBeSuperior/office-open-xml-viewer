@@ -4,7 +4,6 @@ import type {
   BodyLayoutInput,
   BodyParagraphSourceInput,
   BodySectionLayoutInput,
-  BodyTableSourceInput,
 } from './body-layout-input.js';
 import type {
   BodyAcquisitionLocation,
@@ -53,7 +52,6 @@ import {
   createPageFlowState,
   placeFlowNode,
   UnsupportedPageFlowTransitionError,
-  type PageFlowState,
 } from './paginator.js';
 
 import {
@@ -2248,6 +2246,7 @@ function* paginateBodyPassSteps(
           // It governs what follows that paragraph; it is not evidence that the
           // preceding inline resource and anchor form a movable keep group.
           && afterNext.sameSourceParagraphAsPrevious !== true;
+        // `word-pre-break-inline-drawing-group`
         const hasInlineDrawingResource = wordPreBreakInlineDrawingResource(acquired.layout);
         if (
           cursor.boundary === null
@@ -2289,6 +2288,7 @@ function* paginateBodyPassSteps(
           cursor.boundary === null
           && followedByHardPageBreak
         ) {
+          // `word-pre-break-anchor-paragraph`
           const neutral = wordFlowNeutralPreBreakAnchorParagraph(acquired.layout);
           if (neutral !== null) {
             state = acceptNode(
@@ -2971,6 +2971,7 @@ function composePageStories(
     }
     const vertical = sectionWritingMode(page.section) !== 'horizontal-tb';
     const geometry = vertical
+      // `word-vertical-section-physical-header-footer`
       ? physicalSectionGeometry(page.section.geometry, page.section.sectionFlow)
       : page.section.geometry;
     const inlineStartPt = Math.abs(geometry.marginLeft);

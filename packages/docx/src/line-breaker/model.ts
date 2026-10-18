@@ -105,9 +105,9 @@ export interface LayoutTextSeg extends LayoutSegSource {
   bold: boolean;
   italic: boolean;
   underline: boolean;
-  /** ECMA-376 §17.3.2.40 `<w:u w:val>` — raw ST_Underline (§17.18.99) style; the
-   *  renderer maps it to DrawingML §20.1.10.82 for `core.drawUnderline`. Absent
-   *  ⇒ plain single rule. */
+  /** ECMA-376 §17.3.2.40 `<w:u w:val>` — raw ST_Underline (§17.18.99) style;
+   *  retained typography resolves its decoration geometry. Absent ⇒ plain
+   *  single rule. */
   underlineStyle?: string;
   /** ECMA-376 §17.3.2.40 `<w:u w:color>` — underline-only colour (hex 6 or
    *  `auto`). Absent ⇒ the underline follows the glyph colour. */
@@ -476,6 +476,11 @@ export type LayoutSeg = LayoutTextSeg | LayoutImageSeg | LayoutMathSeg | LayoutL
 
 
 export interface LayoutLine {
+  /** Present on a numbered first line whose leading edge a float moved:
+   * the marker's logical leading edge and the body start, both logical px
+   * from the paragraph's leading indent, and the body start from the line's
+   * own window origin (the line's first-line indent). */
+  numberingFirstLine?: Readonly<{ leadingEdgePx: number; bodyIndentPx: number; lineStartOffsetPx: number }>;
   /** Present (including zero) for the measured proportional gap policy. The
    * natural advances stay intact; layout applies this slack once to paint. */
   justifiedCompressionPx?: number;
@@ -592,6 +597,15 @@ export interface WrapLayoutCtx {
   lineBoxH: (ascentPx: number, descentPx: number, hasRuby?: boolean, intendedSinglePx?: number, eastAsian?: boolean, gridCountSinglePx?: number, uniformPositionAuto?: LayoutLine['uniformPositionAuto'], inlinePictureTextSingle?: number, latinGridCountSingle?: number) => number;
   /** Hard cap on Y to keep layout from running past the page. */
   pageH: number;
+  /** Numbered paragraph whose first line may be narrowed by a float. The
+   * marker occupies the authored first-line position, so the first-line
+   * window is queried with the authored hanging indent; `bodyIndentAt`
+   * resolves the body start (logical px from the indent) for a marker whose
+   * leading edge the window moved. */
+  numberingFirstLine?: Readonly<{
+    authoredFirstIndentPx: number;
+    bodyIndentAt: (markerLeadingEdgePx: number) => number;
+  }>;
 }
 
 

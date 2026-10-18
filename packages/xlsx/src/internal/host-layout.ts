@@ -58,7 +58,7 @@ export function decodeHostLayoutRequest(bytes: Uint8Array): HostLayoutFont | nul
   return validateHostLayoutFont(value);
 }
 
-export function validateHostLayoutFont(value: unknown): HostLayoutFont {
+function validateHostLayoutFont(value: unknown): HostLayoutFont {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new TypeError('invalid XLSX host layout font');
   }

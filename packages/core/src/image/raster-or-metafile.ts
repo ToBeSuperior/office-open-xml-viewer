@@ -61,7 +61,7 @@ export interface IncompleteMetafileReport {
 }
 
 /** A metafile the caller required to be complete could not be fully played. */
-export class OoxmlIncompleteMetafileError extends Error {
+class OoxmlIncompleteMetafileError extends Error {
   readonly code = 'ooxml-incomplete-metafile' as const;
 
   constructor(

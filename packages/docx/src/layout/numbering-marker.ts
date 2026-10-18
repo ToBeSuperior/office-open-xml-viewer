@@ -130,6 +130,7 @@ export function shapeNumberingMarkerText(
     const { resourceMetric, referenceMetric, lineMetric } = selectedFontLineMetric(
       span.font, selectResourceMetric(metrics, span.font, span.text), true,
       allowsReferenceFontMetric(metrics, span.font),
+      { text: service, probe: span.text },
     );
     const design = resourceMetric?.lineHeightRatio != null ? resourceMetric : referenceMetric;
     // Body text admits these same selected-face sides. Using raw Canvas boxes
@@ -213,6 +214,7 @@ export function resolveNumberingMarkerGeometry(
     )?.shape.advancePt ?? 0;
   } else if (suffix === 'tab') {
     bodyOffsetPt = 0;
+    // `word-numbering-marker-overflow-tab-advance`
     if (markerEndPt > 0) {
       const stop = numberingSuffixTabStop(
         input.physicalIndentLeftPt + markerEndPt,

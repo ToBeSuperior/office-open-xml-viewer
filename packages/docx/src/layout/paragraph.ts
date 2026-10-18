@@ -5,7 +5,7 @@ import { shadowInkBounds } from './vml-shadow.js';
 import { createParagraphAnchorReferenceWorkBudget } from './resource-budgets.js';
 import { addExactRational, exactRationalFromNumber, exactRationalToNumberUp } from './exact-geometry.js';
 import { revisionIsOmitted } from './revision-visibility.js';
-import { wordKerningApplies } from './line-compatibility.js';
+import { wordArabicTextKerned, wordKerningApplies } from './line-compatibility.js';
 import type { LineGapPlan } from '../line-breaker/line-gaps.js';
 import { distributeLineSlack as distributeProportionalSlack } from '@silurus/ooxml-core';
 import { specifiedTextLineMetrics, specifiedTextParagraphIsHomogeneous } from './specified-line-spacing.js';
@@ -51,7 +51,7 @@ import {
 } from './text.js';
 import { eastAsianUprightPaintOps } from './vertical-glyph-orientation.js';
 import { wordTrackChangeDecoration } from './paint-compatibility.js';
-import type { DocParagraph, DocRun, ShapeRun } from '../types.js';
+import type { DocRun, ShapeRun } from '../types.js';
 import {
   computeLineVisualOrder,
   jcIsFullyJustified,
@@ -170,7 +170,7 @@ export {
   prepareBodyFrameMetadata,
 } from './frame.js';
 export type { BodyFrameGroup } from './frame.js';
-import type { ParagraphAcquisitionInput, ParagraphAcquisitionRun, ParagraphLayoutSource } from './text.js';
+import type { ParagraphAcquisitionInput, ParagraphLayoutSource } from './text.js';
 import type { VerticalGlyphMeasurementService } from './measurement-capabilities.js';
 import type {
   DrawingLayout,
@@ -691,7 +691,8 @@ function trimTerminalUnderline(
  * clearance below every glyph in the contiguous span; acquiring each run in
  * isolation instead creates stepped solid rules and restarts dash/wave phase
  * at source seams. Normalize the span before paint while keeping authored
- * style, color, and thickness boundaries intact. */
+ * style, color, and thickness boundaries intact.
+ * `word-contiguous-underline-geometry` */
 function coalesceAdjacentDecorations(placements: ParagraphPlacement[]): void {
   type ActiveDecoration = Readonly<{
     placementIndex: number;
@@ -801,6 +802,7 @@ export function planLine(input: PlanLineInput): LineLayout {
     }
   }
   const lastDrawnIndex = visual.order.at(-1) ?? -1;
+  // `word-justification-leading-indent-exclusion`
   let firstContentIndex = 0;
   if (!bidi) {
     const found = segments.findIndex((segment) => segment.kind !== 'text' || /\S/.test(segment.text));
@@ -979,6 +981,7 @@ export function planLine(input: PlanLineInput): LineLayout {
             .filter((cluster) => cluster.range.start >= segment.range.start + trailingWhitespaceStart)
             .reduce((sum, cluster) => sum + cluster.advancePt, 0)
         : 0;
+      // `word-run-decoration-justified-advance`
       const ownedTrailingSlackPt = stretch?.trailingGap ? stretch.trailingDelta ?? perGapPt : 0;
       const origin = { xPt: xPt + rtlLeadingGapPt, yPt: line.baselinePt };
       const baselineOffsetPt = textGeometry.paintOps[0]?.offset.yPt ?? 0;
@@ -1066,6 +1069,7 @@ export function planLine(input: PlanLineInput): LineLayout {
           },
         } : {}),
       };
+      // `word-snap-to-chars-terminal-underline`
       const terminalDecorationTrimPt = decorationTerminalAdvancePt === undefined
         ? 0
         : Math.max(
@@ -1514,22 +1518,35 @@ function textPlacement(
         measure: true,
       })
     : undefined;
+  // Guide graphemes paint alone at their contextual prefix offsets. A
+  // pair-kerned span (WORD_ARABIC_PAIR_KERNING) paints whole instead: a prefix
+  // excludes the pair adjustment with its following glyph, and Arabic joins
+  // across graphemes, so only the contextual span reproduces its acquisition.
   const rubySpans = segment.ruby && rubyShape
-    ? (rubyShape.clusters ?? []).map((cluster) => {
-        const span = rubyShape.spans.find((candidate) =>
-          candidate.start <= cluster.range.start && candidate.end >= cluster.range.end)
-          ?? rubyShape.spans[0];
-        if (!span) throw new Error('Ruby shaping produced no selected-face span');
-        return {
-          text: segment.ruby!.text.slice(cluster.range.start, cluster.range.end),
-          offsetPt: cluster.offsetPt,
-          fontRoute: span.fontRoute,
-          fontSizePt: segment.ruby!.fontSizePt,
-          fontWeight: span.font.weight,
-          fontStyle: span.font.style,
-          color,
-        };
-      })
+    ? (() => {
+        const ruby = segment.ruby!;
+        const contextual = new Set<object>();
+        return (rubyShape.clusters ?? []).flatMap((cluster) => {
+          const span = rubyShape.spans.find((candidate) =>
+            candidate.start <= cluster.range.start && candidate.end >= cluster.range.end)
+            ?? rubyShape.spans[0];
+          if (!span) throw new Error('Ruby shaping produced no selected-face span');
+          const kerned = wordArabicTextKerned(span.text);
+          if (kerned && contextual.has(span)) return [];
+          if (kerned) contextual.add(span);
+          return [{
+            text: kerned ? ruby.text.slice(span.start, span.end)
+              : ruby.text.slice(cluster.range.start, cluster.range.end),
+            offsetPt: cluster.offsetPt,
+            fontRoute: span.fontRoute,
+            fontSizePt: ruby.fontSizePt,
+            fontWeight: span.font.weight,
+            fontStyle: span.font.style,
+            color,
+            ...(kerned ? { kerning: 'normal' as const } : {}),
+          }];
+        });
+      })()
     : [];
   const rubyRaisePt = typography?.ruby?.raisePt.status === 'valid'
     ? typography.ruby.raisePt.value ?? undefined
@@ -1586,7 +1603,8 @@ function textPlacement(
       perGapPt: segment.fitTextPerGapPx ?? 0,
       trailingPadPt: segment.fitTextTrailingPadPx ?? 0,
     } } : {}),
-    kerning: segment.textShapeRequest?.kerning ?? wordKerningApplies(segment.fontSize, segment.kerning),
+    kerning: (segment.textShapeRequest?.kerning ?? wordKerningApplies(segment.fontSize, segment.kerning))
+      || wordArabicTextKerned(segment.text),
     ...(segment.position !== undefined ? { positionPt: segment.position } : {}),
     ...(segment.vertAlign ? { verticalAlign: segment.vertAlign } : {}),
     ...(segment.tateChuYoko ? { tateChuYoko: true } : {}),
@@ -1660,11 +1678,19 @@ function textPlacement(
       letterSpacingPt: effectiveCharacterSpacingPt(segment),
       scaleX: segment.charScale ?? 1,
       direction: segment.rtl ? 'rtl' : 'ltr',
-      kerning: (segment.textShapeRequest?.kerning ?? wordKerningApplies(segment.fontSize, segment.kerning)) ? 'normal' : 'none',
+      kerning: (segment.textShapeRequest?.kerning ?? wordKerningApplies(segment.fontSize, segment.kerning))
+        || wordArabicTextKerned(segment.text) ? 'normal' : 'none',
       writingMode: segment.verticalRun ? 'vertical-rl' : 'horizontal-tb',
     }],
     ...(segment.hyperlink ? { hyperlink: segment.hyperlink } : {}),
   };
+}
+
+/** WORD_RUBY_LINE_ASCENT's measured class: a ruby line whose every guide has
+ * an authored hpsRaise (the absent-raise reserve is unmeasured). */
+function measuredRubyLine(raw: MeasuredParagraph['lines'][number]['layout']): boolean {
+  return raw.hasRuby === true && raw.segments.every((segment) =>
+    !('ruby' in segment) || !segment.ruby || segment.ruby.hpsRaisePt != null);
 }
 
 function plannedBaselinePt(
@@ -1672,11 +1698,17 @@ function plannedBaselinePt(
   context: ParagraphLayoutContext,
 ): number {
   const raw = measuredLine.layout;
+  // `word-mixed-anchor-visible-line-metrics`
   const visibleAscentPt = raw.visibleAscent ?? raw.ascent;
   const visibleDescentPt = raw.visibleDescent ?? raw.descent;
   const visibleNaturalPt = visibleAscentPt + visibleDescentPt;
+  // Windows Word 16.0 #1885 controls: ruby lines under automatic multiples
+  // keep the same top-pinned baseline as text lines (the guide's top is part
+  // of the line's natural box, WORD_RUBY_LINE_ASCENT).
+  // Lines without ruby in a ruby paragraph (its uniform reserve) are
+  // unmeasured and stay centred.
   const autoMultiple = context.lineSpacing?.rule === 'auto'
-    && !context.hasRuby
+    && (!context.hasRuby || measuredRubyLine(raw))
     && !context.lineGrid.active;
   const compressedAuto = autoMultiple && (context.lineSpacing?.value ?? 1) < 1;
   const centerBoxPt = autoMultiple && !compressedAuto
@@ -1715,13 +1747,50 @@ function retainedNumberingPlan(
   }, service);
 }
 
+/** Body start for a numbered first line whose marker leading edge a float
+ * moved (WrapLayoutCtx.numberingFirstLine; issue #1883). Only paragraphs whose
+ * body offset is the resolved marker+suffix geometry take part: the RTL forms
+ * that keep the authored first-line indent position their marker otherwise. */
+function numberingFirstLineWindow(
+  paragraph: ParagraphAcquisitionInput,
+  context: ParagraphLayoutContext,
+  options: Pick<ParagraphAcquisitionOptions, 'environment'>,
+): NonNullable<import('../line-breaker/model.js').WrapLayoutCtx['numberingFirstLine']> | undefined {
+  const numbering = paragraph.numbering;
+  const markerInput = paragraph.numberingMarkerShapeInput;
+  const service = options.environment.layoutServices?.text;
+  // Same admission as applyNumberingBodyOffset (numbering-marker.ts).
+  const usesResolvedBodyOffset = !context.baseRtl
+    || ((numbering?.suff || 'tab') === 'tab' && paragraph.indentFirst < 0);
+  if (!numbering || !markerInput || !service || !usesResolvedBodyOffset
+    || (numbering.text === '' && numbering.picBulletImagePath == null)) return undefined;
+  return {
+    authoredFirstIndentPx: paragraph.indentFirst,
+    bodyIndentAt: (markerLeadingEdgePx) => resolveNumberingMarkerGeometry(numbering, markerInput, {
+      authoredFirstIndentPt: markerLeadingEdgePx,
+      // Tab stops are measured from the leading margin: the right one in RTL.
+      physicalIndentLeftPt: context.baseRtl ? context.physicalIndentRightPt : context.physicalIndentLeftPt,
+      tabStops: paragraph.tabStops,
+      defaultTabPt: context.defaultTabPt,
+    }, service).bodyOffsetPt,
+  };
+}
+
 function numberingAlignedLeadingEdgePt(
   plan: RetainedNumberingPlan,
   context: ParagraphLayoutContext,
   paragraphXPt: number,
   availableWidthPt: number,
   line: LineLayout,
+  moved?: Readonly<{ leadingEdgePx: number; authoredFirstIndentPt: number }>,
 ): number {
+  // A float moved the marker's leading edge (numberingFirstLineWindow): the
+  // aligned edge is chosen so that numberingMarkerPhysicalLeft puts the
+  // marker's logical start at that edge.
+  if (moved) {
+    const offsetPt = moved.leadingEdgePx - moved.authoredFirstIndentPt;
+    return context.baseRtl ? paragraphXPt + availableWidthPt - offsetPt : paragraphXPt + offsetPt;
+  }
   // Non-empty lines retain their aligned body bounds. A numbering-only line has
   // zero width and therefore retains the paragraph frame origin instead of a
   // body origin with the resolved marker suffix offset applied.
@@ -1740,6 +1809,7 @@ function numberingMarkerPlacements(
   paragraphXPt: number,
   availableWidthPt: number,
   line: LineLayout,
+  movedLeadingEdgePx?: number,
 ): readonly TextPlacement[] {
   if (!plan.shape || plan.markerText === '') return [];
   const shape = plan.shape;
@@ -1751,6 +1821,8 @@ function numberingMarkerPlacements(
       paragraphXPt,
       availableWidthPt,
       line,
+      movedLeadingEdgePx === undefined ? undefined
+        : { leadingEdgePx: movedLeadingEdgePx, authoredFirstIndentPt: paragraph.indentFirst },
     ),
     authoredFirstIndentPt: paragraph.indentFirst,
     markerShiftPt: plan.markerShiftPt,
@@ -1795,7 +1867,8 @@ function numberingMarkerPlacements(
         range: { start: rangeBase + span.start, end: rangeBase + span.end },
         offset: { xPt: 0, yPt: 0 }, letterSpacingPt: 0, scaleX: 1,
         direction: context.baseRtl ? 'rtl' : 'ltr',
-        kerning: paragraph.numberingMarkerShapeInput?.kerning ? 'normal' : 'none',
+        kerning: paragraph.numberingMarkerShapeInput?.kerning || wordArabicTextKerned(span.text)
+          ? 'normal' : 'none',
         writingMode: 'horizontal-tb',
       }],
       color, fontRoute: span.fontRoute,
@@ -1822,6 +1895,7 @@ function retainEffectiveTextBackground(
     let changed = false;
     const placements = line.placements.map((placement) => {
       if (placement.kind !== 'text') return placement;
+      // `word-auto-text-contrast-effective-background`
       const effectiveBackground = placement.background
         ?? paragraphBackground
         ?? containerBackground;
@@ -1870,6 +1944,7 @@ function paragraphDecorationBox(
   const borders = paragraph.borders;
   const topEdge = borderEdges.top === 'none' ? null : borders?.[borderEdges.top] ?? null;
   const bottomEdge = borderEdges.bottom === 'none' ? null : borders?.bottom ?? null;
+  // `word-paragraph-shading-border-box`
   const leftSpacePt = visibleParagraphBorder(borders?.left ?? null) ? borders!.left!.space ?? 0 : 0;
   const rightSpacePt = visibleParagraphBorder(borders?.right ?? null) ? borders!.right!.space ?? 0 : 0;
   const topSpacePt = visibleParagraphBorder(topEdge) ? topEdge.space ?? 0 : 0;
@@ -2143,10 +2218,6 @@ function textPlanSegment(
     const cellPitchPt = segment.snapGridCellPitchPx;
     let precedingCells = 0;
     clusters = clusters.map((cluster, index) => {
-      const text = segment.text.slice(
-        cluster.range.start - sourceOffset,
-        cluster.range.end - sourceOffset,
-      );
       const cells = wordSnapToCharsEastAsianCellCount(
         cluster.advancePt,
         cellPitchPt,
@@ -2510,22 +2581,48 @@ function planMeasuredLines(
   );
   const visibleText = measured.lines.flatMap((line) => line.layout.segments.flatMap((segment) =>
     'text' in segment && !segment.metricOnly ? [segment.text] : [])).join('').trim();
+  // `word-numeric-decimal-tab-inference`
   const decimalAutoTabPt = !hasExplicitTab
     && earliestTab?.alignment === 'decimal'
     && visibleText !== ''
     && /^[+\-(]?[\d., ]+\)?%?$/u.test(visibleText)
       ? earliestTab.pos - context.physicalIndentLeftPt
       : undefined;
-  const specifiedParagraph = specifiedTextParagraphIsHomogeneous(paragraph);
+  const specifiedParagraph = specifiedTextParagraphIsHomogeneous(paragraph,
+    context.lineGrid.active || compatibilityMode !== 15);
   return retainPhysicalLines(measured.lines.map((measuredLine, lineIndex) => {
     const raw = measuredLine.layout;
-    const specified = specifiedParagraph && !paragraph.numbering
+    // The measured allocation's first-line marker union (paragraph-measure.ts):
+    // a taller marker raises the line by its ascent over the text's descent.
+    const markerAscentPt = lineIndex === 0 && numberingPlan?.markerText
+      ? numberingPlan.lineBox?.ascentPt : undefined;
+    const specified = specifiedParagraph
       ? specifiedTextLineMetrics(raw, context, paragraph, compatibilityMode, verticalPageFrame,
-          paragraphMarkShapeInput)
+          paragraphMarkShapeInput,
+          markerAscentPt === undefined ? undefined : Math.max(markerAscentPt, raw.ascent) + raw.descent)
       : null;
+    // Windows Word 16.0 #1885 controls (exact 18pt; Latin and MS Mincho base
+    // text; 3-10pt guides raised 0-19pt): a ruby line keeps the four-fifths
+    // exact partition of WORD_SPECIFIED_TEXT_LINE_BOX, within its 12-30pt
+    // evidence interval; the guide may overhang the line top.
+    const exactRubyLine = !specified && measuredRubyLine(raw)
+      && context.lineSpacing?.rule === 'exact' && context.lineSpacing.value >= 12
+      && context.lineSpacing.value <= 30
+      && compatibilityMode === 15
+      && !context.lineGrid.active && raw.topY === undefined;
+    // Under atLeast the added leading falls before the line, which keeps its
+    // own descent above the bottom (atLeast 18pt, the same controls).
+    const atLeastRubyLine = !specified && measuredRubyLine(raw)
+      && context.lineSpacing?.rule === 'atLeast'
+      && compatibilityMode === 15
+      && !context.lineGrid.active && raw.topY === undefined;
     const baselinePt = specified
       ? measuredLine.topYPt + specified.baselineOffsetPt
-      : plannedBaselinePt(measuredLine, context);
+      : exactRubyLine
+        ? measuredLine.topYPt + context.lineSpacing!.value * 4 / 5
+        : atLeastRubyLine
+          ? measuredLine.topYPt + measuredLine.advancePt - (raw.visibleDescent ?? raw.descent)
+          : plannedBaselinePt(measuredLine, context);
     let lineStartOffset = Number.POSITIVE_INFINITY;
     let lineEndOffset = sourceOffset;
     const segments: MeasuredLinePlanSegment[] = [];
@@ -2725,7 +2822,7 @@ function planMeasuredLines(
       exactLineSpacing: context.lineSpacing?.rule === 'exact',
       firstLineIndentPt: context.firstIndentPt,
       ...(lineIndex === 0 && numberingPlan
-        ? { numbering: { bodyOffsetPt: numberingPlan.bodyOffsetPt } }
+        ? { numbering: { bodyOffsetPt: raw.numberingFirstLine?.lineStartOffsetPx ?? numberingPlan.bodyOffsetPt } }
         : {}),
       ...(decimalAutoTabPt === undefined ? {} : { decimalAutoTabPt }),
       ...(onlyMath?.display ? {
@@ -3399,6 +3496,7 @@ function acquireAnchorOccurrence(
         : null,
       paragraph: {
         xPt: options.placement.paragraphXPt,
+        // `word-paragraph-anchor-pre-spacing-origin`
         yPt: options.placement.startYPt + (
           outer.run.anchorAcquisitionInput.vertical.relativeFrom === 'paragraph'
           && outer.run.anchorAcquisitionInput.wrap.kind === 'none'
@@ -3579,6 +3677,7 @@ function acquireAnchorOccurrence(
         layoutInCell && options.anchorCellBounds !== undefined,
       );
       const sameParagraphBlockers = sameParagraphCollisions.filter((entry) =>
+        // `word-lower-layer-same-paragraph-anchor-composition`
         !wordPreservesLowerLayerSameParagraphComposition(
           movingVerticalOwnership,
           behavior.relativeHeight!,
@@ -5071,6 +5170,9 @@ export function acquireParagraphResult(
   const acquisitionOptions = numberingPlan && !options.context.numberingMarkerGeometry
     ? { ...options, context: { ...options.context, numberingMarkerGeometry: numberingPlan } }
     : options;
+  const numberingFirstLine = numberingPlan
+    ? numberingFirstLineWindow(paragraph, acquisitionOptions.context, acquisitionOptions)
+    : undefined;
   const measureWithExclusions = (
     exclusions: readonly WrapExclusion[],
     observeBand?: (topPt: number, heightPt: number, moved: boolean) => void,
@@ -5084,6 +5186,10 @@ export function acquireParagraphResult(
       paragraphMarkShapeInput: paragraph.paragraphMarkShapeInput,
       ...(numberingPlan?.lineBox && numberingPlan.markerText ? {
         firstLineNumberingMarkerBox: numberingPlan.lineBox,
+      } : {}),
+      ...(numberingFirstLine ? { numberingFirstLine } : {}),
+      ...(numberingPlan?.markerText && numberingPlan.lineBox ? {
+        markOnlyTextMarkerAscentPt: numberingPlan.lineBox.ascentPt,
       } : {}),
       ...(paragraph.numbering?.picBulletImagePath ? {
         // The same display height the marker placement below paints.
@@ -5604,7 +5710,7 @@ function projectAcquiredParagraph(
 ): ParagraphLayout {
   const linePlan = projectAcquiredParagraphLines(paragraph, options, measured);
   let { lines } = linePlan;
-  const { planningContext, paragraphXPt, availableWidthPt, occurrences, numberingPlan } = linePlan;
+  const { paragraphXPt, availableWidthPt, occurrences, numberingPlan } = linePlan;
   const resources: InlineResourceLayout[] = [];
   const drawings: DrawingLayout[] = [];
   const textBoxes: TextBoxLayout[] = [];
@@ -5668,9 +5774,13 @@ function projectAcquiredParagraph(
       } : line);
     }
   }
+  const firstLineMovedMarkerEdgePx = options.continuesFromPrevious
+    ? undefined : measured.lines[0]?.layout.numberingFirstLine?.leadingEdgePx
+      ?? measured.markNumberingLeadingEdgePt;
   if (numberingPlan && lines[0]) {
     const markerPlacements = numberingMarkerPlacements(
       numberingPlan, paragraph, options.context, paragraphXPt, availableWidthPt, lines[0],
+      firstLineMovedMarkerEdgePx,
     );
     if (markerPlacements.length > 0) {
       lines = [{ ...lines[0], placements: [...markerPlacements, ...lines[0].placements] }, ...lines.slice(1)];
@@ -5825,6 +5935,8 @@ function projectAcquiredParagraph(
         paragraphXPt,
         availableWidthPt,
         lines[0],
+        firstLineMovedMarkerEdgePx === undefined ? undefined
+          : { leadingEdgePx: firstLineMovedMarkerEdgePx, authoredFirstIndentPt: paragraph.indentFirst },
       ),
       authoredFirstIndentPt: paragraph.indentFirst,
       markerShiftPt: numberingPlan.markerShiftPt,

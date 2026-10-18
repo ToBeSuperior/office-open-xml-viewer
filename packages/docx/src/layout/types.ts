@@ -294,6 +294,10 @@ export interface RetainedGlyphPaintOperation {
   readonly fontWeight: number;
   readonly fontStyle: 'normal' | 'italic';
   readonly color: TextColorPolicy;
+  /** Present when the operation paints a contextual span whose acquisition
+   * was pair-kerned (WORD_ARABIC_PAIR_KERNING); absent operations paint one
+   * grapheme, which has no pair to kern. */
+  readonly kerning?: 'normal';
   /** Tight selected-face ink relative to this operation's baseline origin. */
   readonly inkBounds?: Readonly<{
     xMinPt: number;
@@ -1228,6 +1232,9 @@ export interface DocumentLayout {
 export type CompatibilityEvidence =
   | Readonly<{ kind: 'microsoft-note'; reference: string }>
   | Readonly<{ kind: 'regression-test'; reference: string }>
+  /** Library policy with no Office measurement: the record's description must
+   * give the rationale; `reference` names the DOCX test that pins it. */
+  | Readonly<{ kind: 'library-policy'; reference: string }>
   | Readonly<{
       kind: 'office-observation';
       syntheticFixtureId: string;
