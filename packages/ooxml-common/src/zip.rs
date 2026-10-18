@@ -383,9 +383,14 @@ fn validate_unicode_extra_fields(
     while cursor + 4 <= extra.len() {
         let id = le_u16(extra, cursor).ok_or(CandidateError::Malformed)?;
         let len = le_u16(extra, cursor + 2).ok_or(CandidateError::Malformed)? as usize;
-        let body = extra
-            .get(cursor + 4..cursor + 4 + len)
-            .ok_or(CandidateError::Malformed)?;
+        let Some(body) = extra.get(cursor + 4..cursor + 4 + len) else {
+            // A truncated Unicode field is malformed; truncated unrelated
+            // metadata was tolerated before and stays opaque to the index.
+            if matches!(id, 0x7075 | 0x6375) {
+                return Err(CandidateError::Malformed);
+            }
+            break;
+        };
         let (target, seen) = match id {
             0x7075 => (name, &mut seen_path),
             0x6375 => (comment, &mut seen_comment),
@@ -869,7 +874,7 @@ fn inspect_central_directory(
         archive_base: directory.archive_base,
         index_view: IndexView {
             range: directory.start..directory.start,
-            patches: Vec::new(),
+            rewrites: Vec::new(),
             hidden: Vec::new(),
             footers: Vec::new(),
         },
@@ -881,6 +886,32 @@ fn inspect_central_directory(
 const ZIP64_EXTRA_FIELD_ID: u16 = 0x0001;
 /// An extra-field id the ZIP reader does not interpret.
 const OPAQUE_EXTRA_FIELD_ID: u16 = 0x7a7a;
+
+/// The extra block the ZIP reader sees: complete ZIP64 fields first, then
+/// one opaque filler field (or, for fewer than four remaining bytes, zero
+/// padding the reader skips). The length is unchanged, the reader keeps one
+/// ignored field per record however many fields the block holds, and it
+/// cannot reject unrelated or truncated metadata.
+fn opaque_extra_block(extra: &[u8]) -> Box<[u8]> {
+    let mut block = Vec::with_capacity(extra.len());
+    let mut cursor = 0;
+    while let (Some(id), Some(len)) = (le_u16(extra, cursor), le_u16(extra, cursor + 2)) {
+        let Some(field) = extra.get(cursor..cursor + 4 + len as usize) else {
+            break;
+        };
+        if id == ZIP64_EXTRA_FIELD_ID {
+            block.extend_from_slice(field);
+        }
+        cursor += field.len();
+    }
+    let rest = extra.len() - block.len();
+    if rest >= 4 {
+        block.extend_from_slice(&OPAQUE_EXTRA_FIELD_ID.to_le_bytes());
+        block.extend_from_slice(&((rest - 4) as u16).to_le_bytes());
+    }
+    block.resize(extra.len(), 0);
+    block.into_boxed_slice()
+}
 
 /// What a ZIP reader may observe while it builds its index from a package
 /// whose footer and central directory a preflight has already validated.
@@ -902,7 +933,9 @@ const OPAQUE_EXTRA_FIELD_ID: u16 = 0x7a7a;
 #[derive(Debug, Clone)]
 pub struct IndexView {
     range: std::ops::Range<usize>,
-    patches: Vec<(usize, u16)>,
+    /// Replacement bytes for each directory record's extra block, sorted by
+    /// offset: its complete ZIP64 fields, then one opaque filler field.
+    rewrites: Vec<(usize, Box<[u8]>)>,
     /// Entry comments: metadata OPC never uses, read as zero while indexing.
     hidden: Vec<std::ops::Range<usize>>,
     footers: Vec<usize>,
@@ -918,7 +951,7 @@ impl IndexView {
         eocd: usize,
         zip64_records: &[usize],
     ) -> Self {
-        let mut patches = Vec::new();
+        let mut rewrites = Vec::new();
         let mut hidden = Vec::new();
         let mut cursor = directory_start;
         while cursor + 46 <= eocd
@@ -936,14 +969,11 @@ impl IndexView {
             let extra_end = (extra_start + extra_len as usize).min(eocd);
             let comment_start = extra_start + extra_len as usize;
             hidden.push(comment_start..comment_start + comment_len as usize);
-            let mut field = extra_start;
-            while field + 4 <= extra_end {
-                let id = le_u16(data, field).unwrap_or(0);
-                let len = le_u16(data, field + 2).unwrap_or(0) as usize;
-                if id != ZIP64_EXTRA_FIELD_ID {
-                    patches.push((field, OPAQUE_EXTRA_FIELD_ID));
-                }
-                field += 4 + len;
+            if extra_len > 0 && extra_end == extra_start + extra_len as usize {
+                rewrites.push((
+                    extra_start,
+                    opaque_extra_block(&data[extra_start..extra_end]),
+                ));
             }
             cursor = extra_start + extra_len as usize + comment_len as usize;
         }
@@ -951,7 +981,7 @@ impl IndexView {
         footers.push(eocd);
         Self {
             range: directory_start..eocd + 22,
-            patches,
+            rewrites,
             hidden,
             footers,
         }
@@ -975,16 +1005,16 @@ impl IndexView {
             output[visible_start - start..visible_end - start]
                 .copy_from_slice(&data[visible_start..visible_end]);
         }
-        let first = self.patches.partition_point(|(at, _)| at + 2 <= start);
-        for &(at, value) in &self.patches[first..] {
-            if at >= end {
-                break;
-            }
-            for (offset, byte) in value.to_le_bytes().into_iter().enumerate() {
-                if (start..end).contains(&(at + offset)) {
-                    output[at + offset - start] = byte;
-                }
-            }
+        let first = self
+            .rewrites
+            .partition_point(|(at, bytes)| at + bytes.len() <= start);
+        for (at, bytes) in self.rewrites[first..]
+            .iter()
+            .take_while(|(at, _)| *at < end)
+        {
+            let from = (*at).max(start);
+            let to = (at + bytes.len()).min(end);
+            output[from - start..to - start].copy_from_slice(&bytes[from - at..to - at]);
         }
         let first_hidden = self.hidden.partition_point(|range| range.end <= start);
         for range in self.hidden[first_hidden..]
@@ -1011,7 +1041,7 @@ impl IndexView {
 /// time it reads footers and the central directory), just `index_range` (the
 /// validated directory, any ZIP64 footer records and the EOCD fixed fields)
 /// is visible: every other byte, payloads and the archive comment included,
-/// reads as zero and `index_patches` apply. The crate therefore sees exactly
+/// reads as zero and the view's rewrites apply. The crate therefore sees exactly
 /// one footer and directory, so it cannot retry an unvalidated EOCD, and NTFS
 /// metadata it would reject stays opaque. Afterwards every read passes
 /// through to the real bytes unchanged; lengths and offsets never differ.
@@ -1971,6 +2001,25 @@ mod tests {
             le_u32(&bytes, last_signature(&bytes, EOCD_SIGNATURE) + 16).unwrap() as usize + 46;
         let mut block = [0u8; 22];
         assert!(view.read(&bytes, name_at, &mut block).is_err());
+    }
+
+    #[test]
+    fn unused_extra_metadata_is_tolerated_and_coalesced_for_the_index() {
+        // A truncated Extended Timestamp (declares 9 bytes, carries 1).
+        let truncated = [0x55, 0x54, 9, 0, 1];
+        let bytes = with_central_extra(&zip_bytes(false), &truncated);
+        let mut archive = open_validated_zip(bytes).expect("truncated unused metadata");
+        assert_eq!(read_zip_bytes(&mut archive, "word/a.xml").unwrap(), b"a");
+
+        // Many short unknown fields become one opaque field for the reader.
+        let many: Vec<u8> = (0..2_000u16)
+            .flat_map(|id| [(id | 0x8000).to_le_bytes(), [0, 0]].concat())
+            .collect();
+        let bytes = with_central_extra(&zip_bytes(false), &many);
+        let preflight = preflight_archive_limits(&bytes).unwrap();
+        assert_eq!(preflight.index_view.rewrites.len(), 1);
+        let mut archive = open_validated_zip(bytes).expect("many unknown fields");
+        assert_eq!(read_zip_bytes(&mut archive, "word/b.xml").unwrap(), b"b");
     }
 
     #[test]
