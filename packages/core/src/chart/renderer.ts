@@ -9,6 +9,7 @@ import { classicDataMarkPaintWorkCount } from './classic-paint-work.js';
 import {
   paintChartImageFill, type ChartImageLookup, withChartImageLookup, collectChartImageFillUsages,
   chartImageFillNeedsRenderedSize, chartFillRenderedSizeKey, type ChartFillRenderedSizeRequest,
+  markChartFillPreparationSource,
 } from './image-fill.js';
 import { assertChartImageWork } from './image-fill-errors.js';
 import { createAuxCanvas } from '../canvas/aux-canvas.js';
@@ -375,10 +376,17 @@ function renderChartImpl(
 /** Preparation pass for per-occurrence chart picture fills: run the same
  * chart layout and paint the host will run (identical arguments) on a 1×1
  * scratch surface with a recording lookup, and return every distinct
- * occurrence of a size-dependent fill (chartImageFillNeedsRenderedSize). Hosts
- * decode exactly those occurrences, so one decode serves each distinct
- * rendered size in both the main thread and the worker. The number of
- * distinct occurrences shares the existing per-render picture-source cap. */
+ * occurrence of a size-dependent fill (chartImageFillNeedsRenderedSize) that
+ * `resolved` does not already supply. Hosts decode exactly those occurrences,
+ * so one decode serves each distinct rendered size in both the main thread
+ * and the worker.
+ *
+ * An occurrence can depend on a decoded source's own frame (a 3-D plain-stack
+ * repetition derives its height from the source aspect). A placeholder has no
+ * such metrics, so those occurrences are not recorded from it; hosts run a
+ * further round with `resolved` (a non-strict store lookup over what they
+ * decoded) until it returns no request. With real sources each round repeats
+ * the paint exactly, so the last round matches the paint pass. */
 export function collectChartFillRenderedSizes(
   chart: ChartModel,
   rect: ChartRect,
@@ -387,6 +395,7 @@ export function collectChartFillRenderedSizes(
   threeD?: ChartThreeDRenderer,
   regionMap?: ChartRegionMapRenderer,
   chartEx?: ChartExRenderer,
+  resolved?: ChartImageLookup,
 ): ChartFillRenderedSizeRequest[] {
   if (!collectChartImageFillUsages(chart).some(({ fill }) => chartImageFillNeedsRenderedSize(fill))) return [];
   const requests = new Map<string, ChartFillRenderedSizeRequest>();
@@ -396,12 +405,15 @@ export function collectChartFillRenderedSizes(
     const ctx = scratch?.getContext('2d') as CanvasRenderingContext2D | null | undefined;
     if (!scratch || !ctx) throw new OoxmlError('unsupported-image-effect', 'Chart occurrence surface unavailable');
     const stub = scratch as unknown as CanvasImageSource;
+    markChartFillPreparationSource(stub);
     renderChart(ctx, chart, rect, ptToPx, shapeRotationDeg, threeD, regionMap, (fill, occurrence) => {
       // Only size-dependent fills are resolved in this pass: other fills
       // (tiled, size-independent) are not painted, so no stub geometry can
       // stand in for their real source metrics. Layout never depends on a
       // fill's source, only on the chart model and frame.
       if (!chartImageFillNeedsRenderedSize(fill)) return null;
+      const real = resolved?.(fill, occurrence);
+      if (real !== undefined) return real;
       if (occurrence) {
         const key = chartFillRenderedSizeKey(fill, undefined, occurrence);
         if (!requests.has(key)) {
@@ -421,9 +433,9 @@ export function collectChartFillRenderedSizes(
   return [...requests.values()];
 }
 
-/** Aggregate cap over every rendered-size source one host render schedules
- * (all charts, orientations and sizes), sharing the per-render
- * picture-source ceiling. */
+/** Aggregate cap over every chart picture source one host render prepares
+ * (all charts, orientations and rendered sizes, size-dependent or not),
+ * sharing the per-render picture-source ceiling. */
 export function assertChartFillRenderedSizeCount(count: number): void {
   assertChartImageWork(count, MAX_CHART_MARKER_IMAGE_SOURCES);
 }

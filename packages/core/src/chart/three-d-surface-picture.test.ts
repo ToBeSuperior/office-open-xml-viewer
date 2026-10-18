@@ -1,4 +1,5 @@
 import { setImageEffectFrame } from '../image/image-effect-frame';
+import { markChartFillPreparationSource } from './image-fill.js';
 import { describe, expect, it } from 'vitest';
 import type { ImageFill } from '../types/common.js';
 import {
@@ -22,6 +23,7 @@ function paint(
     faceIndices?: readonly number[];
     effectFrame?: { x: number; y: number; width: number; height: number };
     sourceFor?: (widthPt: number, heightPt: number) => CanvasImageSource | null;
+    preparationSource?: boolean;
   } = {},
 ): {
   painted: boolean;
@@ -38,6 +40,7 @@ function paint(
     height: options.imageHeight ?? 100,
   } as unknown as CanvasImageSource;
   if (options.effectFrame) setImageEffectFrame(image, options.effectFrame);
+  if (options.preparationSource) markChartFillPreparationSource(image);
   const makeContext = (canvas: object): CanvasRenderingContext2D => {
     const state: Record<string, unknown> = { globalAlpha: 1, canvas };
     return new Proxy(state, {
@@ -495,4 +498,46 @@ it('resolves a size-dependent source per stacked repetition at its mapped size',
     expect(widthPt).toBeCloseTo(400, 6);
     expect(heightPt).toBeCloseTo(50, 6);
   }
+});
+
+it('sizes a planar stretched picture as face width by face height', () => {
+  const sizes: Array<[number, number]> = [];
+  const result = paint(imageFill, {
+    faceWidth: 400, faceHeight: 100,
+    sourceFor: (widthPt, heightPt) => {
+      sizes.push([widthPt, heightPt]);
+      return { width: 100, height: 100 } as unknown as CanvasImageSource;
+    },
+  });
+  expect(result.painted).toBe(true);
+  expect(sizes).toHaveLength(1);
+  expect(sizes[0]![0]).toBeCloseTo(400, 6);
+  expect(sizes[0]![1]).toBeCloseTo(100, 6);
+});
+
+it('projects each per-mapping source with its own grid and effect frame', () => {
+  // The per-size source grew a 10 px outset around its 100 px frame; the
+  // initial whole-face source has none. Each draw must use the resolved
+  // source's metrics, exactly as when that source is the only one.
+  const grown = { width: 120, height: 120 } as unknown as CanvasImageSource;
+  setImageEffectFrame(grown, { x: 10, y: 10, width: 100, height: 100 });
+  const mapped = paint(imageFill, { sourceFor: () => grown });
+  const direct = paint(imageFill, { imageWidth: 120, imageHeight: 120,
+    effectFrame: { x: 10, y: 10, width: 100, height: 100 } });
+  expect(mapped.painted && direct.painted).toBe(true);
+  const strip = (calls: unknown[][]) => calls.map(call => call.slice(1));
+  expect(mapped.draws.length).toBeGreaterThan(0);
+  expect(mapped.draws.every(call => call[0] === grown)).toBe(true);
+  expect(strip(mapped.draws)).toEqual(strip(direct.sourceDraws));
+});
+
+it('records no plain-stack repetition from a preparation placeholder', () => {
+  const sizes: Array<[number, number]> = [];
+  const result = paint(imageFill, {
+    imageWidth: 800, imageHeight: 100, faceWidth: 400, faceHeight: 100, pictureFormat: 'stack',
+    preparationSource: true,
+    sourceFor: (widthPt, heightPt) => { sizes.push([widthPt, heightPt]); return null; },
+  });
+  expect(result.painted).toBe(false);
+  expect(sizes).toEqual([]);
 });

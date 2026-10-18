@@ -40,6 +40,7 @@ import {
   chartImageFillNeedsRenderedSize,
   chartFillRenderedSizeKey,
   collectChartFillRenderedSizes,
+  chartImageFillStoreLookup,
   assertChartFillRenderedSizeCount,
   chartImageFillPixelTransform,
   chartImageFillUsageSize,
@@ -644,7 +645,7 @@ export async function prefetchImages(
       chartDescriptors[chartIndex]!.frame,
     ) != null,
   );
-  const chartEntries = new Map<string, {
+  type ChartEntry = {
     fill: ReturnType<typeof collectChartImageFillUsages>[number]['fill'];
     widthPt: number;
     heightPt: number;
@@ -653,7 +654,8 @@ export async function prefetchImages(
     preserveNaturalSize: boolean;
     hasSourceCrop: boolean;
     renderedSize?: import('@silurus/ooxml-core').ChartFillRenderedSize;
-  }>();
+  };
+  const chartEntries = new Map<string, ChartEntry>();
   for (const usage of allowedChartUsages) {
     const { fill } = usage;
     // Size-dependent chains are prepared per rendered size below.
@@ -668,24 +670,35 @@ export async function prefetchImages(
     });
   }
   const admittedChartFills = new Set(allowedChartUsages.map(({ fill }) => chartImageFillKey(fill)));
-  for (const descriptor of chartDescriptors) {
-    // A stretched fill whose chain is measured in physical units is evaluated
-    // per rendered size: a preparation pass of the same chart paint (natural
-    // 96-DPI space, see renderAnchoredCharts) records each distinct size.
+  // A stretched fill whose chain is measured in physical units is evaluated
+  // per rendered size: a preparation pass of the same chart paint (natural
+  // 96-DPI space, see renderAnchoredCharts) records each distinct size.
+  // Returns the keys this round added.
+  const prepareRenderedSizes = (resolved?: import('@silurus/ooxml-core').ChartImageLookup): string[] => {
+    const added: string[] = [];
     const scale = opts?.cellScale ?? 1;
-    for (const { fill, occurrence } of collectChartFillRenderedSizes(
-      descriptor.chart.chart,
-      { x: 0, y: 0, w: descriptor.displayWidth / scale, h: descriptor.displayHeight / scale },
-      PT_TO_PX, 0, opts?.threeD, opts?.regionMap, opts?.chartEx,
-    )) {
-      if (!admittedChartFills.has(chartImageFillKey(fill))) continue;
-      const key = chartFillRenderedSizeKey(fill, undefined, occurrence);
-      if (!chartEntries.has(key)) chartEntries.set(key, {
-        fill, widthPt: occurrence.widthPt, heightPt: occurrence.heightPt,
-        preserveNaturalSize: true, hasSourceCrop: fill.srcRect != null, renderedSize: occurrence,
-      });
+    for (const descriptor of chartDescriptors) {
+      for (const { fill, occurrence } of collectChartFillRenderedSizes(
+        descriptor.chart.chart,
+        { x: 0, y: 0, w: descriptor.displayWidth / scale, h: descriptor.displayHeight / scale },
+        PT_TO_PX, 0, opts?.threeD, opts?.regionMap, opts?.chartEx, resolved,
+      )) {
+        if (!admittedChartFills.has(chartImageFillKey(fill))) continue;
+        const key = chartFillRenderedSizeKey(fill, undefined, occurrence);
+        if (chartEntries.has(key)) continue;
+        chartEntries.set(key, {
+          fill, widthPt: occurrence.widthPt, heightPt: occurrence.heightPt,
+          preserveNaturalSize: true, hasSourceCrop: fill.srcRect != null, renderedSize: occurrence,
+        });
+        added.push(key);
+      }
     }
-    assertChartFillRenderedSizeCount([...chartEntries.values()].filter(entry => entry.renderedSize).length);
+    // The per-render ceiling covers every prepared chart source.
+    assertChartFillRenderedSizeCount(chartEntries.size);
+    return added;
+  };
+  prepareRenderedSizes();
+  for (const descriptor of chartDescriptors) {
     for (const { usage, size } of descriptor.usages) {
       const { fill } = usage;
       if (chartImageFillNeedsRenderedSize(fill)) continue;
@@ -712,7 +725,7 @@ export async function prefetchImages(
       });
     }
   }
-  for (const [key, entry] of chartEntries) {
+  const setChartImageRef = (key: string, entry: ChartEntry) => {
     const { fill, widthPt, heightPt, targetWidthPx, targetHeightPx, hasSourceCrop, renderedSize } = entry;
     setImageRef(refs, key, {
       imagePath: fill.imagePath,
@@ -731,7 +744,8 @@ export async function prefetchImages(
         ? { targetWidthPx, targetHeightPx }
         : {}),
     });
-  }
+  };
+  for (const [key, entry] of chartEntries) setChartImageRef(key, entry);
   if (refs.size === 0) return;
   const policy = normalizeImageResourceOptions(opts?.imageResources);
   const demands = (await Promise.all([...refs].map(async ([key, ref]) => {
@@ -787,8 +801,7 @@ export async function prefetchImages(
     ref.targetHeightPx = target?.height;
     ref.plannedPixelLimit = target?.maxRetainedPixels;
   }
-  await Promise.all(
-    [...refs.entries()].map(async ([key, ref]) => {
+  const decodeRef = async ([key, ref]: [string, ImageRef]) => {
       try {
         // The §20.1.8.23 duotone recolour is applied inside the shared decode
         // (getCachedDuotoneBitmapByPath) and cached under a colour-suffixed key,
@@ -833,8 +846,18 @@ export async function prefetchImages(
         // skips only a missing/falsy source — it would draw a closed one.
         imageCache.delete(key);
       }
-    }),
-  );
+  };
+  await Promise.all([...refs.entries()].map(decodeRef));
+  // Occurrences derived from a decoded source's own frame (3-D plain-stack
+  // repetitions) are recorded once that source is known; each round repeats
+  // the paint with every source decoded so far. Rendered-size sources keep
+  // their native grid, so no display target is planned for them.
+  for (;;) {
+    const added = prepareRenderedSizes(chartImageFillStoreLookup(imageCache, undefined, false));
+    if (added.length === 0) break;
+    for (const key of added) setChartImageRef(key, chartEntries.get(key)!);
+    await Promise.all(added.map(key => decodeRef([key, refs.get(key)!])));
+  }
 }
 
 export interface RenderDeps {

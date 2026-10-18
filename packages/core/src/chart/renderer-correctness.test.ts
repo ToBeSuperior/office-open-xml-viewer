@@ -25303,4 +25303,42 @@ describe('per-rendered-size preparation failures and sizes', () => {
     expect(size!.widthPt).toBeGreaterThan(0);
     expect(size!.heightPt).toBeGreaterThan(0);
   });
+  it('rejects a paint occurrence the preparation pass never recorded', async () => {
+    const { chartFillRenderedSizeKey, chartImageFillStoreLookup } = await import('./image-fill.js');
+    const prepared = { widthPt: 10, heightPt: 10 };
+    const store = new Map<string, CanvasImageSource | null>([
+      [chartFillRenderedSizeKey(blurred, undefined, prepared), { width: 1, height: 1 } as CanvasImageSource],
+    ]);
+    expect(() => chartImageFillStoreLookup(store)(blurred, { widthPt: 20, heightPt: 10 }))
+      .toThrowError(expect.objectContaining({ code: 'unsupported-image-effect' }));
+    // A further preparation round asks without rejecting, to learn the miss.
+    expect(chartImageFillStoreLookup(store, undefined, false)(blurred, { widthPt: 20, heightPt: 10 })).toBeUndefined();
+    // A fill that was never prepared stays an ordinary miss.
+    expect(chartImageFillStoreLookup(new Map())(blurred, prepared)).toBeUndefined();
+  });
+  it('records only occurrences that a further round cannot resolve', async () => {
+    const { collectChartFillRenderedSizes } = await import('./renderer.js');
+    const { chartFillRenderedSizeKey, chartImageFillStoreLookup } = await import('./image-fill.js');
+    const model = baseModel({ chartType: 'line', categories: ['A', 'B'], series: [
+      series({ values: [1, 2], showMarker: true, markerSymbol: 'picture', markerSize: 8, markerFillPaint: blurred }),
+      series({ values: [2, 1], showMarker: true, markerSymbol: 'picture', markerSize: 16, markerFillPaint: blurred }),
+    ] });
+    const recorded = recordingCtx();
+    vi.stubGlobal('OffscreenCanvas', class { width = 1; height = 1; getContext() { return recorded.ctx; } });
+    try {
+      const first = collectChartFillRenderedSizes(model, RECT, 1);
+      expect(first).toHaveLength(2);
+      const store = new Map<string, CanvasImageSource | null>([[
+        chartFillRenderedSizeKey(blurred, undefined, first[0]!.occurrence), { width: 4, height: 4 } as CanvasImageSource,
+      ]]);
+      const second = collectChartFillRenderedSizes(model, RECT, 1, 0, undefined, undefined, undefined,
+        chartImageFillStoreLookup(store, undefined, false));
+      expect(second.map(request => request.occurrence)).toEqual([first[1]!.occurrence]);
+      store.set(chartFillRenderedSizeKey(blurred, undefined, first[1]!.occurrence), null);
+      expect(collectChartFillRenderedSizes(model, RECT, 1, 0, undefined, undefined, undefined,
+        chartImageFillStoreLookup(store, undefined, false))).toEqual([]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });

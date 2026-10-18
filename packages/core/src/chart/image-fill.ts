@@ -1,4 +1,5 @@
 import { assertChartImageWork, rejectChartImageGeometry } from './image-fill-errors.js';
+import { OoxmlError } from '../errors/ooxml-error.js';
 import type { ImageFill } from '../types/common.js';
 import type {
   ChartDataPointOverride, ChartExElementStyle, ChartModel, ChartSeries, ChartStockBarPaint,
@@ -185,6 +186,10 @@ export interface ChartFillRenderedSizeRequest {
 export function chartImageFillStoreLookup(
   store: ReadonlyMap<string, CanvasImageSource | null>,
   host?: ChartImageFillHost,
+  /** Paint lookups (the default) reject an occurrence of a prepared fill
+   * that the preparation pass did not record; a further preparation round
+   * passes false to learn which occurrences are still missing. */
+  strict = true,
 ): ChartImageLookup {
   return (fill, occurrence) => {
     if (!chartImageFillNeedsRenderedSize(fill)) return store.get(chartFillRenderedSizeKey(fill, host));
@@ -196,15 +201,35 @@ export function chartImageFillStoreLookup(
     // occurrence whose host frame arithmetic differs from the preparation
     // pass by rounding selects the prepared size within 1% on both axes.
     const prefix = `[${JSON.stringify(chartImageFillHostKey(fill, host))},`;
+    let prepared = false;
     for (const [key, image] of store) {
       if (!key.startsWith(prefix)) continue;
+      prepared = true;
       if (!occurrence) { if (image) return image; continue; }
       const [, w, h] = JSON.parse(key) as [string, number, number];
       const near = (a: number, b: number) => Math.abs(a - b) <= Math.max(0.01, 0.01 * Math.max(a, b));
       if (near(w, occurrence.widthPt) && near(h, occurrence.heightPt)) return image;
     }
+    // A prepared fill painted at a size the preparation pass never recorded
+    // means the passes diverged; that is a typed failure, never an omission.
+    if (strict && prepared && occurrence) {
+      throw new OoxmlError('unsupported-image-effect', 'Chart picture occurrence was not prepared');
+    }
     return undefined;
   };
+}
+
+const preparationSources = new WeakSet<object>();
+
+/** Mark a placeholder returned by a preparation pass in place of a source
+ * whose decoded pixels (and so its frame metrics) are not known yet. */
+export function markChartFillPreparationSource(source: object): void {
+  preparationSources.add(source);
+}
+
+/** Whether `source` is a preparation placeholder without real frame metrics. */
+export function isChartFillPreparationSource(source: object): boolean {
+  return preparationSources.has(source);
 }
 
 function chartImageFillEffectDpi(fill: ImageFill): number {

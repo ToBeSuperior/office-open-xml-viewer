@@ -6,7 +6,7 @@ import { MAX_CANVAS_AREA, MAX_CANVAS_DIMENSION } from '../canvas/clamp.js';
 import { cropSourceMapping, drawImageCropped, imageNaturalSize, checkedImageCropProjection } from '../image/crop.js';
 import { imageEffectFrame, imageEffectOutsetPeriods } from '../image/image-effect-frame.js';
 import { drawProjected, projectQuadPoint } from '../shape/scene3d-draw.js';
-import { chartImageTileMetrics, chartImageTileOrigin } from './image-fill.js';
+import { chartImageTileMetrics, chartImageTileOrigin, isChartFillPreparationSource } from './image-fill.js';
 import {
   planChartThreeDSurfacePicture,
   surfacePictureFaceIsEnabled,
@@ -144,23 +144,38 @@ export function paintChartThreeDSurfacePicture(
   };
   if (!plan) return false;
   if (geometry.inner.length !== 4) rejectChartImageGeometry();
+  let projection: ReturnType<typeof checkedImageCropProjection>;
+  try { projection = checkedImageCropProjection(fill.srcRect); } catch { rejectChartImageGeometry(); }
   // A spatial CT_Blip effect can grow the decoded grid around the authored
   // picture frame. The frame (not the grown grid) is the picture that maps
   // onto the face (§20.1.8.14/.55); its outset lies outside the clipped face.
-  const effectFrame = imageEffectFrame(image);
-  const grid = imageNaturalSize(image);
-  const natural = effectFrame ? { w: effectFrame.width, h: effectFrame.height } : grid;
-  if (![natural.w, natural.h].every(v => Number.isFinite(v) && v > 0)) rejectChartImageGeometry();
-  let projection: ReturnType<typeof checkedImageCropProjection>;
-  try { projection = checkedImageCropProjection(fill.srcRect); } catch { rejectChartImageGeometry(); }
-  const frameGrid = effectFrame
-    ? { width: effectFrame.width, height: effectFrame.height } as unknown as CanvasImageSource
-    : image;
-  const crop = cropSourceMapping(frameGrid, fill.srcRect, projection);
-  const fx = effectFrame?.x ?? 0, fy = effectFrame?.y ?? 0;
-  const sourceRect = crop
-    ? { x0: fx + crop.sx, y0: fy + crop.sy, x1: fx + crop.sx + crop.sw, y1: fy + crop.sy + crop.sh }
-    : effectFrame ? { x0: fx, y0: fy, x1: fx + natural.w, y1: fy + natural.h } : undefined;
+  // Each per-mapping source has its own grid and outset, so these metrics are
+  // derived from every resolved source before it is projected.
+  const sourceMetrics = (source: CanvasImageSource) => {
+    const effectFrame = imageEffectFrame(source);
+    const grid = imageNaturalSize(source);
+    const natural = effectFrame ? { w: effectFrame.width, h: effectFrame.height } : grid;
+    if (![natural.w, natural.h].every(v => Number.isFinite(v) && v > 0)) rejectChartImageGeometry();
+    const frameGrid = effectFrame
+      ? { width: effectFrame.width, height: effectFrame.height } as unknown as CanvasImageSource
+      : source;
+    const crop = cropSourceMapping(frameGrid, fill.srcRect, projection);
+    const fx = effectFrame?.x ?? 0, fy = effectFrame?.y ?? 0;
+    const sourceRect = crop
+      ? { x0: fx + crop.sx, y0: fy + crop.sy, x1: fx + crop.sx + crop.sw, y1: fy + crop.sy + crop.sh }
+      : effectFrame ? { x0: fx, y0: fy, x1: fx + natural.w, y1: fy + natural.h } : undefined;
+    return { grid, natural, crop, sourceRect };
+  };
+  const { natural } = sourceMetrics(image);
+  // A plain-stack repetition height follows the decoded source aspect. A
+  // preparation placeholder has no source frame, so it records no repetition
+  // size; the host's next round resolves the real source first (see
+  // collectChartFillRenderedSizes).
+  if (plan.mode === 'stack' && isChartFillPreparationSource(image)) return false;
+  const drawSource = (source: CanvasImageSource, destination: SurfacePictureQuad) => {
+    const metrics = sourceMetrics(source);
+    drawProjected(source, ctx, metrics.grid.w, metrics.grid.h, destination, 0.5, metrics.sourceRect);
+  };
   // Preserve the established planar mapping exactly. Positive-thickness
   // joining faces need their own screen-upright ordering because each face has
   // a different scene-space axis pair.
@@ -307,10 +322,11 @@ export function paintChartThreeDSurfacePicture(
         ? fullQuad
         : sceneFace?.map(project) as SurfacePictureQuad | undefined;
       if (!quad) continue;
-      const faceImage = geometry.thickness === 0 && faceIndex === 0
-        ? mapped([geometry.inner[0], geometry.inner[3], geometry.inner[2], geometry.inner[1]])
-        : sceneFace ? mapped(sceneFace) : null;
+      // sceneFace shares fullQuad's corner order on the planar face, so its
+      // width runs face[3]→face[2] and its height face[3]→face[0].
+      const faceImage = sceneFace ? mapped(sceneFace) : null;
       if (!faceImage) continue;
+      const { grid, crop, sourceRect } = sourceMetrics(faceImage);
       const fillDestination = relativeRectQuad(quad, fill.fillRect);
       if (!fillDestination) continue;
       const destination = crop
@@ -395,26 +411,22 @@ export function paintChartThreeDSurfacePicture(
         if (surfacePictureFaceUsesStackedMapping(plan, faceIndex)) {
           for (let index = 0; index < Math.ceil(1 / stackFraction); index++) {
             const unit = mapped(face, index * stackFraction, (index + 1) * stackFraction);
-            if (unit) drawProjected(
-              unit, ctx, grid.w, grid.h,
-              stackQuad(face, index * stackFraction, (index + 1) * stackFraction),
-              0.5, sourceRect,
-            );
+            if (unit) drawSource(unit, stackQuad(face, index * stackFraction, (index + 1) * stackFraction));
           }
         } else {
           const whole = mapped(face);
-          if (whole) drawProjected(whole, ctx, grid.w, grid.h, quad, 0.5, sourceRect);
+          if (whole) drawSource(whole, quad);
         }
       } else if (plan.stackUnit != null && surfacePictureFaceUsesValueAxis(plan, faceIndex)) {
         for (let index = 0; index < repetitions; index++) {
           const lower = index * plan.stackUnit / valueSpan;
           const upper = (index + 1) * plan.stackUnit / valueSpan;
           const unit = mapped(face, lower, upper);
-          if (unit) drawProjected(unit, ctx, grid.w, grid.h, stackQuad(face, lower, upper), 0.5, sourceRect);
+          if (unit) drawSource(unit, stackQuad(face, lower, upper));
         }
       } else if (plan.stackUnit != null) {
         const whole = mapped(face);
-        if (whole) drawProjected(whole, ctx, grid.w, grid.h, quad, 0.5, sourceRect);
+        if (whole) drawSource(whole, quad);
       }
       ctx.restore();
     }

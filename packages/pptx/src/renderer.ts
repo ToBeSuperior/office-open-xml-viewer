@@ -8697,28 +8697,41 @@ async function renderSlideLeased(
           hasSourceCrop,
         });
       }
-      // A stretched fill whose chain is measured in physical units is
-      // evaluated per rendered size (Office applies blur/shadow lengths at the
-      // rendered size). A preparation pass of the same chart paint records
-      // each distinct size; each is decoded once under its own key.
-      for (const { fill, occurrence } of collectChartFillRenderedSizes(
-        element.chart,
-        {
-          x: emuToPx(element.x, scale), y: emuToPx(element.y, scale),
-          w: emuToPx(element.width, scale), h: emuToPx(element.height, scale),
-        },
-        PT_TO_EMU * scale, element.rotation, opts.threeD, opts.regionMap, opts.chartEx,
-      )) {
-        if (!admittedChartFills.has(chartImageFillKey(fill))) continue;
-        const key = chartFillRenderedSizeKey(fill, host, occurrence);
-        if (!chartFillMap.has(key)) chartFillMap.set(key, {
-          fill, widthPt: occurrence.widthPt, heightPt: occurrence.heightPt,
-          preserveNaturalSize: true, hasSourceCrop: fill.srcRect != null,
-          host, renderedSize: occurrence,
-        });
-      }
     }
-    assertChartFillRenderedSizeCount([...chartFillMap.values()].filter(entry => entry.renderedSize).length);
+    // A stretched fill whose chain is measured in physical units is evaluated
+    // per rendered size (Office applies blur/shadow lengths at the rendered
+    // size). A preparation pass of the same chart paint records each distinct
+    // size; each is decoded once under its own key. A later round resolves
+    // through the sources decoded so far (`resolved`); returns the added keys.
+    const prepareChartRenderedSizes = (resolved: boolean): string[] => {
+      const added: string[] = [];
+      for (const { element } of chartDescriptors) {
+        const host = { rotation: element.rotation, flipH: element.flipH, flipV: element.flipV };
+        for (const { fill, occurrence } of collectChartFillRenderedSizes(
+          element.chart,
+          {
+            x: emuToPx(element.x, scale), y: emuToPx(element.y, scale),
+            w: emuToPx(element.width, scale), h: emuToPx(element.height, scale),
+          },
+          PT_TO_EMU * scale, element.rotation, opts.threeD, opts.regionMap, opts.chartEx,
+          resolved ? chartImageFillStoreLookup(chartMarkerImages, host, false) : undefined,
+        )) {
+          if (!admittedChartFills.has(chartImageFillKey(fill))) continue;
+          const key = chartFillRenderedSizeKey(fill, host, occurrence);
+          if (chartFillMap.has(key)) continue;
+          chartFillMap.set(key, {
+            fill, widthPt: occurrence.widthPt, heightPt: occurrence.heightPt,
+            preserveNaturalSize: true, hasSourceCrop: fill.srcRect != null,
+            host, renderedSize: occurrence,
+          });
+          added.push(key);
+        }
+      }
+      // The per-render ceiling covers every prepared chart source.
+      assertChartFillRenderedSizeCount(chartFillMap.size);
+      return added;
+    };
+    prepareChartRenderedSizes(false);
     for (const el of slide.elements) {
       if (el.type !== 'shape' || !el.textBody) continue;
       for (const para of el.textBody.paragraphs) {
@@ -8772,7 +8785,8 @@ async function renderSlideLeased(
           pictureBulletImages.set(path, null);
         }
       });
-      const chartPromises: Promise<unknown>[] = [...chartFillMap].map(async ([key, entry]) => {
+      type ChartFillEntry = typeof chartFillMap extends Map<string, infer Entry> ? Entry : never;
+      const decodeChartFill = async ([key, entry]: [string, ChartFillEntry]) => {
         const {
           fill, widthPt, heightPt, targetWidthPx, targetHeightPx,
           maxRetainedPixels, hasSourceCrop, host, renderedSize,
@@ -8833,7 +8847,18 @@ async function renderSlideLeased(
           if (error instanceof OoxmlResourceLimitError || isUnsupportedBlipEffectError(error) || isOoxmlDecodedImageLimitError(error) || isTiffDecodeError(error)) throw error;
           chartMarkerImages.set(key, null);
         }
-      });
+      };
+      const chartPromises: Promise<unknown>[] = [(async () => {
+        await Promise.all([...chartFillMap].map(decodeChartFill));
+        // Occurrences derived from a decoded source's own frame (3-D
+        // plain-stack repetitions) are recorded once that source is known;
+        // each round repeats the paint with every source decoded so far.
+        for (;;) {
+          const added = prepareChartRenderedSizes(true);
+          if (added.length === 0) break;
+          await Promise.all(added.map(key => decodeChartFill([key, chartFillMap.get(key)!])));
+        }
+      })()];
       const shapePromises: Promise<void>[] = [...shapeFills].map(async (
         [key, {
           fill, host, widthPt, heightPt, targetWidthPx, targetHeightPx,

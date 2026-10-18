@@ -308,7 +308,7 @@ async function resolveChartImages<TTextRun>(
         if (valid) chartOccurrences.push({ descriptor, frame, usages });
       }
     }
-    const chartEntries = new Map<string, {
+    type ChartEntry = {
       fill: ReturnType<typeof collectChartImageFillUsages>[number]['fill'];
       widthPt: number;
       heightPt: number;
@@ -317,7 +317,8 @@ async function resolveChartImages<TTextRun>(
       preserveNaturalSize: boolean;
       hasSourceCrop: boolean;
       renderedSize?: import('@silurus/ooxml-core').ChartFillRenderedSize;
-    }>();
+    };
+    const chartEntries = new Map<string, ChartEntry>();
     for (const usage of collectChartImageFillUsagesForCharts(
       chartOccurrences.map(
         ({ descriptor }) => descriptor.model as import('@silurus/ooxml-core').ChartModel,
@@ -343,24 +344,33 @@ async function resolveChartImages<TTextRun>(
       chartOccurrences.map(({ descriptor }) => descriptor.model as import('@silurus/ooxml-core').ChartModel),
       (usage, chartIndex) => chartImageFillUsageSize(usage, chartOccurrences[chartIndex]!.frame) != null,
     ).map(({ fill }) => chartImageFillKey(fill)));
-    for (const { descriptor, frame } of chartOccurrences) {
-      // A stretched fill whose chain is measured in physical units is
-      // evaluated per rendered size: a preparation pass of the same chart
-      // paint (canonical handler: point units, ptToPx 1) records each size.
-      for (const { fill, occurrence } of collectChartFillRenderedSizes(
-        descriptor.model as import('@silurus/ooxml-core').ChartModel,
-        { x: 0, y: 0, w: frame.widthPt, h: frame.heightPt },
-        1, 0, options.threeD, options.regionMap, options.chartEx,
-      )) {
-        if (!admittedChartFills.has(chartImageFillKey(fill))) continue;
-        const key = chartFillRenderedSizeKey(fill, undefined, occurrence);
-        if (!chartEntries.has(key)) chartEntries.set(key, {
-          fill, widthPt: occurrence.widthPt, heightPt: occurrence.heightPt,
-          preserveNaturalSize: true, hasSourceCrop: fill.srcRect != null, renderedSize: occurrence,
-        });
+    // A stretched fill whose chain is measured in physical units is
+    // evaluated per rendered size: a preparation pass of the same chart paint
+    // (canonical handler: point units, ptToPx 1) records each size. Returns
+    // the keys this round added.
+    const prepareRenderedSizes = (resolved?: import('@silurus/ooxml-core').ChartImageLookup): string[] => {
+      const added: string[] = [];
+      for (const { descriptor, frame } of chartOccurrences) {
+        for (const { fill, occurrence } of collectChartFillRenderedSizes(
+          descriptor.model as import('@silurus/ooxml-core').ChartModel,
+          { x: 0, y: 0, w: frame.widthPt, h: frame.heightPt },
+          1, 0, options.threeD, options.regionMap, options.chartEx, resolved,
+        )) {
+          if (!admittedChartFills.has(chartImageFillKey(fill))) continue;
+          const key = chartFillRenderedSizeKey(fill, undefined, occurrence);
+          if (chartEntries.has(key)) continue;
+          chartEntries.set(key, {
+            fill, widthPt: occurrence.widthPt, heightPt: occurrence.heightPt,
+            preserveNaturalSize: true, hasSourceCrop: fill.srcRect != null, renderedSize: occurrence,
+          });
+          added.push(key);
+        }
       }
-    }
-    assertChartFillRenderedSizeCount([...chartEntries.values()].filter(entry => entry.renderedSize).length);
+      // The per-render ceiling covers every prepared chart source.
+      assertChartFillRenderedSizeCount(chartEntries.size);
+      return added;
+    };
+    prepareRenderedSizes();
     for (const { usages } of chartOccurrences) {
       for (const { usage, size } of usages) {
         const { fill } = usage;
@@ -387,7 +397,7 @@ async function resolveChartImages<TTextRun>(
         });
       }
     }
-    await Promise.all([...chartEntries].map(async ([key, entry]) => {
+    const decodeChartEntry = async ([key, entry]: [string, ChartEntry]) => {
       // The source preload keys plain chart fills by chartImageFillKey.
       const preloadKey = entry.renderedSize ? undefined : chartImageFillKey(entry.fill);
       if (preloadKey !== undefined && images.has(preloadKey)) {
@@ -458,7 +468,16 @@ async function resolveChartImages<TTextRun>(
         });
         chartImages.set(key, null);
       }
-    }));
+    };
+    await Promise.all([...chartEntries].map(decodeChartEntry));
+    // Occurrences derived from a decoded source's own frame (3-D plain-stack
+    // repetitions) are recorded once that source is known; each round
+    // repeats the paint with every source decoded so far.
+    for (;;) {
+      const added = prepareRenderedSizes(chartImageFillStoreLookup(chartImages, undefined, false));
+      if (added.length === 0) break;
+      await Promise.all(added.map(key => decodeChartEntry([key, chartEntries.get(key)!])));
+    }
   }
   return chartImages;
 }
