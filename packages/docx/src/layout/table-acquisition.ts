@@ -302,6 +302,96 @@ interface RotatedCellAcquisition {
   reacquire(lineLengthPt: number): TableLayoutInput['rows'][number]['cells'][number]['blocks'];
 }
 
+type TableCellLayoutInput = TableLayoutInput['rows'][number]['cells'][number];
+
+/** Each retained rotated cell's acquisition, keyed by its cell in the
+ * retained input, so a page-local fragment of the table can acquire its lines
+ * again at that fragment's length (relayoutRotatedFragmentLines). Same-realm
+ * only: the closure re-enters this acquisition's paragraph services. */
+const rotatedCellReacquisitions = new WeakMap<TableCellLayoutInput, RotatedCellAcquisition>();
+
+/**
+ * A rotated cell's lines run along its final height. When other cells or a
+ * merge make that height larger than the acquired line length, acquire the
+ * lines again at the final length so paragraph alignment uses it; the row
+ * requirement stays the natural length, so row heights cannot change. The
+ * final length excludes the cell's collapsed rules
+ * (WORD_COLLAPSED_BORDER_ROW_TRACK_FOOTPRINT), which only an exact row's
+ * authored line length did not already leave out: that fixed row is
+ * re-acquired shorter as well. Those rules depend on the rows laid out
+ * together, so a page-local fragment resolves them again.
+ */
+function relayoutRotatedCellLines(
+  input: TableLayoutInput,
+  layout: TableLayout,
+  placement: Parameters<typeof layoutTable>[1],
+  services: Parameters<typeof layoutTable>[2],
+  rotatedOf: (cell: TableCellLayoutInput) => RotatedCellAcquisition | undefined,
+  label: string,
+): { input: TableLayoutInput; layout: TableLayout } {
+  let ruleInsets: ReturnType<typeof tableRowRuleInsetsPt> | null = null;
+  const tableBottomPt = layout.flowBounds.yPt + layout.advancePt;
+  const replacements = new Map<string, Pick<TableCellLayoutInput, 'blocks' | 'verticalText'>>();
+  input.rows.forEach((row, rowIndex) => row.cells.forEach((cell, cellIndex) => {
+    const rotated = rotatedOf(cell);
+    const laidOut = layout.rows[rowIndex]?.cells[cellIndex];
+    const current = cell.verticalText;
+    if (!rotated || !laidOut || !current) return;
+    ruleInsets ??= tableRowRuleInsetsPt(input);
+    const reachesTableBottom =
+      laidOut.flowBounds.yPt + laidOut.flowBounds.heightPt >= tableBottomPt - ROTATED_LINE_LENGTH_EPSILON_PT;
+    const finalLengthPt = Math.max(
+      0,
+      laidOut.flowBounds.heightPt - rotated.margins.top - rotated.margins.bottom
+        - (ruleInsets.top[rowIndex] ?? 0)
+        - (reachesTableBottom ? ruleInsets.bottom[input.rows.length - 1] ?? 0 : 0),
+    );
+    const exact = row.heightRule === 'exact';
+    if (
+      finalLengthPt > current.lineLengthPt + ROTATED_LINE_LENGTH_EPSILON_PT
+      || (exact && finalLengthPt < current.lineLengthPt - ROTATED_LINE_LENGTH_EPSILON_PT)
+    ) {
+      replacements.set(`${rowIndex}:${cellIndex}`, {
+        blocks: rotated.reacquire(finalLengthPt),
+        verticalText: { ...current, lineLengthPt: finalLengthPt },
+      });
+    }
+  }));
+  if (replacements.size === 0) return { input, layout };
+  const finalInput = snapshotPlainData<TableLayoutInput>({
+    ...input,
+    rows: input.rows.map((row, rowIndex) => ({
+      ...row,
+      cells: row.cells.map((cell, cellIndex) => {
+        const replacement = replacements.get(`${rowIndex}:${cellIndex}`);
+        return replacement ? { ...cell, ...replacement } : cell;
+      }),
+    })),
+  }, label) as TableLayoutInput;
+  return { input: finalInput, layout: layoutTable(finalInput, placement, services).layout };
+}
+
+/**
+ * Lay out a page-local fragment of a retained table. A fragment's first and
+ * last rows take the table's outer rules, so an exact row's rotated cell can
+ * have a different line length than it had in the whole table; its lines are
+ * acquired again at the fragment's length.
+ */
+export function layoutTableFragment(
+  input: TableLayoutInput,
+  placement: Parameters<typeof layoutTable>[1],
+  services: Parameters<typeof layoutTable>[2],
+): TableLayout {
+  return relayoutRotatedCellLines(
+    input,
+    layoutTable(input, placement, services).layout,
+    placement,
+    services,
+    (cell) => rotatedCellReacquisitions.get(cell),
+    'TableFragment.input',
+  ).layout;
+}
+
 /**
  * ECMA-376 §17.4.72 cell text direction projected onto the rotated-frame
  * modes this renderer paints. tbRl and btLr rotate the whole text frame a
@@ -731,56 +821,22 @@ export function acquireRetainedTable<State>(
     cursor: { xPt: 0, yPt: 0 },
     availableBounds: bounds,
   };
-  let finalInput = input;
-  let layout = layoutTable(input, placement, services).layout;
-  // A rotated cell's lines run along its final height. When other cells or a
-  // merge make that height larger than the acquired line length, acquire the
-  // lines again at the final length so paragraph alignment uses it; the row
-  // requirement stays the natural length, so row heights cannot change. The
-  // final length excludes the cell's collapsed rules
-  // (WORD_COLLAPSED_BORDER_ROW_TRACK_FOOTPRINT), which only an exact row's
-  // authored line length did not already leave out: that fixed row is
-  // re-acquired shorter as well.
-  const ruleInsets = rotatedCells.length > 0 ? tableRowRuleInsetsPt(input) : null;
-  const tableBottomPt = layout.flowBounds.yPt + layout.advancePt;
-  const grown = rotatedCells.flatMap((rotated) => {
-    const laidOut = layout.rows[rotated.rowIndex]?.cells[rotated.cellIndex];
-    const current = input.rows[rotated.rowIndex]?.cells[rotated.cellIndex]?.verticalText;
-    if (!laidOut || !current || !ruleInsets) return [];
-    const reachesTableBottom =
-      laidOut.flowBounds.yPt + laidOut.flowBounds.heightPt >= tableBottomPt - ROTATED_LINE_LENGTH_EPSILON_PT;
-    const finalLengthPt = Math.max(
-      0,
-      laidOut.flowBounds.heightPt - rotated.margins.top - rotated.margins.bottom
-        - (ruleInsets.top[rotated.rowIndex] ?? 0)
-        - (reachesTableBottom ? ruleInsets.bottom[input.rows.length - 1] ?? 0 : 0),
-    );
-    const exact = input.rows[rotated.rowIndex]?.heightRule === 'exact';
-    return finalLengthPt > current.lineLengthPt + ROTATED_LINE_LENGTH_EPSILON_PT
-      || (exact && finalLengthPt < current.lineLengthPt - ROTATED_LINE_LENGTH_EPSILON_PT)
-      ? [{ rotated, finalLengthPt, current }]
-      : [];
-  });
-  if (grown.length > 0) {
-    const replacements = new Map(grown.map(({ rotated, finalLengthPt, current }) => [
-      `${rotated.rowIndex}:${rotated.cellIndex}`,
-      {
-        blocks: rotated.reacquire(finalLengthPt),
-        verticalText: { ...current, lineLengthPt: finalLengthPt },
-      },
-    ]));
-    finalInput = snapshotPlainData<TableLayoutInput>({
-      ...input,
-      rows: input.rows.map((row, rowIndex) => ({
-        ...row,
-        cells: row.cells.map((cell, cellIndex) => {
-          const replacement = replacements.get(`${rowIndex}:${cellIndex}`);
-          return replacement ? { ...cell, ...replacement } : cell;
-        }),
-      })),
-    }, 'RetainedTableAcquisition.input') as TableLayoutInput;
-    layout = layoutTable(finalInput, placement, services).layout;
-  }
+  const rotatedByCell = new Map(rotatedCells.map((rotated) => [
+    input.rows[rotated.rowIndex]!.cells[rotated.cellIndex]!,
+    rotated,
+  ]));
+  const { input: finalInput, layout } = relayoutRotatedCellLines(
+    input,
+    layoutTable(input, placement, services).layout,
+    placement,
+    services,
+    (cell) => rotatedByCell.get(cell),
+    'RetainedTableAcquisition.input',
+  );
+  finalInput.rows.forEach((row, rowIndex) => row.cells.forEach((cell, cellIndex) => {
+    const rotated = rotatedByCell.get(input.rows[rowIndex]!.cells[cellIndex]!);
+    if (rotated) rotatedCellReacquisitions.set(cell, rotated);
+  }));
   return Object.freeze({
     input: finalInput,
     layout,

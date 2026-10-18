@@ -1,6 +1,7 @@
 import {
   blockNeedsPageOrigin,
   hasPagePlacedContent,
+  layoutTableFragment,
   needsNestedPageOrigins,
   rowNeedsPageOrigins,
   type RetainedTableAcquisition,
@@ -1864,7 +1865,7 @@ function materializeFragment(
     id: `${source.input.id}:fragment:${context.page.occurrenceId}`,
     rows: selected.map((row) => row.input),
   };
-  const laidOut = layoutTable(fragmentInput, context.placement, context.services).layout;
+  const laidOut = layoutTableFragment(fragmentInput, context.placement, context.services);
   const rows = laidOut.rows.map((row, rowIndex): TableRowFragmentLayout => {
     const selection = selected[rowIndex]!;
     return Object.freeze({

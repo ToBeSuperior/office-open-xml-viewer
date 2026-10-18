@@ -292,6 +292,30 @@ describe('ECMA-376 §17.4.72 cell text direction', () => {
     expect(text.y).toBeCloseTo(60, 0);
   });
 
+  it('re-runs an exact rotated line against the rules of its page-local slice', async () => {
+    // In the whole table the second exact row's line spans its 1pt inside
+    // rule to the authored box end (79pt). Moved to the next page it becomes
+    // that slice's first row and takes the 6pt table top rule, so its line
+    // spans 6..80pt (74pt) and right-aligned text still ends at y=80.
+    const rule = { style: 'single', width: 6, color: null };
+    const ruled = tableOf([
+      row([cell('AB', { textDirection: 'tbRl', alignment: 'right' }), cell('x')], 80, 'exact'),
+      row([cell('CD', { textDirection: 'tbRl', alignment: 'right' }), cell('y')], 80, 'exact'),
+    ]);
+    ruled.borders = {
+      ...ruled.borders,
+      top: rule,
+      bottom: rule,
+      insideH: { style: 'single', width: 1, color: null },
+    } as DocTable['borders'];
+    const model = modelOf(ruled);
+    (model.section as { pageHeight: number }).pageHeight = 100;
+    const { canvas, calls } = makeRecordingCanvas();
+    await renderDocumentToCanvas(model, canvas, 1, { dpr: 1, width: 400 });
+    const text = calls.find((call) => call.text.includes('CD'))!;
+    expect(text.y).toBeCloseTo(60, 0);
+  });
+
   it('lets a taller neighbour lengthen the line and centres text along it', async () => {
     const calls = await render(tableOf([
       row([
