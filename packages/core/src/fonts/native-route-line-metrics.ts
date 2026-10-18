@@ -44,8 +44,11 @@ export type NativeRoutePrimaryAdmission = (
 // (cmap format 13: many-to-one ranges, the format of a last-resort font) to one
 // glyph, and they differ only in their advance and font box:
 //
-//   sentinel A: advance 0.50 em, box 0.70 / 0.20 em (512, 716 / 204 units)
-//   sentinel B: advance 0.75 em, box 0.60 / 0.30 em (768, 614 / 307 units)
+//   sentinel A: advance 0.50 em, box 0.70 / 0.20 em, ink 8 em up / 3 em down
+//   sentinel B: advance 0.75 em, box 0.60 / 0.30 em, ink 9 em up / 4 em down
+//
+// The ink reaches far beyond any text glyph, so a sentinel glyph shows in the
+// measured ink box even when it is a zero-advance mark over a wide base.
 //
 // Appending a sentinel to a family-list prefix ends font fallback there: every
 // cluster the prefix cannot draw is drawn by the sentinel, never by a later
@@ -74,8 +77,8 @@ export type NativeRoutePrimaryAdmission = (
 // load or measure them declines.
 
 const SENTINELS = [
-  { family: '__ooxml_route_sentinel_a_6d2e91__', advance: 512, ascent: 716, descent: 204 },
-  { family: '__ooxml_route_sentinel_b_6d2e91__', advance: 768, ascent: 614, descent: 307 },
+  { family: '__ooxml_route_sentinel_a_6d2e91__', advance: 512, ascent: 716, descent: 204, inkUp: 8192, inkDown: 3072 },
+  { family: '__ooxml_route_sentinel_b_6d2e91__', advance: 768, ascent: 614, descent: 307, inkUp: 9216, inkDown: 4096 },
 ] as const;
 /** Equal to the probe size, so every sentinel metric is a whole pixel. */
 const SENTINEL_UPM = 1024;
@@ -89,14 +92,16 @@ const PROBE_EM = 1024;
 const STRUT_EM = 2 * PROBE_EM;
 
 /** Minimal TrueType face: .notdef plus one box glyph that every scalar maps to. */
-function sentinelFontBytes(advance: number, ascent: number, descent: number, name: string): Uint8Array {
+function sentinelFontBytes(
+  advance: number, ascent: number, descent: number, inkUp: number, inkDown: number, name: string,
+): Uint8Array {
   const u16 = (value: number) => [(value >> 8) & 255, value & 255];
   const i16 = (value: number) => u16(value & 0xffff);
   const u32 = (value: number) => [(value >>> 24) & 255, (value >>> 16) & 255, (value >>> 8) & 255, value & 255];
   const zeros = (count: number) => new Array<number>(count).fill(0);
-  const inkTop = ascent >> 1;
-  const glyph = [...i16(1), ...i16(0), ...i16(0), ...i16(advance), ...i16(inkTop), ...u16(3), ...u16(0), 1, 1, 1, 1];
-  const points = [[0, 0], [advance, 0], [advance, inkTop], [0, inkTop]];
+  const inkTop = inkUp;
+  const glyph = [...i16(1), ...i16(0), ...i16(-inkDown), ...i16(advance), ...i16(inkTop), ...u16(3), ...u16(0), 1, 1, 1, 1];
+  const points = [[0, -inkDown], [advance, -inkDown], [advance, inkTop], [0, inkTop]];
   const xs: number[] = [];
   const ys: number[] = [];
   let previousX = 0;
@@ -132,7 +137,7 @@ function sentinelFontBytes(advance: number, ascent: number, descent: number, nam
     glyf: glyph,
     head: [
       ...u32(0x00010000), ...u32(0x00010000), ...u32(0), ...u32(0x5f0f3cf5), ...u16(0x000b),
-      ...u16(SENTINEL_UPM), ...zeros(16), ...i16(0), ...i16(0), ...i16(advance), ...i16(inkTop),
+      ...u16(SENTINEL_UPM), ...zeros(16), ...i16(0), ...i16(-inkDown), ...i16(advance), ...i16(inkTop),
       ...u16(0), ...u16(8), ...i16(2), ...i16(0), ...i16(0),
     ],
     hhea: [
@@ -194,6 +199,7 @@ function sentinelsWork(context: CanvasFontBoxProbeContext): boolean {
       const measured = context.measureText('A');
       const scale = PROBE_EM / SENTINEL_UPM;
       return Math.abs(measured.width - sentinel.advance * scale) < 0.01
+        && Math.abs(measured.actualBoundingBoxAscent - sentinel.inkUp * scale) < 1
         && Math.abs(measured.fontBoundingBoxAscent - sentinel.ascent * scale) < 0.01
         && Math.abs(measured.fontBoundingBoxDescent - sentinel.descent * scale) < 0.01;
     });
@@ -212,7 +218,8 @@ export async function loadNativeRouteSentinels(fontSet: FontFaceSet | null): Pro
     for (const sentinel of SENTINELS) {
       faces.push(retainFace(`native-route-sentinel:${sentinel.family}`, fontSet, () => {
         const face = new FontFace(sentinel.family, sentinelFontBytes(
-          sentinel.advance, sentinel.ascent, sentinel.descent, sentinel.family.replace(/_/g, ''),
+          sentinel.advance, sentinel.ascent, sentinel.descent, sentinel.inkUp, sentinel.inkDown,
+          sentinel.family.replace(/_/g, ''),
         ) as BufferSource);
         fontSet.add(face);
         return face;
@@ -390,12 +397,15 @@ export function measureNativeRouteNormalLines(
   if (!context || !view || !sentinelsWork(context)) return results;
   const registered = registeredFamilies(owner.fonts);
   const memo = new Map<string, boolean>();
-  // CSS Inline 3 sizes a `line-height: normal` line box from its first
-  // available font, which Canvas also reports as the font box, so a route's
-  // normal line is that of its first available family. Families before it
-  // resolve to no face. Measuring that family alone gives the same line,
-  // shares one strut among every route it paints, and resolves no absent
-  // family at the strut sizes.
+  // The strut holds only U+200B, a default ignorable that engines render
+  // invisibly without font fallback, so its line box is the root inline
+  // box's strut alone (CSS 2 §10.8.1; CSS Inline 3 §5.3), whose
+  // `line-height: normal` metrics come from the first available font, the
+  // face Canvas also reports as the font box. (Fallback glyphs of real text
+  // can enlarge a normal line; the strut deliberately has none.) Families
+  // before the first available one resolve to no face, so measuring that
+  // family alone gives the same strut, shares one strut among every route it
+  // paints, and resolves no absent family at the strut sizes.
   interface Pending {
     readonly requests: number[];
     readonly primary: FamilyEntry;
@@ -533,9 +543,9 @@ const ownershipFonts: (string | undefined)[] = [];
 /** Route-independent control results, bounded like the per-route caches. */
 const sentinelControls = new Map<string, boolean>();
 
-/** Advance and ink extents: a sentinel glyph changes at least one of them
- * (0.25 em of advance, 0.25 em of ink width, 0.05 em of ink height), also
- * when the shaper zeroes the advance of a mark it draws. */
+/** Advance and ink extents. Any sentinel glyph changes the ink ascent (8 em
+ * vs 9 em, beyond every text glyph), also when the shaper zeroes the advance
+ * of a mark it draws over a wider base glyph. */
 function geometry(context: CanvasFontBoxProbeContext, text: string): readonly number[] {
   const measured = context.measureText(text);
   return [

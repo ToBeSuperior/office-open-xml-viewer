@@ -170,13 +170,13 @@ describe.skipIf(!existsSync(chromium.executablePath()))('DOCX native route line 
             document, () => true);
           if (line?.primaryFamily !== 'Arial') return null;
           const fonts = oracle.nativeRouteOwnershipFonts(line.primaryFamilyText, 400, 'normal');
-          return Object.fromEntries(['A', 'e\u0301', ' ', '\u6f22', '\u2764\ufe0f', '1\ufe0f\u20e3', 'a\u1ab0', '\u{1f600}']
+          return Object.fromEntries(['A', 'e\u0301', ' ', '\u6f22', '\u2764\ufe0f', '1\ufe0f\u20e3', 'a\u1ab0', '\u041c\u1ab0', '\u0174\ufe2e', '\u{1f600}']
             .map(cluster => [cluster, oracle.nativeRouteClusterOwned(fonts, cluster)]));
         }, ABSENT);
         if (!result) test.skip();
         expect(result!['A']).toBe(true);
         expect(result![' ']).toBe(true);
-        for (const cluster of ['\u6f22', '\u2764\ufe0f', '1\ufe0f\u20e3', 'a\u1ab0', '\u{1f600}']) {
+        for (const cluster of ['\u6f22', '\u2764\ufe0f', '1\ufe0f\u20e3', 'a\u1ab0', '\u041c\u1ab0', '\u0174\ufe2e', '\u{1f600}']) {
           expect(result![cluster], cluster).not.toBe(true);
         }
       } finally {
