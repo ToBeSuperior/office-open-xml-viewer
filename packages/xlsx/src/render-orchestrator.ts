@@ -66,7 +66,7 @@ import { getWorksheetPolicy } from './worksheet-policy-context.js';
 
 /** Internal viewer-to-renderer commit latch. It is intentionally not re-exported
  * from the package API: standalone renderer callers do not own viewer lifecycle. */
-export const XLSX_RENDER_COMMIT_GUARD: unique symbol = Symbol('xlsx-render-commit-guard');
+const XLSX_RENDER_COMMIT_GUARD: unique symbol = Symbol('xlsx-render-commit-guard');
 
 type GuardedRenderViewportOptions = RenderViewportOptions & {
   readonly [XLSX_RENDER_COMMIT_GUARD]?: () => boolean;

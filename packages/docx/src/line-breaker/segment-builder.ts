@@ -162,7 +162,6 @@ export function appendTextPiece(
   joinPreviousRun = false,
 ): void {
   const {
-    runs,
     environment,
     segs,
     fitTextFragmentEntryByKey,
@@ -1046,22 +1045,11 @@ function pushSegmentPiece(
 ): void {
   const {
     base,
-    joinPreviousRun,
     environment,
-    segs,
-    selectedMetric,
-    selectedAverageWidth,
     r,
-    effectiveVertAlign,
-    effectivePosition,
-    effectiveCharacterSpacing,
     documentCharacterCompressionApplies,
     effectiveCharacterScale,
     effectiveKerningThreshold,
-    effectiveSnapToGrid,
-    ruby,
-    revision,
-    fitTextFragmentEntryIndex,
     fitTextRegionIndex,
     csFontSize,
     csFontFamily,
@@ -1069,12 +1057,6 @@ function pushSegmentPiece(
     csBold,
     csItalic,
     eaFontFamily,
-    digitsAsAN,
-    sourceRunIndex,
-    sourceFragmentIndex,
-    hyperlink,
-    rtl,
-    overflowPunctuationEastAsianRun,
   } = emissionState;
 
   // Consume an exact range of the immutable full display run. A parent
@@ -1313,12 +1295,8 @@ function emitResolvedTextSegment(
     csFontSize,
     csFontFamily,
     highAnsiFontFamily,
-    csBold,
-    csItalic,
     eaFontFamily,
     digitsAsAN,
-    sourceRunIndex,
-    sourceFragmentIndex,
     hyperlink,
     rtl,
     overflowPunctuationEastAsianRun,
@@ -1468,8 +1446,7 @@ function emitResolvedTextSegment(
       environment.layoutServices ? { text: environment.layoutServices.text, probe: text } : undefined);
   // LIBRARY_SYNTHESIZED_FACE_LINE_GEOMETRY does not extend to the East Asian
   // floor of a run painted in another slot (see that rule's scope).
-  const { resourceMetric: resourceEaLineMetric, referenceMetric: referenceEaLineMetric,
-    lineMetric: eaLineMetric } = selectedFontLineMetric(eaResolution, localEaFloor, naturalMetricAllowed,
+  const { lineMetric: eaLineMetric } = selectedFontLineMetric(eaResolution, localEaFloor, naturalMetricAllowed,
       allowsReferenceFontMetric(indexedFontMetrics(environment.layoutServices?.text.fontMetrics
         ?? environment.layoutServices?.text.localMetrics ?? {}), eaResolution));
   const resolvedEaFloorFamily =

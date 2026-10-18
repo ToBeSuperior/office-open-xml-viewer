@@ -24,6 +24,7 @@ import {
   prevZoomStep,
   clampScale,
   fitScale,
+  defaultDpr,
 } from '@silurus/ooxml-core';
 import {
   CallerCanvasMount,
@@ -634,7 +635,7 @@ export class PptxViewer implements ZoomableViewer {
         ? this._dim()
         : undefined;
       const targetWidth = this._targetWidth();
-      const dpr = this.opts.dpr ?? (window.devicePixelRatio || 1);
+      const dpr = this.opts.dpr ?? defaultDpr();
       const scale = targetWidth / engine.slideWidth;
       const cssHeight = Math.round(engine.slideHeight * scale);
       this.canvas.style.width = `${targetWidth}px`;

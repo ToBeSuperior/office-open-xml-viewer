@@ -11,7 +11,7 @@ import {
   OoxmlResourceMetricsSession,
   type NormalizedOoxmlResourcePolicy,
 } from '@silurus/ooxml-core/worker';
-import { beginModelSourceLoad, selectModelSource } from '@silurus/ooxml-core/internal/model-source';
+import { beginModelSourceLoad, modelSourceWorker, selectModelSource } from '@silurus/ooxml-core/internal/model-source';
 import { computeMdw, pinXlsxGridGeometry } from '../renderer.js';
 import { respondToHostLayoutRequest } from './host-layout.js';
 import type { XlsxWorkbook, LoadOptions } from '../workbook.js';
@@ -134,21 +134,12 @@ function sourceWorker(
     import.meta.env.DEV ? './worker-worksheet-source.ts' : './xlsx-source-worker.mjs',
     import.meta.url,
   ).href, import.meta.url);
-  return new Proxy(worker, {
-    get(target, key) {
-      if (key === 'postMessage') return (message: unknown, transfer?: Transferable[]) => {
-        if (typeof message === 'object' && message !== null) {
-          const wire = message as { type?: string };
-          if (wire.type === 'init') return;
-          if (wire.type === 'parse') {
-            target.postMessage({ ...wire, source: load.module, sourceOwnerUrl,
-              ...(load.transfer.length ? { sourceTransfer: load.transfer } : {}) },
-            [...(transfer ?? []), ...load.transfer]);
-            return;
-          }
-        }
-        target.postMessage(message, transfer ?? []);
-      };
+  return modelSourceWorker(worker, {
+    discriminator: 'type',
+    load,
+    parseMessage: (wire) => ({ ...wire, source: load.module, sourceOwnerUrl,
+      ...(load.transfer.length ? { sourceTransfer: load.transfer } : {}) }),
+    member: (target, key) => {
       if (key === 'addEventListener') return (type: string, listener: EventListener) => {
         if (type !== 'message') return target.addEventListener(type, listener);
         return target.addEventListener('message', ((event: MessageEvent) => {
@@ -164,8 +155,7 @@ function sourceWorker(
           listener(event);
         }) as EventListener);
       };
-      const value = Reflect.get(target, key, target);
-      return typeof value === 'function' ? value.bind(target) : value;
+      return undefined;
     },
   });
 }

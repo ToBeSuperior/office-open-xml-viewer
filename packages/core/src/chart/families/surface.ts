@@ -601,7 +601,7 @@ export function renderSurfaceChart(
     legendChart.series.reverse();
     legendFillPaints.reverse();
   }
-  const legend = measuredLegendReserve(ctx, legendChart, w, h, 0.22, ptToPx);
+  const legend = measuredLegendReserve(ctx, legendChart, w, h, ptToPx);
   const { legRightW, legLeftW, legTopH, legBottomH } = chartLegendBands(
     legend, chart.legendOverlay === true,
   );
@@ -617,7 +617,6 @@ export function renderSurfaceChart(
   };
   const frame = computeChartFrame(chart, x, y, w, h, ptToPx, {
     titleBand,
-    legendSideReserveFrac: 0.22,
     legendReserve: legend,
     pad,
     honorPlotAreaManualLayout: true,

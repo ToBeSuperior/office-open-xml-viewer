@@ -20,7 +20,7 @@ export function defineCompatibilityRule<const Rule extends CompatibilityRule>(
     if (!/^\[MS-[A-Z0-9]+\] §§?\d/.test(rule.evidence.reference)) {
       throw new Error('CompatibilityRule.evidence.reference must identify a Microsoft specification section');
     }
-  } else if (rule.evidence.kind === 'regression-test') {
+  } else if (rule.evidence.kind === 'regression-test' || rule.evidence.kind === 'library-policy') {
     requireText(rule.evidence.reference, 'evidence.reference');
     if (!/^packages\/docx\/src\/.+\.(?:test|spec)\.tsx?#[^#]+$/.test(
       rule.evidence.reference,
@@ -46,16 +46,16 @@ export const WORD_SECTION_BTLR_TBRL_PAGE_FRAME = defineCompatibilityRule({
     kind: 'regression-test',
     reference: 'packages/docx/src/layout/coordinate-space.test.ts#maps Transitional text direction %s to %s',
   },
-  description: 'Issue #988 comment 4950296007 records that, unlike the normative ECMA-376 Part 4 §14.11.7 equivalence to lr, Word uses the tbRl page frame for section-level btLr; this rule covers only the page frame, while glyph orientation is paint-owned.',
+  description: 'Issue #988 comment 4950296007 records that, unlike the normative ECMA-376 Part 4 §14.11.7 equivalence to lr, Word uses the tbRl page frame for section-level btLr; this rule covers only the page frame, while glyph orientation is paint-owned. Evidence (observed Office behaviour): Word output adjudicated in issue #988 and PR #996; [MS-OI29500] §2.1.558(b) states that Word ignores section-level btLr but not the tbRl mapping.',
 });
 
 export const WORD_FLOAT_DIFFERENT_PARAGRAPH_DISPLACEMENT = defineCompatibilityRule({
   id: 'word-float-different-paragraph-displacement',
   evidence: {
-    kind: 'regression-test',
+    kind: 'library-policy',
     reference: 'packages/docx/src/layout/floats.test.ts#keeps observed different-paragraph displacement on exclusion bounds',
   },
-  description: 'Preserve the established Word-compatible policy that an overlap-permitted floating table or frame is displaced by exclusion geometry from floats anchored in other paragraphs, while same-paragraph floats may overlap. It does not apply to DrawingML objects: issue #1623 Word controls keep allowOverlap=true pictures from different paragraphs at their resolved positions in compatibility modes 14 and 15.',
+  description: 'Preserve the established Word-compatible policy that an overlap-permitted floating table or frame is displaced by exclusion geometry from floats anchored in other paragraphs, while same-paragraph floats may overlap. It does not apply to DrawingML objects: issue #1623 Word controls keep allowOverlap=true pictures from different paragraphs at their resolved positions in compatibility modes 14 and 15. Library policy, no Office measurement: displaces overlap-permitted floating tables and frames by floats of other paragraphs (PR #447); issue #1623 disproved it for DrawingML and no table or frame control exists.',
 });
 
 export const WORD_PAGE_ANCHORED_TABLE_COLLISION_DEFERRAL = defineCompatibilityRule({
@@ -64,7 +64,7 @@ export const WORD_PAGE_ANCHORED_TABLE_COLLISION_DEFERRAL = defineCompatibilityRu
     kind: 'regression-test',
     reference: 'packages/docx/src/float-table-page-fit.test.ts#(g) DEFERS a page-anchored floating table when its raw band intersects an existing table float',
   },
-  description: 'Preserve the established Word-compatible pagination behavior that defers an absolute page- or margin-anchored floating table when its authored object band intersects an existing floating-table text-exclusion band on the page.',
+  description: 'Preserve the established Word-compatible pagination behavior that defers an absolute page- or margin-anchored floating table when its authored object band intersects an existing floating-table text-exclusion band on the page. Evidence (observed Office behaviour): Word PDF of a corpus document in PR #867; no synthetic control yet.',
 });
 
 export const WORD_EMPTY_MARK_FLOAT_SIDE_GAP = defineCompatibilityRule({
@@ -73,7 +73,7 @@ export const WORD_EMPTY_MARK_FLOAT_SIDE_GAP = defineCompatibilityRule({
     kind: 'regression-test',
     reference: 'packages/docx/src/float-line-start-one-inch.test.ts#keeps an anchor-host metric-only line on the paragraph-mark threshold',
   },
-  description: 'An empty or anchor-only paragraph-mark line may start beside a square-wrapped object when the available side gap can hold the paragraph mark em; Word controls also admit visible text by its next atom, rather than a universal width.',
+  description: 'An empty or anchor-only paragraph-mark line may start beside a square-wrapped object when the available side gap can hold the paragraph mark em; Word controls also admit visible text by its next atom, rather than a universal width. Evidence (observed Office behaviour): issue #676 / PR #696 and PR #1035; the issue #1670 controls of word-float-gap-flow (Word 16.113.2 macOS, Windows Word 16.0.20430) cover the empty-mark threshold.',
 });
 
 export function wordEmptyMarkMinimumStartWidthPx(

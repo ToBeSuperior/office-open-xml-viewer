@@ -193,10 +193,10 @@ export function wordMeasuredTableOriginMode(mode: number | undefined): boolean {
 export const WORD_EXACT_ROW_VERTICAL_CLIP_ONLY = defineCompatibilityRule({
   id: 'word-exact-row-vertical-clip-only',
   evidence: {
-    kind: 'regression-test',
+    kind: 'library-policy',
     reference: 'packages/docx/src/layout/table.test.ts#clips an overflowing merged owner when every row in its span is exact',
   },
-  description: 'Preserve the established exact-row overflow behavior that clips the owned vertical interval without clipping nested table ink horizontally to the cell box.',
+  description: 'Preserve the established exact-row overflow behavior that clips the owned vertical interval without clipping nested table ink horizontally to the cell box. Library policy, no Office measurement: vertical-only clipping of exact-height rows; [MS-OI29500] §2.1.180(d) covers only the exact height.',
 });
 
 export const WORD_OVER_PAGE_CANT_SPLIT_CLIP = defineCompatibilityRule({
@@ -299,10 +299,10 @@ export const WORD_OMITTED_ROW_HEIGHT_RULE_AT_LEAST = defineCompatibilityRule({
 export const WORD_AUTHORED_AUTO_ROW_HEIGHT_FLOOR = defineCompatibilityRule({
   id: 'word-authored-auto-row-height-floor',
   evidence: {
-    kind: 'regression-test',
+    kind: 'library-policy',
     reference: 'packages/docx/src/table-row-height.test.ts#auto with @val — @val is honored as a lower bound',
   },
-  description: 'Preserve the established legacy-model behavior that an auto row with an authored height value uses that value as a lower bound.',
+  description: 'Preserve the established legacy-model behavior that an auto row with an authored height value uses that value as a lower bound. Library policy, no Office measurement: floor for an explicit hRule auto, carried over from omitted-hRule evidence (PR #549); ECMA-376 §17.4.80 gives auto no minimum, so this needs a control or retirement.',
 });
 
 export const WORD_COLLAPSED_BORDER_ROW_TRACK_FOOTPRINT = defineCompatibilityRule({
@@ -365,10 +365,10 @@ export const WORD_FIRST_ROW_TABLE_EXCEPTION_SCOPE = defineCompatibilityRule({
 export const WORD_TRAILING_STRUCTURAL_CELL_MARKER = defineCompatibilityRule({
   id: 'word-trailing-structural-cell-marker',
   evidence: {
-    kind: 'regression-test',
+    kind: 'library-policy',
     reference: 'packages/docx/src/layout/compatibility.test.ts#drops only an empty trailing paragraph after a non-paragraph cell block',
   },
-  description: 'Exclude the required empty trailing cell paragraph from row-height and vertical-alignment measurements when it follows a visible non-paragraph block.',
+  description: 'Exclude the required empty trailing cell paragraph from row-height and vertical-alignment measurements when it follows a visible non-paragraph block. Library policy, no Office measurement: structural trailing cell marker inventory (801aa7986); no evidence.',
 });
 
 export const WORD_CELL_VERTICAL_ALIGNMENT_INK_BLOCK = defineCompatibilityRule({
@@ -377,16 +377,16 @@ export const WORD_CELL_VERTICAL_ALIGNMENT_INK_BLOCK = defineCompatibilityRule({
     kind: 'regression-test',
     reference: 'packages/docx/src/cell-valign-leading-spacing.test.ts#inked block is vertically centred in the cell (midpoint = cell midpoint)',
   },
-  description: 'Center or bottom-align the visible cell ink block without charging the first paragraph spaceBefore or final paragraph spaceAfter at the cell edges.',
+  description: 'Center or bottom-align the visible cell ink block without charging the first paragraph spaceBefore or final paragraph spaceAfter at the cell edges. Evidence (observed Office behaviour): Word PDF of a corpus document in PR #552 (midpoint placement); ECMA-376 §17.4.83 vAlign does not define the ink block.',
 });
 
 export const WORD_VERTICAL_MERGE_TERMINAL_BORDER = defineCompatibilityRule({
   id: 'word-vertical-merge-terminal-border',
   evidence: {
-    kind: 'regression-test',
+    kind: 'library-policy',
     reference: 'packages/docx/src/cell-border-conflict-render.test.ts#uses the final continuation cell border at the bottom of a vertical merge',
   },
-  description: 'Resolve the bottom edge of a vertically merged cell from its terminal continuation cell before applying shared-edge conflict rules.',
+  description: 'Resolve the bottom edge of a vertically merged cell from its terminal continuation cell before applying shared-edge conflict rules. Library policy, no Office measurement: terminal border of a vertical merge (PR #1032); the ECMA-376 §17.4.66 tcBorders note does not address vMerge.',
 });
 
 export const WORD_VERTICAL_SECTION_UPRIGHT_BLOCK_TABLE = defineCompatibilityRule({
@@ -395,7 +395,7 @@ export const WORD_VERTICAL_SECTION_UPRIGHT_BLOCK_TABLE = defineCompatibilityRule
     kind: 'regression-test',
     reference: 'packages/docx/src/vertical-table-upright.test.ts#the table advances the flow by its PHYSICAL WIDTH; body text stays vertical',
   },
-  description: 'Paint a block table in an upright physical frame within a vertical section and charge its physical width as the body-flow advance.',
+  description: 'Paint a block table in an upright physical frame within a vertical section and charge its physical width as the body-flow advance. Evidence (observed Office behaviour): Word output adjudicated in issue #988 (item 4) and PR #999.',
 });
 
 export function wordExactRowFloorPt(
@@ -556,15 +556,6 @@ export function wordTableRowHeightRule(
   return authored ? normalizedRule : 'atLeast';
 }
 
-export function wordAuthoredAutoRowHeightUsesFloor(
-  rule: string | null | undefined,
-  authoredHeight: number | null | undefined,
-): boolean {
-  return rule === 'auto'
-    && authoredHeight !== null
-    && authoredHeight !== undefined;
-}
-
 export function wordTableCellSpacingValuePt(
   kind: string,
   dxaValuePt: number | null,
@@ -585,18 +576,6 @@ export function wordTableMarginValuePt(input: Readonly<{
     if (input.kind === 'pct' || input.kind === 'auto' || input.kind === 'nil') return 0;
   }
   return null;
-}
-
-export function wordDropsTrailingStructuralCellMarker(input: Readonly<{
-  contentLength: number;
-  previousKind: string | undefined;
-  lastKind: string | undefined;
-  lastParagraphRunCount: number | undefined;
-}>): boolean {
-  return input.contentLength >= 2
-    && input.lastKind === 'paragraph'
-    && input.previousKind !== 'paragraph'
-    && input.lastParagraphRunCount === 0;
 }
 
 /** ECMA-376 §17.4.50 and WORD_TABLE_ORIGIN_COMPATIBILITY: measured

@@ -103,6 +103,7 @@ import {
   docxLayoutViewRequester,
   publishDocxLayoutView,
 } from './document-layout-view.js';
+import { deferred, type Deferred } from '@silurus/ooxml-core/internal/deferred';
 
 /** Options for {@link DocxDocument.load}. Extends the shared load-options type
  *  from `@silurus/ooxml-core` (`useGoogleFonts`, `resourceLimits`, and the
@@ -292,12 +293,6 @@ interface WorkerProgressiveLoad {
   settled: boolean;
 }
 
-interface Deferred<T> {
-  readonly promise: Promise<T>;
-  readonly resolve: (value: T) => void;
-  readonly reject: (error: unknown) => void;
-}
-
 /** LayoutOptions are already normalized; absent and explicit false select the
  * same retained variant. */
 function sameLayoutView(
@@ -307,13 +302,6 @@ function sameLayoutView(
   return left !== null
     && left.currentDateMs === right.currentDateMs
     && (left.showTrackedChanges === true) === (right.showTrackedChanges === true);
-}
-
-function deferred<T>(): Deferred<T> {
-  let resolve!: (value: T) => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
-  return { promise, resolve, reject };
 }
 
 /** Identity-stable empties for the two anchor projections.

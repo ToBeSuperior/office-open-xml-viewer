@@ -10,7 +10,7 @@ import {
   type PresentationPreflight,
 } from './presentation-preflight';
 import { PptxSlideRepository } from './slide-repository';
-import { loadPptxSlideFromCursor, readPptxSlideCursorUsage } from './slide-cursor-operation';
+import { loadPptxSlideFromCursor } from './slide-cursor-operation';
 import { SlidePullWorker } from './slide-pull-worker';
 import {
   GoogleFontPreloadLease,
@@ -23,7 +23,7 @@ import {
   dropDecodedBitmapCache,
   dropSvgImageCache,
 } from '@silurus/ooxml-core';
-import type { LoadedOfficeFontFallbacks, OfficeFontFallbackRoute, OoxmlResourceUsageSnapshot } from '@silurus/ooxml-core';
+import type { LoadedOfficeFontFallbacks, OoxmlResourceUsageSnapshot } from '@silurus/ooxml-core';
 import {
   decodeOoxmlResourceUsage,
   HARD_MAX_PPTX_CACHED_SLIDES,

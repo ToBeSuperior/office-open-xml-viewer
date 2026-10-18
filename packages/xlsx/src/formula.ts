@@ -108,10 +108,6 @@ interface ParseBudget {
   remainingNameSourceUnits: number;
 }
 
-export function evalFormulaToBool(formula: string, ctx: EvalCtx): boolean {
-  return formulaEvaluationToBool(evaluateFormula(formula, ctx));
-}
-
 /** The CF match of an already computed evaluation, so a caller that needs
  *  the evaluation kind (for the #1547 diagnostics) does not evaluate twice.
  *  Only a value converts; unsupported, invalid and error results are false. */

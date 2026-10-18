@@ -117,7 +117,7 @@ export function blipGrayLevel(r: number, g: number, b: number): number {
 
 /** Full pixel passes a transform runs: one per listed effect, plus the
  *  duotone when it applies after the list (no position marker). */
-export function blipPixelEffectPasses(value: BlipPixelEffects): number {
+function blipPixelEffectPasses(value: BlipPixelEffects): number {
   const trailingDuotone = value.duotone
     && !value.effects.some((effect) => effect.type === 'duotone');
   return value.effects.length + (trailingDuotone ? 1 : 0);
@@ -210,7 +210,7 @@ export function applyBlipPixelEffects(buf: RgbaBuffer, value: BlipPixelEffects):
 
 /** Per-channel lookup table for `<a:lum>` (see the evidence above): bright
  *  and contrast are signed fractions in [-1, 1]. */
-export function luminanceTable(bright: number, contrast: number): Uint8ClampedArray {
+function luminanceTable(bright: number, contrast: number): Uint8ClampedArray {
   const table = new Uint8ClampedArray(256);
   const b = Math.max(-1, Math.min(1, bright));
   const c = Math.max(-1, Math.min(1, contrast));

@@ -1063,7 +1063,6 @@ function objectAffineIntervals(
     exactMidpoint,
     unreducedExactFromNumber(rect.yBottom),
   ) >= 0) return [];
-  const square = polygon === null;
   let intervals: AffineBlockedInterval[] = polygon
     ? polygonBandExactIntervalFunctions(polygon, probeH, lower, upper)
       .map((interval) => ({

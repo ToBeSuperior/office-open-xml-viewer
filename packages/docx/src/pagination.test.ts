@@ -164,7 +164,7 @@ function inlineChartRun(widthPt: number, heightPt: number): DocRun {
 
 /** A single-column block table whose rows each have a fixed `exact` height (pt),
  *  so its measured height is deterministic and independent of cell-content
- *  measurement (resolveTableRowHeights short-circuits on rowHeightRule="exact"). */
+ *  measurement (an exact rowHeightRule short-circuits it). */
 function fixedTable(rowHeightsPt: number[]): BodyElement {
   const rows: DocTableRow[] = rowHeightsPt.map((hPt) => ({
     cells: [

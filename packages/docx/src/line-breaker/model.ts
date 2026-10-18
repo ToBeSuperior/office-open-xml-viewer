@@ -105,9 +105,9 @@ export interface LayoutTextSeg extends LayoutSegSource {
   bold: boolean;
   italic: boolean;
   underline: boolean;
-  /** ECMA-376 §17.3.2.40 `<w:u w:val>` — raw ST_Underline (§17.18.99) style; the
-   *  renderer maps it to DrawingML §20.1.10.82 for `core.drawUnderline`. Absent
-   *  ⇒ plain single rule. */
+  /** ECMA-376 §17.3.2.40 `<w:u w:val>` — raw ST_Underline (§17.18.99) style;
+   *  retained typography resolves its decoration geometry. Absent ⇒ plain
+   *  single rule. */
   underlineStyle?: string;
   /** ECMA-376 §17.3.2.40 `<w:u w:color>` — underline-only colour (hex 6 or
    *  `auto`). Absent ⇒ the underline follows the glyph colour. */

@@ -935,6 +935,7 @@ export function performAddToLine(
   let committedWidth = w;
   if ('text' in s) {
     const kind = snapToCharsClass(s, characterGrid);
+    // `word-snap-to-chars-script-block-allocation`
     const naturalWidth = s.snapGridNaturalWidthPx ?? w;
     if (kind && snapPitchPx != null) {
       s.snapGridClass = kind;
@@ -1695,6 +1696,7 @@ export function performTabFollowWidth(operationState: PassOperationState, q: Lay
   return segAdvance(q);
 }
 
+// `word-decimal-tab-separator-resolution`
 export function performDecimalAlignmentPoint(
   segments: readonly LayoutSeg[],
 ): Readonly<{ segmentIndex: number; charOffset: number }> | null {

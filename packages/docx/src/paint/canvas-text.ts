@@ -4,7 +4,7 @@ import {
   withVertFeature,
 } from '@silurus/ooxml-core';
 import type { ParagraphLayout, TextBoxLayout } from '../layout/types.js';
-import type { CanvasPaintContext, PaintCanvas2D } from './types.js';
+import type { CanvasPaintContext } from './types.js';
 import { paintDrawingLayout } from './canvas-drawing.js';
 import { paintRetainedResource } from './canvas-resource.js';
 import { paintTableLayout } from './canvas-table.js';
@@ -197,7 +197,7 @@ export function paintDrawingWithOwnedTextBoxes(
   }
 }
 
-export function paintParagraphDrawingLayout(
+function paintParagraphDrawingLayout(
   node: ParagraphLayout,
   drawing: import('../layout/types.js').DrawingLayout,
   context: CanvasPaintContext,

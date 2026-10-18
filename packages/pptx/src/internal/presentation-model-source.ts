@@ -13,9 +13,10 @@ import {
   type NormalizedOoxmlResourcePolicy,
   type WorkerRendererDescriptors,
 } from '@silurus/ooxml-core/worker';
-import { selectModelSource, beginModelSourceLoad } from '@silurus/ooxml-core/internal/model-source';
+import { selectModelSource, beginModelSourceLoad, modelSourceWorker } from '@silurus/ooxml-core/internal/model-source';
 import { excludeEmbeddedFontFamilies } from '../embedded-fonts.js';
 import { PptxPresentation, type LoadOptions } from '../presentation.js';
+import { deferred } from '@silurus/ooxml-core/internal/deferred';
 
 type MutablePresentation = {
   _metrics: OoxmlResourceMetricsSession;
@@ -133,32 +134,12 @@ function sourceWorker(worker: Worker, load: AdmittedModelSourceLoad): Worker {
     import.meta.env.DEV ? './worker-presentation-source.ts' : './pptx-source-worker.mjs',
     import.meta.url,
   ).href, import.meta.url);
-  return new Proxy(worker, {
-    get(target, key) {
-      if (key === 'postMessage') return (message: unknown, transfer?: Transferable[]) => {
-        if (typeof message === 'object' && message !== null) {
-          const wire = message as { kind?: string };
-          if (wire.kind === 'init') return;
-          if (wire.kind === 'parse') {
-            target.postMessage({ ...wire, source: load.module, sourceOwnerUrl,
-              ...(load.transfer.length ? { sourceTransfer: load.transfer } : {}) },
-            [...(transfer ?? []), ...load.transfer]);
-            return;
-          }
-        }
-        target.postMessage(message, transfer ?? []);
-      };
-      const value = Reflect.get(target, key, target);
-      return typeof value === 'function' ? value.bind(target) : value;
-    },
+  return modelSourceWorker(worker, {
+    discriminator: 'kind',
+    load,
+    parseMessage: (wire) => ({ ...wire, source: load.module, sourceOwnerUrl,
+      ...(load.transfer.length ? { sourceTransfer: load.transfer } : {}) }),
   });
-}
-
-function deferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
-  return { promise, resolve, reject };
 }
 
 function warnUnserializableRenderers(

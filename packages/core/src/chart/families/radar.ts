@@ -54,11 +54,10 @@ export function renderRadarChart(
   // Shared frame (radial form). Radar uses title pads 0.035 / 0.035 and the
   // default 0.22 side-legend reserve (unlike pie's 0.28). Params keep pixels
   // unchanged.
-  const leg = measuredLegendReserve(ctx, chart, w, h, 0.22, ptToPx);
+  const leg = measuredLegendReserve(ctx, chart, w, h, ptToPx);
   const frame = computeChartFrame(chart, x, y, w, h, ptToPx, {
     titleTopPadFrac: 0.035,
     titleBottomPadFrac: 0.035,
-    legendSideReserveFrac: 0.22,
     legendReserve: leg,
     radialGapFrac: 0.02,
     honorPlotAreaManualLayout: true,
@@ -85,6 +84,7 @@ export function renderRadarChart(
     && frame.plotAreaManualLayoutApplied;
   const rd = hasExplicitInnerSize
     ? Math.min(pw, ph) / 2
+    // Automatic radar radius (38 % of the plot): library policy (#11).
     : Math.min(pw, ph) * 0.38;
 
   let dataMin = Infinity;
@@ -272,6 +272,7 @@ export function renderRadarChart(
   const filled = markersSuppressedByChartStyle(
     'radar', chart.chartType, chart.scatterStyle, chart.radarStyle,
   );
+  // Marker radius fallback: library policy, unmeasured.
   const markerRadius = Math.max(2, rd * 0.025);
   for (let si = 0; si < chart.series.length; si++) {
     const s = chart.series[si];

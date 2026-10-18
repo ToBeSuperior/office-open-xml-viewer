@@ -1,4 +1,4 @@
-export { drawingMlCodePointCount, measureDrawingMlAdvance } from './measure.js';
+export { measureDrawingMlAdvance } from './measure.js';
 export { breakDrawingMlText } from './break.js';
 export type {
   DrawingMlInputRun,
@@ -22,3 +22,8 @@ export type {
 export {
   STACKED_CELL_FACTOR, stackedFaceBox, stackedSidewaysCharacter, stackedVerticalGlyph,
 } from './stacked-faces.js';
+export {
+  stackedClusters, stackedVerticalGlyphText, stackedUprightBaseline, paintStackedVerticalForm,
+  paintStackedRotated,
+} from './stacked-glyphs.js';
+export type { StackedFace, StackedCluster, StackedClusterAdvances } from './stacked-glyphs.js';

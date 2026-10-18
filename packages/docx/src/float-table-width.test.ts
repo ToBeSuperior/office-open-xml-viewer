@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { layoutBodyModel } from './test-support/document-layout.test-support.js';
 import type { DocumentLayout } from './layout/types.js';
 import type {
-  BodyElement, DocParagraph, DocTable, DocTableRow, DocTableCell,
+  BodyElement, DocTable, DocTableRow, DocTableCell,
   DocxTextRun, SectionProps, TblpPr, } from './types';
 
 // ECMA-376 §17.4.57 — a FLOATING table (`<w:tblpPr>`) is positioned absolutely

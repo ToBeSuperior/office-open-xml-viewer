@@ -201,6 +201,7 @@ export function effectivePhysicalSectionGeometry(
     pageWidth /= 2;
     // ECMA-376 §§17.15.1.11/.13 define a half-sheet editing page and automatic
     // gutter placement; the bisector edge is compatibility-owned.
+    // `word-book-fold-gutter-right-edge`
     if (wordBookFoldGutterEdge() === 'right') marginRight += policy.gutterPt;
   } else if (policy.printTwoOnOne) {
     pageHeight /= 2;

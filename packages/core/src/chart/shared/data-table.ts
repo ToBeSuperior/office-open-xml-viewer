@@ -33,7 +33,7 @@ export function chartHasDataTable(chart: ChartModel): boolean {
 }
 
 
-export function chartDataTableRows(chart: ChartModel): Array<{ series: ChartSeries; sourceIndex: number }> {
+function chartDataTableRows(chart: ChartModel): Array<{ series: ChartSeries; sourceIndex: number }> {
   const horizontal = chart.chartType === 'clusteredBarH'
     || chart.chartType === 'stackedBarH'
     || chart.chartType === 'stackedBarHPct';

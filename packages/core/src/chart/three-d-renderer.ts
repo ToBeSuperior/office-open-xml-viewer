@@ -44,6 +44,7 @@ import {
   type ChartAxisTitleSide,
 } from './layout.js';
 import { elideToWidth } from './text-elide.js';
+import { resolveThemeFontRef } from './shared/fonts.js';
 import { fitDataLabelLines, resolveDataLabelPlacement } from './data-label-layout.js';
 import { paintRichDataLabelBlock, resolveRichDataLabelBlock } from './rich-data-label.js';
 import { effectiveDataLabelText } from './data-label-content.js';
@@ -157,7 +158,7 @@ function threeDLegendTextStyle(
   const italic = override?.fontItalic ?? chart.legendFontItalic ?? false;
   return {
     fontPx,
-    font: `${italic ? 'italic ' : ''}${bold ? 'bold ' : ''}${fontPx}px ${fontFamily(face)}`,
+    font: `${italic ? 'italic ' : ''}${bold ? 'bold ' : ''}${fontPx}px ${elementFontFamily(chart, face)}`,
     color: override?.fontColor
       ? `#${override.fontColor}`
       : chart.legendFontColor ? `#${chart.legendFontColor}` : '#595959',
@@ -680,10 +681,20 @@ function meshMaterialFactor(
   return Math.max(0.78, Math.min(1, 0.78 + 0.24 * lambert));
 }
 
+// Library policy: when neither the element nor the theme supplies a face, the
+// 3-D renderer falls back to Arial. ECMA-376 defines no last-resort face; it is
+// left to the consumer. An unresolved theme reference (`+mn-*` / `+mj-*` with no
+// theme threaded into the chart) takes the same fallback.
 const fontFamily = (face: string | null | undefined): string => {
   const safe = face && !face.startsWith('+') ? face.replace(/["\\]/g, '') : 'Arial';
   return `"${safe}"`;
 };
+
+/** Resolve an element face, including a DrawingML theme font reference
+ *  (`+mj-*` / `+mn-*`, ECMA-376 §20.1.4.1.16 against the theme font scheme),
+ *  before applying {@link fontFamily}. An absent face keeps the fallback. */
+export const elementFontFamily = (chart: ChartModel, face: string | null | undefined): string =>
+  fontFamily(resolveThemeFontRef(chart, face));
 
 const chartFontFamily = (
   chart: ChartModel,
@@ -1615,7 +1626,7 @@ function titleAndPlot(
 ): { plot: ChartRect; legend: ChartRect | null; legendMeasure: ThreeDLegendMeasure } {
   const band = cartesianTitleBand(chart, rect.h, ptToPx);
   if (chart.title) {
-    ctx.font = `${chart.titleFontBold === false ? '' : 'bold '}${band.fontPx}px ${fontFamily(chart.titleFontFace)}`;
+    ctx.font = `${chart.titleFontBold === false ? '' : 'bold '}${band.fontPx}px ${elementFontFamily(chart, chart.titleFontFace)}`;
     ctx.fillStyle = chart.titleFontColor ? `#${chart.titleFontColor}` : '#111111';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
@@ -1655,7 +1666,7 @@ function titleAndPlot(
       ctx.font = legendStyles[index].font;
       return 7 * ptToPx + 4 + ctx.measureText(entry.label).width;
     });
-  const legendReserve = chartLegendReserve(chart, rect.w, rect.h, 0.23, {
+  const legendReserve = chartLegendReserve(chart, rect.w, rect.h, {
     itemWidths,
     rowHeight: Math.max(legendFontPx * 1.45, 12),
     itemGap: 12,
@@ -1683,8 +1694,8 @@ function titleAndPlot(
     : orientation === 'vertical' ? axisBands.catBandH : 0;
   const frame = computeChartFrame(chart, rect.x, rect.y, rect.w, rect.h, ptToPx, {
     titleBand: band,
-    legendSideReserveFrac: 0.23,
     legendReserve,
+    // Outer pads (4/5/19/13 % of the frame): library policy, see ChartPad in layout.ts.
     pad: {
       t: band.bandH + legendBands.legTopH + rect.h * 0.04,
       r: legendBands.legRightW + rect.w * 0.05,
@@ -4338,7 +4349,7 @@ function renderCartesian(
   const valueLabelGeometry = edgeGeometry('value', chart.valAxisTickLabelPos);
   const categoryLabelGeometry = edgeGeometry('category', chart.catAxisTickLabelPos);
   const valueFontPx = chartTextFontSizePx(chart.valAxisFontSizeHpt, ptToPx) ?? 9 * ptToPx;
-  ctx.font = `${chart.valAxisFontItalic ? 'italic ' : ''}${chart.valAxisFontBold ? 'bold ' : ''}${valueFontPx}px ${fontFamily(chart.valAxisFontFace)}`;
+  ctx.font = `${chart.valAxisFontItalic ? 'italic ' : ''}${chart.valAxisFontBold ? 'bold ' : ''}${valueFontPx}px ${elementFontFamily(chart, chart.valAxisFontFace)}`;
   ctx.fillStyle = chart.valAxisFontColor ? `#${chart.valAxisFontColor}` : '#595959';
   ctx.textAlign = horizontal ? 'center' : 'right';
   ctx.textBaseline = horizontal ? 'top' : 'middle';
@@ -4379,7 +4390,7 @@ function renderCartesian(
     }
   }
   const categoryFontPx = chartTextFontSizePx(chart.catAxisFontSizeHpt, ptToPx) ?? 9 * ptToPx;
-  ctx.font = `${chart.catAxisFontItalic ? 'italic ' : ''}${chart.catAxisFontBold ? 'bold ' : ''}${categoryFontPx}px ${fontFamily(chart.catAxisFontFace)}`;
+  ctx.font = `${chart.catAxisFontItalic ? 'italic ' : ''}${chart.catAxisFontBold ? 'bold ' : ''}${categoryFontPx}px ${elementFontFamily(chart, chart.catAxisFontFace)}`;
   ctx.fillStyle = chart.catAxisFontColor ? `#${chart.catAxisFontColor}` : '#595959';
   if (!chart.catAxisHidden && chart.catAxisTickLabelPos !== 'none') {
     const labelOffset = categoryLabelOffsetPx(
