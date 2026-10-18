@@ -420,10 +420,13 @@ export const WORD_JUSTIFICATION_LEADING_INDENT_EXCLUSION = defineCompatibilityRu
 export const WORD_COLLAPSIBLE_LINE_EDGE_VISIBLE_FIT = defineCompatibilityRule({
   id: 'word-collapsible-line-edge-visible-fit',
   evidence: {
-    kind: 'regression-test',
-    reference: 'packages/docx/src/run-split-invariance.test.ts#fits the visible justified prefix across a real formatting boundary in mode 14',
+    kind: 'office-observation',
+    syntheticFixtureId: 'visible-prefix-fit-sweep',
+    application: 'Microsoft Word',
+    version: '16.0.20430',
+    platform: 'Windows',
   },
-  description: 'Library fitting uses the visible prefix, excluding a collapsible U+0020 edge separator. ST_Jc (§17.18.44) defines inter-word justification, not an edge-space admission charge. Word mode-14 mixed-format Latin output retains a naturally fitting prefix when only its edge separator exceeds the band; mode-15 compression controls use the same visible prefix. Canonical joining must not turn formatting-only source seams into different admission decisions. This replaces an unsupported separator-charge policy, without adding compression to older modes. RTL separately retains the complete advance because its right-edge origin can otherwise move visible LTR cells outside the band. Other glyphs and authored fixed-width/atomic units retain their existing fit contracts. Evidence (observed Office behaviour): Word compatibility-mode 14 output in PR #1703; application version not recorded.',
+  description: 'Library fitting uses the visible prefix, excluding a collapsible U+0020 edge separator. ST_Jc (§17.18.44) defines inter-word justification, not an edge-space admission charge. Word mode-14 mixed-format Latin output retains a naturally fitting prefix when only its edge separator exceeds the band; mode-15 compression controls use the same visible prefix. Canonical joining must not turn formatting-only source seams into different admission decisions. This replaces an unsupported separator-charge policy, without adding compression to older modes. RTL separately retains the complete advance because its right-edge origin can otherwise move visible LTR cells outside the band. Other glyphs and authored fixed-width/atomic units retain their existing fit contracts. Evidence: Word compatibility-mode 14 output in PR #1703, and the #1896 Windows sweep (Arial 10pt, a bold run before the line-end space): a line keeps its last word at 110.25pt and not at 110.0pt, the 110.06pt visible prefix, in mode 14 and in a mode-15 left-aligned line.',
 });
 
 /** Visible-prefix projection of {@link WORD_COLLAPSIBLE_LINE_EDGE_VISIBLE_FIT}. */
