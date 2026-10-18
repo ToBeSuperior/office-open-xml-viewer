@@ -807,15 +807,23 @@ export function performFlush(
             firstPositioned.resolvedDesignDescentRatio * firstPositioned.fontSize * scale,
         }
       : undefined;
+  const justifiedGapPlan = justifiedCompressionApplies(operationState)
+    ? lineGapModel(breakerState.currentLine.map(s => gapSegment(operationState, s)))
+    : undefined;
   breakerState.lines.push({
     ...(breakerState.isFirst && breakerState.numberingFirstLine
       ? { numberingFirstLine: breakerState.numberingFirstLine } : {}),
     physicalLineIndex: breakerState.physicalLineIndex,
-    ...(justifiedCompressionApplies(operationState)
+    ...(justifiedGapPlan
       ? {
-          justifiedCompressionPx: breakerState.justifiedCompressionPx,
+          // A unit forced onto a compressed line afterwards (a kinsoku
+          // leader or glued follower) lengthens it; the retained overflow is
+          // that of the line actually closed, which paint distributes.
+          justifiedCompressionPx: breakerState.justifiedCompressionPx > 0
+            ? Math.max(0, justifiedGapPlan.visibleWidthPx - operationState.availW())
+            : 0,
           gapPlan: {
-            ...lineGapModel(breakerState.currentLine.map(s => gapSegment(operationState, s))),
+            ...justifiedGapPlan,
             // CJK/ideographic/SEA expansion has no proportional measurement.
             // Retain its previous opportunities; family selection lives in core.
             expansionGaps: enumerateGaps(breakerState.currentLine.map(s => ({

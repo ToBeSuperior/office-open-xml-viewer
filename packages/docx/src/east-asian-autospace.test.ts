@@ -156,6 +156,15 @@ describe('WORD_EAST_ASIAN_AUTO_SPACE', () => {
     expect(lines).toHaveLength(3);
   });
 
+  it('keeps a compressed justified line consistent when a kinsoku leader is forced onto it', () => {
+    // The line is admitted by compressing its gaps; the closing mark that may
+    // not start a line then joins it. Planning must follow the closed line.
+    const node = retainStubParagraph({
+      runs: [run('甲A甲 ）')], environment: MODE_15, bandPt: 24.5, justification: 'both',
+    });
+    expect(node.lines.length).toBeGreaterThan(0);
+  });
+
   it('reads adjacency between grapheme-cluster bases, across and inside segments', () => {
     const segments = (...texts: string[]) => texts.map((text) =>
       ({ text, fontSize: 10, measuredWidth: 0 }) as unknown as LayoutTextSeg);
