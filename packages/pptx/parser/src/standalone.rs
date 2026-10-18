@@ -200,7 +200,9 @@ fn theme_style_has_relationship(root: roxmltree::Node<'_, '_>, theme: &PptxTheme
             };
             // A failed fragment parse leaves the dependency unverifiable. Never
             // turn that state into a claim that this shape is self-contained.
-            let has_relationship = theme_fragment_needs_relationship_verification(&entry.to_xml());
+            let has_relationship = entry.to_xml().map_or(true, |xml| {
+                theme_fragment_needs_relationship_verification(&xml)
+            });
             inspected.insert((kind, index), has_relationship);
             has_relationship
         })
