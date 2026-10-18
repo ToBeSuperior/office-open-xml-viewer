@@ -1545,9 +1545,9 @@ function emitResolvedTextSegment(
           referenceFontVerticalMetric: true as const,
           resolvedDesignAscentRatio: referenceLineMetric.designAscentRatio,
           resolvedDesignDescentRatio: referenceLineMetric.designDescentRatio,
-          ...admittedReferenceDecoration(resolvedSpan?.font),
         }
       : {}),
+    ...admittedFaceDecoration(resolvedSpan?.font, referenceLineMetric != null),
     resolvedEastAsianLineHeightRatio: familyLineMetric?.eastAsianLineHeightRatio,
     ...(latinSpaceAverageWidthRatio != null && latinSpaceAverageWidthRatio > 0
       ? { latinSpaceAverageWidthRatio, latinSpaceCompressionEligible: true as const }
@@ -2028,9 +2028,9 @@ function appendRunsToSegments(
               referenceFontVerticalMetric: true as const,
               resolvedDesignAscentRatio: referenceMetric.designAscentRatio,
               resolvedDesignDescentRatio: referenceMetric.designDescentRatio,
-              ...admittedReferenceDecoration(selected),
             }
           : {}),
+        ...admittedFaceDecoration(selected, referenceMetric != null),
         resolvedEastAsianLineHeightRatio: familyLineMetric?.eastAsianLineHeightRatio,
         vertAlign: null,
         measuredWidth: 0,
@@ -2124,14 +2124,21 @@ function projectNoBreakRanges(runs: readonly ParagraphLayoutRun[], segs: LayoutS
   }
 }
 
-/** The underline / strikethrough geometry of a face whose reference vertical
- * geometry was admitted: the exact catalogued tuple, else the regular face a
- * proven synthesized style is drawn from (LIBRARY_SYNTHESIZED_FACE_LINE_GEOMETRY). */
-function admittedReferenceDecoration(
+/** The catalogued face's underline / strikethrough geometry when the run
+ * paints with that face: an Office-local face loaded for its exact catalogued
+ * tuple, a native installed family, or a face whose reference vertical
+ * geometry was admitted (for a proven synthesized style, the regular face it
+ * is drawn from: LIBRARY_SYNTHESIZED_FACE_LINE_GEOMETRY). Other faces keep
+ * the glyph-probe geometry. */
+function admittedFaceDecoration(
   font: FontResolution | undefined,
+  referenceAdmitted: boolean,
 ): { referenceFontDecoration?: FontDecorationGeometry } {
   if (!font) return {};
+  const officeLocal = font.source === 'local' && font.resourceIdentity?.startsWith('office-local:') === true;
+  const nativeInstalled = font.source === 'native' && font.installedFamily === true;
+  if (!officeLocal && !nativeInstalled && !referenceAdmitted) return {};
   const geometry = referenceFontDecorationMetrics(font.requestedFamily, font.weight, font.style)
-    ?? referenceFontDecorationMetrics(font.requestedFamily, 400, 'normal');
+    ?? (referenceAdmitted ? referenceFontDecorationMetrics(font.requestedFamily, 400, 'normal') : undefined);
   return geometry ? { referenceFontDecoration: geometry } : {};
 }

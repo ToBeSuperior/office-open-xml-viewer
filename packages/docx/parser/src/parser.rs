@@ -12340,15 +12340,21 @@ fn parse_vml_pict(
                 .any(|c| c.is_element() && c.tag_name().name() == "imagedata")
     })?;
 
+    // A shape type is defined once per part and referenced by later shapes
+    // (ECMA-376 Part 4 §14.1.2.20 shapetype; Word writes it in the first
+    // w:pict that uses it): search this pict first, then the whole part.
     let shape_type = shape
         .attribute("type")
         .map(|value| value.trim_start_matches('#'))
         .and_then(|id| {
-            pict.descendants().find(|node| {
+            let is_type = |node: &roxmltree::Node| {
                 node.is_element()
                     && node.tag_name().name() == "shapetype"
                     && node.attribute("id") == Some(id)
-            })
+            };
+            pict.descendants()
+                .find(is_type)
+                .or_else(|| pict.document().descendants().find(is_type))
         });
     parse_vml_shape(
         style_map,
@@ -32069,6 +32075,33 @@ mod vml_pict_tests {
             }) => assert_eq!((colors.clr1.as_str(), colors.clr2.as_str()), ("12ced4", "d21d54")),
             other => panic!("expected patterned textpath ink, got {other:?}"),
         }
+    }
+
+    /// Word writes a shape type once, in the first w:pict that uses it; a
+    /// later shape in another w:pict references it by id. Such shapes are
+    /// inline objects when their style is not position:absolute.
+    #[test]
+    fn later_pict_resolves_an_earlier_shapetype_and_flows_inline() {
+        let body = format!(
+            r##"<w:document{ns}><w:body>
+              <w:p><w:r><w:pict>
+                <v:shapetype id="_x0000_t136" coordsize="21600,21600" o:spt="136" path="m@7,l@8,m@5,21600l@6,21600e">
+                  <v:path textpathok="t"/><v:textpath on="t" fitshape="t"/>
+                </v:shapetype>
+                <v:shape id="a" type="#_x0000_t136" style="width:144pt;height:36pt" fillcolor="red" stroked="f">
+                  <v:textpath string="ONE"/></v:shape>
+              </w:pict></w:r></w:p>
+              <w:p><w:r><w:pict>
+                <v:shape id="b" type="#_x0000_t136" style="width:144pt;height:36pt" fillcolor="blue" stroked="f">
+                  <v:textpath string="TWO"/></v:shape>
+              </w:pict></w:r></w:p>
+            </w:body></w:document>"##,
+            ns = VML_NS,
+        );
+        let shapes = shape_runs(&body, &HashMap::new());
+        assert_eq!(shapes.len(), 2);
+        assert!(shapes.iter().all(|shape| shape.text_path.is_some()));
+        assert!(shapes.iter().all(|shape| shape.inline));
     }
 
     /// ECMA-376 Part 4's transitional VML schema places `textpathok` on

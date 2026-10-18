@@ -2791,8 +2791,10 @@ function planMeasuredLines(
           // The face's own rule when its exact catalogued tuple is admitted,
           // as for the run's text (retainedGeometryPlan).
           const ruleFont = shapeTabGlyph('_').spans[0]?.font;
-          const ruleGeometry = ruleFont && mayUseAuthoredReferenceVerticalMetric(ruleFont)
-            && authoredReferenceVerticalMetric(ruleFont)
+          const ruleGeometry = ruleFont && ((ruleFont.source === 'local'
+              && ruleFont.resourceIdentity?.startsWith('office-local:') === true)
+            || (ruleFont.source === 'native' && ruleFont.installedFamily === true)
+            || (mayUseAuthoredReferenceVerticalMetric(ruleFont) && authoredReferenceVerticalMetric(ruleFont)))
             ? referenceFontDecorationMetrics(ruleFont.requestedFamily, ruleFont.weight, ruleFont.style)
             : undefined;
           underline = {
