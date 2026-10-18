@@ -1529,6 +1529,7 @@ impl DocumentCursorFailure {
 
 impl DocxBodyCursor {
     pub(crate) fn start(zip: &mut Zip) -> Result<Self, DocumentCursorFailure> {
+        reset_vml_shape_types();
         let mut environment = load_document_parse_environment(zip);
         if let Some(error) = environment.word_ilvl_error.take() {
             return Err(DocumentCursorFailure {
@@ -1595,6 +1596,9 @@ impl DocxBodyCursor {
             .as_ref()
             .and_then(|settings| settings.split_pg_break_and_para_mark)
             == Some(true);
+        // Header and footer stories are whole parts; the body streams block
+        // by block and starts its own shape-type registry.
+        reset_vml_shape_types();
         Ok(Self {
             environment: Some(environment),
             plan: preflight.plan,
@@ -12342,20 +12346,41 @@ fn parse_vml_pict(
 
     // A shape type is defined once per part and referenced by later shapes
     // (ECMA-376 Part 4 §14.1.2.20 shapetype; Word writes it in the first
-    // w:pict that uses it): search this pict first, then the whole part.
-    let shape_type = shape
+    // w:pict that uses it): search this pict, then the parsed document, then
+    // the definitions an earlier streamed body block recorded.
+    remember_vml_shape_types(pict);
+    let type_id = shape
         .attribute("type")
-        .map(|value| value.trim_start_matches('#'))
-        .and_then(|id| {
-            let is_type = |node: &roxmltree::Node| {
-                node.is_element()
-                    && node.tag_name().name() == "shapetype"
-                    && node.attribute("id") == Some(id)
-            };
-            pict.descendants()
-                .find(is_type)
-                .or_else(|| pict.document().descendants().find(is_type))
-        });
+        .map(|value| value.trim_start_matches('#'));
+    let is_type = |node: &roxmltree::Node| {
+        node.is_element()
+            && node.tag_name().name() == "shapetype"
+            && type_id.is_some_and(|id| node.attribute("id") == Some(id))
+    };
+    let local_type = type_id.and_then(|_| {
+        pict.descendants()
+            .find(is_type)
+            .or_else(|| pict.document().descendants().find(is_type))
+    });
+    let recorded = if local_type.is_none() {
+        type_id.and_then(recorded_vml_shape_type)
+    } else {
+        None
+    };
+    let recorded_doc = recorded.as_deref().and_then(|xml| parse_guarded(xml).ok());
+    let shape_type = local_type.or_else(|| {
+        recorded_doc
+            .as_ref()
+            .and_then(|doc| doc.root_element().children().find(is_type))
+    });
+    // A top-level shape whose authored CSS style is not position:absolute
+    // flows in the line as an inline object (ECMA-376 Part 4 §14.1.2.19
+    // style; Windows Word 16.0.20430 #1896 controls stack such WordArt shapes
+    // line by line and seat one on a text baseline). Group children keep
+    // their group frame; a shape without a style keeps its placement.
+    let inline = shape.attribute("style").is_some_and(|style| {
+        !vml_css_str(style, "position").is_some_and(|value| value.eq_ignore_ascii_case("absolute"))
+    });
     parse_vml_shape(
         style_map,
         num_map,
@@ -12368,6 +12393,57 @@ fn parse_vml_pict(
         (1.0, 1.0),
         depth,
     )
+    .map(|mut run| {
+        run.inline = inline;
+        run
+    })
+}
+
+std::thread_local! {
+    /// VML shape types already seen in the part being parsed, by id. The
+    /// streamed body parses each block on its own, while Word defines a shape
+    /// type once, in the first w:pict that uses it. Bounded per part.
+    static VML_SHAPE_TYPES: std::cell::RefCell<HashMap<String, String>> =
+        std::cell::RefCell::new(HashMap::new());
+}
+
+const VML_SHAPE_TYPE_ENTRY_LIMIT: usize = 256;
+const VML_SHAPE_TYPE_BYTE_LIMIT: usize = 64 * 1024;
+
+fn reset_vml_shape_types() {
+    VML_SHAPE_TYPES.with(|types| types.borrow_mut().clear());
+}
+
+fn remember_vml_shape_types(pict: roxmltree::Node) {
+    let input = pict.document().input_text();
+    VML_SHAPE_TYPES.with(|types| {
+        let mut types = types.borrow_mut();
+        for node in pict
+            .descendants()
+            .filter(|node| node.is_element() && node.tag_name().name() == "shapetype")
+        {
+            let Some(id) = node.attribute("id") else { continue };
+            let Some(source) = input.get(node.range()) else { continue };
+            if types.contains_key(id)
+                || types.len() >= VML_SHAPE_TYPE_ENTRY_LIMIT
+                || source.len() > VML_SHAPE_TYPE_BYTE_LIMIT
+            {
+                continue;
+            }
+            // Re-declare the VML and Office namespaces the definition uses;
+            // its own attributes keep their source spelling.
+            types.insert(
+                id.to_string(),
+                format!(
+                    "<recorded xmlns:v=\"urn:schemas-microsoft-com:vml\" xmlns:o=\"urn:schemas-microsoft-com:office:office\" xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">{source}</recorded>"
+                ),
+            );
+        }
+    });
+}
+
+fn recorded_vml_shape_type(id: &str) -> Option<String> {
+    VML_SHAPE_TYPES.with(|types| types.borrow().get(id).cloned())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -12680,20 +12756,16 @@ fn parse_vml_shape(
             .map(|value| vec![Some(value * 100000.0 / 21600.0)])
             .unwrap_or_default()
     };
-    let positioned =
-        vml_css_str(style, "position").is_some_and(|value| value.eq_ignore_ascii_case("absolute"));
-    let anchor = positioned && vml_word_has_complete_anchor_reference(shape, style);
+    let anchor = vml_css_str(style, "position")
+        .is_some_and(|value| value.eq_ignore_ascii_case("absolute"))
+        && vml_word_has_complete_anchor_reference(shape, style);
     let anchor_acquisition =
         anchor.then(|| vml_word_anchor_acquisition(shape, style, width_pt, height_pt));
     let [text_inset_l, text_inset_t, text_inset_r, text_inset_b] =
         vml_textbox_insets(text_box_node);
 
     Some(ShapeRun {
-        // A shape whose CSS style is not position:absolute flows in the line
-        // as an inline object (ECMA-376 Part 4 §14.1.2.19 style; Windows Word
-        // 16.0.20430 #1896 controls stack such WordArt shapes line by line
-        // and seat one on a text baseline).
-        inline: !positioned,
+        inline: false,
         width_pt,
         height_pt,
         anchor_x_pt,
@@ -32072,7 +32144,10 @@ mod vml_pict_tests {
             Some(ShapeFill::Image {
                 duotone: Some(colors),
                 ..
-            }) => assert_eq!((colors.clr1.as_str(), colors.clr2.as_str()), ("12ced4", "d21d54")),
+            }) => assert_eq!(
+                (colors.clr1.as_str(), colors.clr2.as_str()),
+                ("12ced4", "d21d54")
+            ),
             other => panic!("expected patterned textpath ink, got {other:?}"),
         }
     }

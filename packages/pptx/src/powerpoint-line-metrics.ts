@@ -9,7 +9,9 @@ import type { FontDecorationGeometry } from '@silurus/ooxml-core/internal/font-d
  * sits inside a line).
  *
  * PowerPoint for Mac 16.113.2 PDF controls (#1610). Two decks with 432
- * boxes, every face verified from the embedded PDF fonts:
+ * boxes, every face verified from the embedded PDF fonts. Windows PowerPoint
+ * 16.0.20430 re-exports of all four #1610 decks (#1896) place every baseline
+ * within 0.96 pt of the Mac export (median 0.18 pt):
  * - The line box is 1.2 × the largest run size for every face.
  * - A run's ascent share of that box is usWinAscent / (usWinAscent +
  *   usWinDescent). A face that sets fsSelection USE_TYPO_METRICS uses
