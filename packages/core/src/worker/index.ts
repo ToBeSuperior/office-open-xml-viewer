@@ -37,6 +37,7 @@ export {
   isPullSessionInsufficientCreditError,
   normalizePullSessionInsufficientCreditError,
   parsePullSessionInsufficientCreditError,
+  pullWithCreditRetry,
   requiredPullCredit,
   type PullSessionInsufficientCreditDetails,
 } from './pull-credit-error.js';
@@ -116,7 +117,6 @@ export {
 } from './svg-decode-bridge.js';
 export {
   BoundedPullSession,
-  pullWithCreditRetry,
   PULL_SESSION_PROTOCOL,
   PullSessionHost,
   PullSessionHostCoordinator,

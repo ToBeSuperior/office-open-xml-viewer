@@ -30,6 +30,7 @@ import { InProcessPullTransport } from '@silurus/ooxml-core/internal/in-process-
 import type { OoxmlNodeSessionOptions } from './session-options.ts';
 import type { NodeCanvasFactory, NodeCanvasLike } from './render.ts';
 import { createLazyWasmModule, resolveWasm } from './wasm-loader.ts';
+import { throwIfAborted } from '@silurus/ooxml-core/internal/abort';
 
 const ABORT_MESSAGE = 'PPTX presentation session was aborted';
 
@@ -352,18 +353,3 @@ function toUint8(buffer: ArrayBuffer | Uint8Array): Uint8Array {
 }
 
 declare const __OOXML_MODEL_SOURCES__: boolean;
-
-// Kept file-local on purpose (core internal/abort has the shared copy):
-// importing it here adds a cross-chunk edge to each per-format Node chunk.
-// That edge exists only while model-source dispatch splits the Node entry, so
-// it counts against scripts/check-model-source-lazy-graph.mjs's budget.
-function throwIfAborted(signal: AbortSignal | undefined, message: string): void {
-  if (!signal?.aborted) return;
-  throw createAbortError(message);
-}
-
-function createAbortError(message: string): Error {
-  const error = new Error(message);
-  error.name = 'AbortError';
-  return error;
-}
