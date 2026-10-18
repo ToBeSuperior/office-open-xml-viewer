@@ -110,6 +110,7 @@ import {
   getCachedDuotoneBitmapByPath,
   imageEffectError,
   imageEffectOutsetPeriods,
+  imageEffectFrame,
   chartImageFillKey,
   chartImageFillPixelTransform,
   chartImageFillHostKey,
@@ -390,14 +391,31 @@ function pixelTransform(blip: BlipHostOrientation & {
   readonly rotWithShape?: boolean;
   readonly duotone?: import('@silurus/ooxml-core').Duotone | null;
   readonly blipEffects?: readonly import('@silurus/ooxml-core').BlipEffect[] | null;
+  readonly tile?: unknown;
+  readonly dpi?: number;
 }, host: BlipHostOrientation = blip): import('@silurus/ooxml-core').Duotone | BlipPixelEffects | undefined {
-  return blip.blipEffects?.length
-    ? { effects: blip.blipEffects, duotone: blip.duotone ?? null,
-        // §20.1.8.14: effects belong to the image-fill brush. If its
-        // painter counter-rotates the brush, its net host rotation is zero;
-        // using the containing shape's rotation here cancels it a second time.
-        hostRotation: blip.rotWithShape === false ? 0 : host.rotation, hostFlipH: host.flipH, hostFlipV: host.flipV }
-    : blip.duotone ?? undefined;
+  if (!blip.blipEffects?.length) return blip.duotone ?? undefined;
+  // §20.1.8.58: a tile's physical size is set by the fill DPI, not by the
+  // containing shape, so a tiled chain samples the source at that DPI (hosts
+  // then pass no shape extent, see tiledEffectExtent).
+  const tiledEmuPerPixel = blip.tile
+    ? 914400 / (blip.dpi != null && blip.dpi > 0 ? blip.dpi : 96)
+    : undefined;
+  return { effects: blip.blipEffects, duotone: blip.duotone ?? null,
+    // §20.1.8.14: effects belong to the image-fill brush. If its
+    // painter counter-rotates the brush, its net host rotation is zero;
+    // using the containing shape's rotation here cancels it a second time.
+    hostRotation: blip.rotWithShape === false ? 0 : host.rotation, hostFlipH: host.flipH, hostFlipV: host.flipV,
+    ...(tiledEmuPerPixel === undefined ? {} : { emuPerPixelX: tiledEmuPerPixel, emuPerPixelY: tiledEmuPerPixel }) };
+}
+
+/** Physical extent passed to the shared effect loader: none for a tiled
+ * effect chain (sampled at the fill DPI, see pixelTransform), else the frame. */
+function tiledEffectExtent(
+  fill: { readonly tile?: unknown; readonly blipEffects?: readonly unknown[] | null },
+  widthPt: number, heightPt: number,
+): { widthPt: number; heightPt: number } {
+  return fill.tile && fill.blipEffects?.length ? { widthPt: 0, heightPt: 0 } : { widthPt, heightPt };
 }
 
 function imagePlanKey(
@@ -2324,8 +2342,7 @@ async function prepareBackground(
         pixelTransform(fill),
         fetchImage,
         {
-          widthPt: canvasW / scale / PT_TO_EMU,
-          heightPt: canvasH / scale / PT_TO_EMU,
+          ...tiledEffectExtent(fill, canvasW / scale / PT_TO_EMU, canvasH / scale / PT_TO_EMU),
           ...(planned ?? {}),
           tiff,
           svgDecoder,
@@ -2496,9 +2513,12 @@ function paintTiledBackground(
   // transparent outset through drawImageCropped below.
   // Established shape compatibility defaults remain local to the PPTX shape
   // renderer; the shared model preserves absence for spec-first chart paint.
+  // Without raster header dimensions (SVG, metafile) the authored frame of an
+  // effect-grown grid, not the grown grid, is the native tile extent.
+  const effectFrame = imageEffectFrame(bitmap);
   const source = tileSourceExtent(
-    intrinsicSize?.width ?? bitmap.width,
-    intrinsicSize?.height ?? bitmap.height,
+    intrinsicSize?.width ?? effectFrame?.width ?? bitmap.width,
+    intrinsicSize?.height ?? effectFrame?.height ?? bitmap.height,
     srcRect,
   );
   const pixelToEmu = EMU_PER_PX_96 * 96 / dpi;
@@ -8911,8 +8931,7 @@ async function renderSlideLeased(
             : getCachedDuotoneBitmapByPath(
                 fill.imagePath, fill.mimeType, pixelTransform(fill, host), fetchImage,
                 {
-                  widthPt,
-                  heightPt,
+                  ...tiledEffectExtent(fill, widthPt, heightPt),
                   ...(target ?? {}),
                   failClosedOnDuotoneFailure: true,
                   tiff: opts.tiff,

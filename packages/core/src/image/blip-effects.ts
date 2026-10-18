@@ -547,7 +547,7 @@ function evaluateBlipPixels(buf: EffectBuffer, value: BlipPixelEffects, runtime:
         // Native ImageData exposes data/width/height as prototype accessors,
         // so an object spread would drop them; copy the fields explicitly.
         const filled = effectFillPixels(effect.fill, buf, value.emuPerPixelX ?? 9525,
-          value.emuPerPixelY ?? 9525, runtime, value.hostRotation);
+          value.emuPerPixelY ?? 9525, runtime, brushCounterRotation(value));
         buf = { data: filled.data, width: filled.width, height: filled.height, frame: buf.frame };
         d = buf.data; break;
       }
@@ -584,7 +584,7 @@ function evaluateBlipPixels(buf: EffectBuffer, value: BlipPixelEffects, runtime:
       case 'fillOverlay': {
         currentContext.charge(fillWork(effect.fill, buf, value, runtime));
         const overlay = effectFillPixels(effect.fill, buf, value.emuPerPixelX ?? 9525,
-          value.emuPerPixelY ?? 9525, runtime, value.hostRotation);
+          value.emuPerPixelY ?? 9525, runtime, brushCounterRotation(value));
         for (let i = 0; i < d.length; i += 4) {
           blendRgba(d, i, overlay.data, i, d, i, effect.blend);
         }
@@ -721,10 +721,19 @@ function evaluateBlipPixels(buf: EffectBuffer, value: BlipPixelEffects, runtime:
  * One visit per auxiliary workspace byte conservatively covers pattern/gradient
  * tile painting, mirrored cells, path-shade init/solve/write and readback.
  * Effect fills use a rectangular outline, bounding their edge work too. */
+/** Host rotation a rotWithShape="0" brush must undo (§20.1.8.45/.49). The
+ * host applies rotation then flips; with an odd number of flips the screen
+ * rotation of the mirrored frame is reversed, so the counter-rotation sign
+ * flips as well (the same rule as the PPTX shape-fill painter). */
+function brushCounterRotation(value: BlipPixelEffects): number {
+  const rotation = value.hostRotation ?? 0;
+  return (value.hostFlipH ?? false) !== (value.hostFlipV ?? false) ? -rotation : rotation;
+}
+
 function fillWork(fill: BlipEffectFill, grid: EffectGrid, value: BlipPixelEffects, runtime?: BlipEffectRuntime): number {
   const pixels = grid.width * grid.height;
   let work = pixels > 0 ? effectFillWork(fill, grid, value.emuPerPixelX ?? 9525, value.emuPerPixelY ?? 9525, runtime,
-    value.hostRotation ?? 0)
+    brushCounterRotation(value))
     + fillPaintWorkspaceBytes(fill) : 0;
   if (fill.fillType === 'gradient') work += 2 * fill.stops.length * (1 + Math.max(1, Math.ceil(Math.log2(fill.stops.length))));
   return work;

@@ -887,3 +887,18 @@ it('keeps prototype-backed native ImageData from a recursive fill effect', () =>
   const result = applyBlipPixelEffects(buf, { effects: [{ type: 'fill', fill }] }, runtime);
   expect([...result.data]).toEqual([9, 8, 7, 255]);
 });
+
+it.each([
+  [false, -1],
+  [true, 1],
+] as const)('counter-rotates a rotWithShape=0 brush with the host flip parity (flipH=%s)', (flipH, sign) => {
+  const fill = { fillType: 'image' as const, imagePath: 'fill.png', mimeType: 'image/png', stretch: true,
+    rotWithShape: false };
+  const rotate = vi.fn();
+  const ctx = { save() {}, restore() {}, beginPath() {}, rect() {}, clip() {}, drawImage() {},
+    translate() {}, rotate, scale() {}, getImageData: () => ({ data: new Uint8ClampedArray(4), width: 1, height: 1 }) };
+  const runtime = { images: new Map([[fill, { width: 1, height: 1 } as CanvasImageSource]]),
+    offscreenFactory: (() => ({ width: 1, height: 1, getContext: () => ctx })) as unknown as OffscreenFactory };
+  applyBlipPixelEffects(buffer([1, 2, 3, 255]), { effects: [{ type: 'fill', fill }], hostRotation: 45, hostFlipH: flipH }, runtime);
+  expect(rotate).toHaveBeenCalledWith(sign * 45 * Math.PI / 180);
+});
