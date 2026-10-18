@@ -417,7 +417,7 @@ export class DocxDocument {
   /** Library-owned exact-local or pinned substitute faces in main mode. */
   private _officeFontFaces: FontFace[] = [];
   /** Why a worker-mode load continued on the main thread. */
-  _mainThreadFallbackReason: 'vertical' | 'nativeRouteSentinels' = 'vertical';
+  private _mainThreadFallbackReason: 'vertical' | 'nativeRouteSentinels' = 'vertical';
   /** Native route sentinels (native-route-line-metrics.ts), main mode. */
   private _nativeRouteFaces: FontFace[] = [];
   private _nativeRouteFacesReleased = false;

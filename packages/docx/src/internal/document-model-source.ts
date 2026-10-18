@@ -134,7 +134,8 @@ type SourceDocxFriend = Pick<DocxDocument, keyof DocxDocument> & Record<
   '_chartEx' | '_tiff' | '_document' | '_embeddedFontFaces' | '_officeFontFaces' |
   '_googleFontFaces' | '_source' | '_layoutObservers' | '_layoutAbort' |
   '_replaceMainLayoutPublication' | '_isLayoutViewActive' | '_layoutLifecycle' |
-  '_layoutCompletion' | '_resourceUsage' | '_progressive' | '_allowFootnoteContinuation',
+  '_layoutCompletion' | '_resourceUsage' | '_progressive' | '_allowFootnoteContinuation' |
+  '_mainThreadFallbackReason',
   any
 >;
 
