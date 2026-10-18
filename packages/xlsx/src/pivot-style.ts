@@ -51,6 +51,9 @@ export interface StructuredCellFormat {
   /** `fontColor` was set by a Table style layer (rich-text runs take only a
    *  Table style's color; see the renderer's `tableRunFontColor`). */
   fontColorFromTable?: boolean;
+  /** The last layer naming a color named the automatic color; it applies over
+   *  an inherited (not cell-owned) font color like any other style color. */
+  fontColorAuto?: boolean;
   bold?: boolean;
   italic?: boolean;
   underline?: boolean;
@@ -193,13 +196,15 @@ function apply(
   if (font) {
     if (font.color) {
       target.fontColor = font.color;
+      delete target.fontColorAuto;
       if (fromTable) target.fontColorFromTable = true;
       else delete target.fontColorFromTable;
     } else if (dxf.fontToggles?.automaticColor) {
-      // An explicit automatic color clears an earlier element's color; the
-      // cell then draws its own (automatic) font color.
+      // An explicit automatic color replaces an earlier element's color.
       delete target.fontColor;
-      delete target.fontColorFromTable;
+      target.fontColorAuto = true;
+      if (fromTable) target.fontColorFromTable = true;
+      else delete target.fontColorFromTable;
     }
     for (const key of DXF_FONT_TOGGLES) {
       const value = dxfFontToggle(dxf, key);

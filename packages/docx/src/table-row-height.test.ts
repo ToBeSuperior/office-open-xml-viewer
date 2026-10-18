@@ -110,10 +110,10 @@ describe('canonical retained table row height — ST_HeightRule (§17.4.80 / §1
     expect(retainedAdvance(rowWith(600, 'atLeast'))).toBe(600);
   });
 
-  // ECMA-376 §17.4.80; Windows Word 16.0.20430 (#1896 controls) gives an
-  // explicit hRule="auto" row its content height whatever w:val says.
-  it('auto with @val — @val is not a minimum', () => {
-    expect(retainedAdvance(rowWith(600, 'auto'))).toBe(0);
+  // A public-only model cannot tell an omitted hRule from an explicit auto;
+  // its "auto" row with a height is the omitted case, a lower bound.
+  it('public-only auto with @val — taken as an omitted hRule (lower bound)', () => {
+    expect(retainedAdvance(rowWith(600, 'auto'))).toBe(600);
   });
 
   it('auto with no @val — has no predetermined minimum', () => {

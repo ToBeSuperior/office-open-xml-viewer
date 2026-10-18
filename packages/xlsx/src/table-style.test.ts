@@ -105,6 +105,7 @@ describe('table style element layering', () => {
     const auto = { font: { color: null }, fontToggles: { automaticColor: true }, fill: null, border: null } as unknown as Dxf;
     const map = buildStructuredStyleMap(table({}, [element('wholeTable', blue), element('headerRow', auto)]));
     expect(map.get('1:2')?.fontColor).toBeUndefined();
+    expect(map.get('1:2')?.fontColorAuto).toBe(true);
     expect(map.get('2:2')?.fontColor).toBe('#0000FF');
   });
 
@@ -180,6 +181,48 @@ describe('custom table style font color vs the cell font', () => {
     expect(color('inherited')).toMatch(/^(#00b050|rgba\(0,176,80,1\))$/);
     expect(color('own')).toMatch(/^(#ffffff|rgba\(255,255,255,1\))$/);
     expect(color('own auto')).toMatch(/^(#000000|rgba\(0,0,0,1\))$/);
+  });
+});
+
+describe('an automatic table-element color over an inherited font color', () => {
+  it('draws automatic black, not the inherited red', () => {
+    const font = (color: string | null): CellFont => ({
+      bold: false, italic: false, underline: false, strike: false, size: 11, color, name: 'Arial',
+    });
+    const styles: Styles = {
+      fonts: [font('#FF0000')], fills: [], borders: [],
+      cellXfs: [{ fontId: 0, fillId: 0, borderId: 0, numFmtId: 0, alignH: null, alignV: null, wrapText: false }],
+      numFmts: [], dxfs: [],
+    };
+    const ws = {
+      name: 'T',
+      rows: [{ index: 1, height: null, cells: [{ row: 1, col: 1, styleIndex: 0, value: { type: 'text' as const, text: 'head' } }] }],
+      colWidths: {}, rowHeights: {}, defaultColWidth: 8.43, defaultRowHeight: 15,
+      mergeCells: [], freezeRows: 0, freezeCols: 0, conditionalFormats: [], images: [], charts: [],
+      tables: [{
+        range: { top: 1, left: 1, bottom: 2, right: 1 }, styleName: 'Custom', headerRowCount: 1, totalsRowCount: 0,
+        showRowStripes: false, showColumnStripes: false, showFirstColumn: false, showLastColumn: false,
+        accentColor: '#808080', columns: [],
+        styleElements: [
+          { kind: 'wholeTable', size: 1, dxf: { font: font('#0000FF'), fill: null, border: null } },
+          { kind: 'headerRow', size: 1, dxf: { font: font(null), fontToggles: { automaticColor: true }, fill: null, border: null } },
+        ],
+      }],
+    } as unknown as Worksheet;
+    let fillStyle = '';
+    const drawn = new Map<string, string>();
+    const noop = () => {};
+    const ctx = new Proxy({
+      canvas: { width: 400, height: 100 }, font: '11px Arial',
+      get fillStyle() { return fillStyle; }, set fillStyle(value: string) { fillStyle = value; },
+      measureText: (t: string) => ({ width: t.length * 7 }) as TextMetrics,
+      fillText: (t: string) => { drawn.set(t, fillStyle); },
+    } as Record<string | symbol, unknown>, {
+      get: (target, key) => (key in target ? target[key] : noop),
+      set: (target, key, value) => { target[key] = value; return true; },
+    }) as unknown as CanvasRenderingContext2D;
+    renderViewport(ctx, ws, styles, { row: 1, col: 1, rows: 1, cols: 1 });
+    expect(drawn.get('head')?.replace(/\s/g, '').toLowerCase()).toMatch(/^(#000000|rgba\(0,0,0,1\))$/);
   });
 });
 

@@ -1651,10 +1651,10 @@ export interface DocTableRow {
    *  after this row's last real cell. Omitted/zero means none. */
   gridAfter?: number;
   rowHeight: number | null;  // pt
-  /** ECMA-376 §17.4.80 hRule. "auto" = no minimum (the height is
-   *  informational); "atLeast" = lower bound; "exact" = fixed clip. An
-   *  omitted hRule with a height is reported as "atLeast"
-   *  (word-omitted-row-height-rule-at-least). */
+  /** ECMA-376 §17.4.80 hRule, "auto" when omitted. Without the parser's
+   *  acquisition facts an "auto" row with a height is taken as an omitted
+   *  hRule, a lower bound (word-omitted-row-height-rule-at-least); "atLeast" =
+   *  lower bound; "exact" = fixed clip. */
   rowHeightRule: 'auto' | 'atLeast' | 'exact' | string;
   isHeader: boolean;
   /** ECMA-376 §17.4.6 `<w:cantSplit>` — when true, the row must not be split

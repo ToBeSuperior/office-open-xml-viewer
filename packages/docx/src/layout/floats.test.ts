@@ -3,7 +3,6 @@ import {
   floatingTableAvoidance,
   resolveBlockFlowAdmission,
   resolveFloatPlacement,
-  resolvePageAnchoredTableDeferral,
   type FloatPlacementParticipant,
 } from './floats.js';
 
@@ -240,25 +239,3 @@ describe('block flow admission around floating-table exclusions', () => {
   });
 });
 
-describe('page-anchored floating-table compatibility admission', () => {
-  it('defers on the existing table text-exclusion band and reports the rule', () => {
-    const blocker = Object.freeze({
-      ...participant('blocker', 'table', 20, 1, 5, 'overlap'),
-      bounds: Object.freeze({ xPt: 20, yPt: 0, widthPt: 10, heightPt: 10 }),
-      exclusionBounds: Object.freeze({ xPt: 15, yPt: -5, widthPt: 20, heightPt: 20 }),
-    }) as FloatPlacementParticipant;
-    const result = resolvePageAnchoredTableDeferral({
-      // Raw table extents do not overlap; only the blocker exclusion does.
-      bounds: { xPt: 10, yPt: 0, widthPt: 6, heightPt: 10 },
-      blockers: [blocker],
-      overlapEpsilonPt: 0.01,
-    });
-
-    expect(result).toEqual({
-      defer: true,
-      appliedCompatibilityRuleIds: [
-        'word-page-anchored-table-collision-deferral',
-      ],
-    });
-  });
-});

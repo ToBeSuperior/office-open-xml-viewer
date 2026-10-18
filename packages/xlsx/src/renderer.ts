@@ -2962,8 +2962,13 @@ const autoRowHeightState = new WeakMap<Worksheet, AutoRowHeightState>();
  *  resolved by the parser against the Normal style): Excel draws that color
  *  over the table style's. The run rule was measured for Tables only. */
 function tableRunFontColor(format: StructuredCellFormat | undefined, xf: CellXf): string | null {
-  return xf.ownFontColor || !format?.fontColorFromTable ? null : format.fontColor ?? null;
+  if (xf.ownFontColor || !format?.fontColorFromTable) return null;
+  return format.fontColorAuto ? AUTOMATIC_FONT_COLOR : format.fontColor ?? null;
 }
+
+/** The automatic font color (ECMA-376 §18.3.1.15 auto), the system window
+ *  text color, which Excel draws black. */
+const AUTOMATIC_FONT_COLOR = '#000000';
 
 /** The table or PivotTable style font color for a cell, or null when the
  *  cell's font color is its own formatting. Measured in Excel for both: a
@@ -2975,7 +2980,7 @@ function styleFontColor(
   xf: CellXf,
 ): string | null {
   if (xf.ownFontColor) return null;
-  return format?.fontColor ?? null;
+  return format?.fontColorAuto ? AUTOMATIC_FONT_COLOR : format?.fontColor ?? null;
 }
 
 /** Rich-text runs as Excel draws them under a table style font color

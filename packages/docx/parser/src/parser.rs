@@ -15444,19 +15444,10 @@ fn parse_table_row(
     let row_height = tr_height_node
         .and_then(|h| attr_w(h, "val"))
         .map(|v| twips_to_pt(&v));
-    // ECMA-376 §17.4.80 defaults hRule to "auto"; the public model reports an
-    // omitted hRule with a height as "atLeast"
-    // (word-omitted-row-height-rule-at-least), so an explicit "auto" keeps no
-    // minimum.
+    // ECMA-376 §17.4.80: default hRule is "auto".
     let row_height_rule = tr_height_node
         .and_then(|h| attr_w(h, "hRule"))
-        .unwrap_or_else(|| {
-            if row_height.is_some() {
-                "atLeast".to_string()
-            } else {
-                "auto".to_string()
-            }
-        });
+        .unwrap_or_else(|| "auto".to_string());
     let table_row_layout = TableRowLayoutAcquisitionWire {
         height: tr_height_node.map(|h| {
             let authored_rule = attr_w(h, "hRule");
