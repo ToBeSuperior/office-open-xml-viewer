@@ -270,5 +270,9 @@ fn automatic_spacing_dop_setting_reaches_canonical_document_without_neighbor_bit
                 .contains("truncated Word document properties")
         );
     }
-    assert!(document(&base("absent\r")).settings.is_none());
+    // Without a DOP only the format's compatibility mode is known.
+    let absent = document(&base("absent\r")).settings.unwrap();
+    assert_eq!(absent.compatibility_mode, Some(11));
+    assert_eq!(absent.default_tab_stop, None);
+    assert_eq!(absent.adjust_line_height_in_table, None);
 }

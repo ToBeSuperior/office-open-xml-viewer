@@ -270,10 +270,17 @@ export function decideLogicalTable(
   source: TableSourceAcquisitionInput,
   members: readonly Readonly<{ table: TableLayoutSource; source: TableSourceAcquisitionInput }>[],
   contentWidthPt: number,
-  environment: TableDecisionEnvironment,
+  authoredEnvironment: TableDecisionEnvironment,
   commonFrame = true,
   commonGrid = true,
 ): LogicalTableDecision {
+  // A producer-supplied outer-edge table (outerEdgeIndent) carries its own
+  // physical outer edge and grid; the OOXML table compatibility modes
+  // describe tblInd/tblGrid semantics it does not have, so its decisions
+  // keep the mode-absent contract.
+  const environment = source.format.outerEdgeIndent === true && authoredEnvironment.mode !== undefined
+    ? { ...authoredEnvironment, mode: undefined }
+    : authoredEnvironment;
   const origin = tableOriginContext(table, source.format, environment.mode);
   const topLevelBody = environment.topLevel && environment.story === 'body';
   const measuredOrigin = commonFrame && commonGrid && topLevelBody && origin.measuredOrigin;
