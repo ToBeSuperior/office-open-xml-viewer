@@ -2,7 +2,9 @@
 //! feed canonical slides through this one bounded writer and renderer.
 
 use crate::types::*;
-use ooxml_common::markdown::{escape_text, split_lines, TextContext};
+use ooxml_common::markdown::{
+    escape_fragment, escape_text, line_start_after_markup, split_lines, TextContext,
+};
 use ooxml_common::math::nodes_to_text;
 use std::cell::Cell;
 use std::fmt;
@@ -234,10 +236,15 @@ pub(crate) fn render_paragraph_md(
         out.push('\n');
         return;
     }
-    for _ in 0..para.lvl {
-        out.push_str("  ");
+    let kind = paragraph_kind(&para.bullet, inherit_means_bullet);
+    // Nesting indentation belongs to list items only: four or more leading
+    // spaces before a plain paragraph would open an indented code block.
+    if !matches!(kind, ParaKind::Plain) {
+        for _ in 0..para.lvl {
+            out.push_str("  ");
+        }
     }
-    match paragraph_kind(&para.bullet, inherit_means_bullet) {
+    match kind {
         ParaKind::Plain => {}
         ParaKind::Bullet => out.push_str("- "),
         // We deliberately emit `1.` for every numbered paragraph rather than
@@ -259,20 +266,30 @@ fn runs_have_visible_text(runs: &[TextRun]) -> bool {
 }
 
 pub(crate) fn render_runs_md(runs: &[TextRun], out: &mut MarkdownWriter) {
+    // The runs form one line sequence: indentation that opens a projected
+    // line is dropped even when it arrives in its own run.
+    let mut line_start = true;
+    let text = |value: &str, out: &mut MarkdownWriter, line_start: &mut bool| {
+        out.push_str(&escape_fragment(value, TextContext::Inline, line_start));
+    };
+    let markup = |value: &str, out: &mut MarkdownWriter, line_start: &mut bool| {
+        out.push_str(value);
+        *line_start = line_start_after_markup(value, *line_start);
+    };
     for run in runs {
         match run {
             // Intra-paragraph soft break (<a:br/>) → markdown hard line break
             // (two trailing spaces + newline).
-            TextRun::Break { .. } => out.push_str("  \n"),
+            TextRun::Break { .. } => markup("  \n", out, &mut line_start),
             // Equations have no faithful markdown form; emit their flattened text.
-            TextRun::Math { nodes, .. } => write_escaped_inline_md(&nodes_to_text(nodes), out),
+            TextRun::Math { nodes, .. } => text(&nodes_to_text(nodes), out, &mut line_start),
             TextRun::Text(t) => {
                 let raw = &t.text;
                 // Empty / whitespace-only runs (separators between formatted
                 // spans) shouldn't trigger bold/italic wrappers — `**   **`
                 // is awkward and most renderers drop the formatting anyway.
                 if raw.chars().all(|c| c.is_whitespace()) {
-                    out.push_str(raw);
+                    text(raw, out, &mut line_start);
                     continue;
                 }
                 // Preserve leading/trailing whitespace OUTSIDE the formatting
@@ -284,12 +301,12 @@ pub(crate) fn render_runs_md(runs: &[TextRun], out: &mut MarkdownWriter) {
                 let leading = &raw[..leading_len];
                 let trailing = &raw[trail_start..];
                 let trimmed = &raw[leading_len..trail_start];
-                out.push_str(leading);
+                text(leading, out, &mut line_start);
                 if t.italic == Some(true) {
-                    out.push('*');
+                    markup("*", out, &mut line_start);
                 }
                 if t.bold == Some(true) {
-                    out.push_str("**");
+                    markup("**", out, &mut line_start);
                 }
                 // A target outside the viewer's hyperlink scheme policy
                 // (`javascript:`, `data:`, ...) keeps its text but does not
@@ -299,21 +316,19 @@ pub(crate) fn render_runs_md(runs: &[TextRun], out: &mut MarkdownWriter) {
                     .as_deref()
                     .and_then(ooxml_common::markdown::link_destination);
                 if link.is_some() {
-                    out.push('[');
+                    markup("[", out, &mut line_start);
                 }
-                write_escaped_inline_md(trimmed, out);
+                text(trimmed, out, &mut line_start);
                 if let Some(url) = &link {
-                    out.push_str("](");
-                    out.push_str(url);
-                    out.push(')');
+                    markup(&format!("]({url})"), out, &mut line_start);
                 }
                 if t.bold == Some(true) {
-                    out.push_str("**");
+                    markup("**", out, &mut line_start);
                 }
                 if t.italic == Some(true) {
-                    out.push('*');
+                    markup("*", out, &mut line_start);
                 }
-                out.push_str(trailing);
+                text(trailing, out, &mut line_start);
             }
         }
     }

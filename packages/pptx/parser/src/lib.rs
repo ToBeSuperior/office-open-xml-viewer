@@ -4095,7 +4095,7 @@ mod tests {
         use std::io::{Read, Write};
         const INLINE: &str = "&lt;img src=x onerror=alert(1)&gt; [x](javascript:alert(1)) https://evil.example/ www.evil.example a@evil.example ~~del~~ &amp;copy; `c`";
         const INLINE_TEXT: &str = "<img src=x onerror=alert(1)> [x](javascript:alert(1)) https://evil.example/ www.evil.example a@evil.example ~~del~~ &copy; `c`";
-        const LINES: &str = "alpha&#13;&#13;```&#13;| a | b |&#13;| :-- | --: |&#13;forged | row&#13;# h&#13;&#160;# nbsp&#13;&#xFEFF;# bom&#13;&gt; q&#13;- item&#13;1. item&#13;===";
+        const LINES: &str = "alpha&#13;&#13;```&#13;| a | b |&#13;| :-- | --: |&#13;forged | row&#13;# h&#13;&#160;# nbsp&#13;&#xFEFF;# bom&#13;&gt; q&#13;- item&#13;1. item&#13;===&#13;    Cost: 50% &amp; tax&#13;&#9;Tabbed: 2";
         let text_shape = |id: u32, ph: &str, paragraphs: &str| {
             format!(
                 r#"<p:sp><p:nvSpPr><p:cNvPr id="{id}" name="S{id}"/><p:cNvSpPr/><p:nvPr>{ph}</p:nvPr></p:nvSpPr><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1000000" cy="1000000"/></a:xfrm></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/>{paragraphs}</p:txBody></p:sp>"#
@@ -4117,6 +4117,10 @@ mod tests {
             para("&#xFEFF;# forged bom"),
             para("- forged item"),
             para("```"),
+            r#"<a:p><a:r><a:t>intro</a:t></a:r><a:br/><a:r><a:t xml:space="preserve">    Body cost: 50% &amp; tax</a:t></a:r></a:p>"#.to_string(),
+            r#"<a:p><a:r><a:t>intro</a:t></a:r><a:br/><a:r><a:t xml:space="preserve">  </a:t></a:r><a:r><a:t xml:space="preserve">  Split indent: 1</a:t></a:r></a:p>"#.to_string(),
+            r#"<a:p><a:r><a:t>intro</a:t></a:r><a:br/><a:r><a:t xml:space="preserve">&#9;Body tab: 2</a:t></a:r></a:p>"#.to_string(),
+            r#"<a:p><a:pPr lvl="2"/><a:r><a:t>Deep plain: 3</a:t></a:r></a:p>"#.to_string(),
             r#"<a:p><a:r><a:t>ww</a:t></a:r><a:r><a:t>w.split.example</a:t></a:r></a:p>"#.to_string(),
             r#"<a:p><mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:a14="http://schemas.microsoft.com/office/drawing/2010/main" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"><mc:Choice Requires="a14"><a14:m><m:oMath><m:r><m:t>&lt;img src=x onerror=alert(2)&gt; https://evil.example/</m:t></m:r></m:oMath></a14:m></mc:Choice><mc:Fallback/></mc:AlternateContent></a:p>"#.to_string(),
         ]
@@ -4198,7 +4202,7 @@ mod tests {
             "| :-- | --: |",
             "forged | row",
             "# forged nbsp",
-            "\u{feff}# forged bom",
+            "# forged bom",
             "- forged item",
             "```",
             "www.split.example",
@@ -4207,6 +4211,12 @@ mod tests {
             "> q",
             "1. item",
             "===",
+            "Cost: 50% & tax",
+            "Tabbed: 2",
+            "Body cost: 50% & tax",
+            "Split indent: 1",
+            "Body tab: 2",
+            "Deep plain: 3",
         ] {
             assert!(gfm.text.contains(literal), "{literal:?} in {markdown}");
         }

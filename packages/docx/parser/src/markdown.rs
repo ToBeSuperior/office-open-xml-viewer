@@ -7,7 +7,9 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Write as _};
 
-use ooxml_common::markdown::{escape_text, split_lines, TextContext};
+use ooxml_common::markdown::{
+    escape_fragment, escape_text, line_start_after_markup, split_lines, TextContext,
+};
 
 use crate::types::{
     BodyElement, CellElement, DocParagraph, DocRun, DocTable, DocTableCell, Document, TextRun,
@@ -415,11 +417,17 @@ fn render_runs(
     if let Some(Piece::Text(last)) = pieces.last_mut() {
         *last = last.trim_end().to_string();
     }
+    // Escape the pieces as one line sequence, so indentation that opens a
+    // projected line is dropped even when it arrives in its own run.
     let mut out = String::new();
+    let mut line_start = true;
     for piece in pieces.iter() {
         match piece {
-            Piece::Text(text) => out.push_str(&escape_text(text, context)),
-            Piece::Markup(markup) => out.push_str(markup),
+            Piece::Text(text) => out.push_str(&escape_fragment(text, context, &mut line_start)),
+            Piece::Markup(markup) => {
+                out.push_str(markup);
+                line_start = line_start_after_markup(markup, line_start);
+            }
         }
     }
     out

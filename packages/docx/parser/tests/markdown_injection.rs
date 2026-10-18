@@ -110,7 +110,7 @@ const INLINE_TEXT: &str = "<img src=x onerror=alert(1)> [x](javascript:alert(1))
 /// Line-level document text: a code fence, a GFM table with a
 /// colon-aligned delimiter row, and line-start block markers, separated by
 /// lone CRs (XML character references survive parsing).
-const LINES: &str = "alpha&#13;&#13;```&#13;| a | b |&#13;| :-- | --: |&#13;forged | row&#13;# h&#13;&#160;# nbsp&#13;&#xFEFF;# bom&#13;&gt; q&#13;- item&#13;1. item&#13;===";
+const LINES: &str = "alpha&#13;&#13;```&#13;| a | b |&#13;| :-- | --: |&#13;forged | row&#13;# h&#13;&#160;# nbsp&#13;&#xFEFF;# bom&#13;&gt; q&#13;- item&#13;1. item&#13;===&#13;    Cost: 50% &amp; tax&#13;&#9;Tabbed: 2";
 
 /// The Markdown, parsed as GFM (tables, strikethrough, extended autolinks),
 /// contains only the structure the converter emits: document text in
@@ -141,6 +141,22 @@ fn document_text_forms_no_markdown_structure() {
         p(&r("&#x2003;# forged em")),
         p(&r("&#xFEFF;# forged bom")),
         p(&format!("{}{}", r("1"), r(". split"))),
+        p(&format!(
+            "{}<w:r><w:br/></w:r><w:r><w:br/></w:r>{}",
+            r("intro"),
+            r("    Body cost: 50% &amp; tax")
+        )),
+        p(&format!(
+            "{}<w:r><w:br/></w:r>{}{}",
+            r("intro"),
+            r("  "),
+            r("  Split indent: 1")
+        )),
+        p(&format!(
+            "{}<w:r><w:br/></w:r><w:r><w:tab/></w:r>{}",
+            r("intro"),
+            r("Body tab: 2")
+        )),
         p(&format!("{}{}", r("ww"), r("w.split.example"))),
         p(r#"<w:fldSimple w:instr=" PAGE "><w:r><w:t xml:space="preserve">&#160;# forged field</w:t></w:r></w:fldSimple>"#),
         p(r#"<m:oMath xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"><m:r><m:t xml:space="preserve"># forged math https://evil.example/</m:t></m:r></m:oMath>"#),
@@ -203,7 +219,7 @@ fn document_text_forms_no_markdown_structure() {
         "forged | row",
         "# forged nbsp",
         "# forged em",
-        "\u{feff}# forged bom",
+        "# forged bom",
         "1. split",
         "www.split.example",
         "# forged field",
@@ -213,6 +229,11 @@ fn document_text_forms_no_markdown_structure() {
         "- item",
         "1. item",
         "===",
+        "Cost: 50% & tax",
+        "Tabbed: 2",
+        "Body cost: 50% & tax",
+        "Split indent: 1",
+        "Body tab: 2",
     ] {
         assert!(gfm.text.contains(literal), "{literal:?} in {markdown}");
     }

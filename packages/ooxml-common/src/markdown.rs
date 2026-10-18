@@ -113,35 +113,62 @@ fn is_indentation(c: char) -> bool {
 /// - a `.` is escaped when it follows `www` (case-insensitive) or when only
 ///   `w`s precede it in this fragment, because the rest of `www.` may end the
 ///   previous fragment; this defuses GFM `www.` autolinks;
-/// - in [`TextContext::Inline`], a block marker at a line start (the start of
-///   the text and after every line break, past any [`is_indentation`]) is
-///   escaped, so the text cannot open an ATX heading (`#`), block quote
-///   (`>`), list item (`-`, `+`, `1.`, `1)`), setext underline or thematic
-///   break (`=`, `-`);
+/// - in [`TextContext::Inline`], a block marker at a possible line start (the
+///   start of the text and after every line break, past any
+///   [`is_indentation`]) is escaped, so the text cannot open an ATX heading
+///   (`#`), block quote (`>`), list item (`-`, `+`, `1.`, `1)`), setext
+///   underline or thematic break (`=`, `-`);
+/// - in [`TextContext::Inline`], indentation at a projected line start is
+///   dropped: four or more spaces (or a tab) would open an indented code
+///   block, in which the escapes would render literally, and CommonMark
+///   ignores up to three leading spaces of a paragraph line anyway;
 /// - [`TextContext::Heading`] also escapes `#` and folds line breaks into
 ///   spaces; [`TextContext::TableCell`] turns line breaks into `<br>`.
 ///
-/// Callers trim document text before escaping it, never the escaped output.
-/// Markdown the converter emits itself (heading markers, quote prefixes,
-/// `<br>` between paragraphs, link syntax for an allowed destination) is
-/// written around the result, never through it. The output is at most four
-/// bytes per input byte (a lone `\n` becoming `<br>`; every other rule at most
-/// doubles), which projection size bounds rely on.
+/// The text is taken to start a line. Writers that join fragments within a
+/// line use [`escape_fragment`] instead. Callers trim document text before
+/// escaping it, never the escaped output. Markdown the converter emits itself
+/// (heading markers, quote prefixes, `<br>` between paragraphs, link syntax
+/// for an allowed destination) is written around the result, never through
+/// it. The output is at most four bytes per input byte (a lone `\n` becoming
+/// `<br>`; every other rule at most doubles), which projection size bounds
+/// rely on.
 pub fn escape_text(text: &str, context: TextContext) -> String {
+    escape_fragment(text, context, &mut true)
+}
+
+/// [`escape_text`] for one fragment of a line that the caller assembles from
+/// several pieces (runs, wrappers, breaks). `line_start` says whether the
+/// output so far ends at a line start (nothing but dropped indentation since
+/// the last line break) and is updated for the next piece: indentation is
+/// dropped only at a real line start, so whitespace between runs in mid-line
+/// is kept, while indentation that arrives in its own run before a line's
+/// first character is still dropped. Block markers are escaped at every
+/// fragment start regardless, because a marker may be split across runs
+/// (`1` + `) x`).
+pub fn escape_fragment(text: &str, context: TextContext, line_start: &mut bool) -> String {
+    let inline = context == TextContext::Inline;
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
-    let mut at_line_start = context == TextContext::Inline;
+    // A block-marker scan is pending, and whether indentation is dropped.
+    let mut scan = inline;
+    let mut drop_indent = inline && *line_start;
     // Consecutive `w`s just written, and whether nothing else has been.
     let mut w_run = 0usize;
     let mut only_ws = true;
     while let Some(c) = rest.chars().next() {
-        if at_line_start {
-            at_line_start = false;
-            let body = rest.trim_start_matches(is_indentation);
-            if body.len() != rest.len() {
+        if scan {
+            scan = false;
+            let body = rest.trim_start_matches(|c| is_indentation(c) && !matches!(c, '\r' | '\n'));
+            if body.len() != rest.len() && !drop_indent {
                 out.push_str(&rest[..rest.len() - body.len()]);
                 (w_run, only_ws) = (0, false);
             }
+            if body.is_empty() {
+                // Indentation only: the line start (if any) carries over.
+                break;
+            }
+            drop_indent = false;
             rest = body;
             if let Some(marker) = block_marker_offset(rest) {
                 // Digits before an ordered-list delimiter, then the escaped
@@ -166,7 +193,7 @@ pub fn escape_text(text: &str, context: TextContext) -> String {
                     } else {
                         "\n"
                     });
-                    at_line_start = true;
+                    (scan, drop_indent) = (true, true);
                 }
                 TextContext::Heading => out.push(' '),
                 TextContext::TableCell => out.push_str("<br>"),
@@ -190,7 +217,25 @@ pub fn escape_text(text: &str, context: TextContext) -> String {
             (w_run, only_ws) = (0, false);
         }
     }
+    if inline {
+        // Still at a line start after a fragment of dropped indentation, or
+        // after a trailing line break.
+        *line_start = drop_indent;
+    } else if !out.is_empty() {
+        *line_start = false;
+    }
     out
+}
+
+/// Whether projected output that ends with `markup` (Markdown the converter
+/// emits itself, written between escaped fragments) is at a line start;
+/// `line_start` is the state before it.
+pub fn line_start_after_markup(markup: &str, line_start: bool) -> bool {
+    if markup.is_empty() {
+        line_start
+    } else {
+        markup.ends_with(['\n', '\r'])
+    }
 }
 
 /// Byte offset of the character to escape when `line` (with its indentation
@@ -374,14 +419,45 @@ mod tests {
     #[test]
     fn unicode_indentation_cannot_hide_a_line_start_marker() {
         for (line, escaped) in [
-            ("\u{a0}# forged", "\u{a0}\\# forged"),
-            ("\u{2003}> forged", "\u{2003}\\> forged"),
-            ("\u{feff}# forged", "\u{feff}\\# forged"),
+            ("\u{a0}# forged", "\\# forged"),
+            ("\u{2003}> forged", "\\> forged"),
+            ("\u{feff}# forged", "\\# forged"),
             ("#\u{a0}forged", "\\#\u{a0}forged"),
             ("-\u{3000}item", "\\-\u{3000}item"),
         ] {
             assert_eq!(escape_text(line, TextContext::Inline), escaped, "{line:?}");
         }
+    }
+
+    #[test]
+    fn line_start_indentation_cannot_open_a_code_block() {
+        assert_eq!(
+            escape_text(
+                "    Cost: 1\n\tTab\r\n  \u{a0}x\r    y",
+                TextContext::Inline
+            ),
+            "Cost\\: 1\nTab\r\nx\ry"
+        );
+        // Cells and headings are inline-only: nothing is dropped there.
+        assert_eq!(escape_text("    a", TextContext::TableCell), "    a");
+
+        // Fragments: indentation in its own run before the line's first
+        // character is dropped; whitespace between runs in mid-line is kept.
+        let mut line_start = true;
+        let pieces: Vec<String> = ["  ", "\t ", "Cost", " ", "x", "  \n", "    ", "y"]
+            .iter()
+            .map(|piece| escape_fragment(piece, TextContext::Inline, &mut line_start))
+            .collect();
+        assert_eq!(pieces.concat(), "Cost x  \ny");
+        assert!(!line_start);
+        let mut line_start = false;
+        assert_eq!(
+            escape_fragment("  mid", TextContext::Inline, &mut line_start),
+            "  mid"
+        );
+        assert!(line_start_after_markup("  \n", false));
+        assert!(!line_start_after_markup("**", true));
+        assert!(line_start_after_markup("", true));
     }
 
     #[test]
@@ -401,7 +477,7 @@ mod tests {
         for (line, escaped) in [
             ("# forged", r"\# forged"),
             ("###", r"\###"),
-            ("  > quote", r"  \> quote"),
+            ("  > quote", r"\> quote"),
             (">quote", r"\>quote"),
             ("- item", r"\- item"),
             ("---", r"\---"),
