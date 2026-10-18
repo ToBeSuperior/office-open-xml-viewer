@@ -47,7 +47,6 @@ import {
   type WorkerSvgDecodeResponse,
 } from '@silurus/ooxml-core/worker';
 import { workerRenderDeps } from './worker-render-deps.js';
-import { CfDiagnosticCollector } from './cf-diagnostics.js';
 import { XLSX_GOOGLE_FONTS, xlsxFontPreloadNames, xlsxOfficeFontRequests, xlsxWorksheetOfficeFontRequests } from './google-fonts.js';
 import { officeRequestKey } from './shape-office-line.js';
 import { resolveSharedStringRows } from './shared-strings.js';
@@ -451,8 +450,6 @@ self.onmessage = async (e: MessageEvent<
       // The orchestrator resizes it. A caller-transferred surface keeps the
       // caller's inherited canvas language; a request without one keeps a
       // local surface.
-      // One collector per render request; never cached on a worksheet.
-      const cfDiagnostics = new CfDiagnosticCollector();
       const canvas = req.canvas ?? new OffscreenCanvas(1, 1);
       await renderWorksheetViewport(
         { ...workerRenderDeps(renderWorksheet, workbook.styles, renderers), cjkFallback },
@@ -465,15 +462,11 @@ self.onmessage = async (e: MessageEvent<
         // invalidate it on first use.
         { ...renderOpts, authoritativeMdw: req.layoutMetrics?.maximumDigitWidth
           ?? workbook?.layoutMetrics?.maximumDigitWidth,
-          officeFontRoutes, googleSubstitutes, fetchImage: getImage, cfDiagnostics },
+          officeFontRoutes, googleSubstitutes, fetchImage: getImage },
         svgDecodeClient.decode,
       );
       const bitmap = canvas.transferToImageBitmap();
-      postOwnedImageBitmap(post, {
-        type: 'viewportRendered', id, bitmap,
-        // Per-response batch for this frame only (plain data; structured clone).
-        conditionalFormatting: cfDiagnostics.snapshot(),
-      });
+      postOwnedImageBitmap(post, { type: 'viewportRendered', id, bitmap });
       return;
     }
     if (req.type === 'extractImage') {
