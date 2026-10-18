@@ -560,14 +560,28 @@ export function axisLabelPx(sizeHpt: number | null | undefined, h: number, ptToP
 
 
 /** Wrap text against the active canvas font without discarding characters.
- * Words are kept intact when possible; a single over-wide token is split at
- * measured character boundaries. Used by chart families whose category-label
- * band is an input to plot layout. */
+ * Authored line breaks (e.g. a category cell "FY2024\n1Q") always start a new
+ * line, as PowerPoint and Excel draw them; within each line, words are kept
+ * intact when possible and a single over-wide token is split at measured
+ * character boundaries. Leading and trailing breaks are trimmed like other
+ * outer whitespace. Used by chart families whose category-label band is an
+ * input to plot layout. */
 export function wrapMeasuredText(
   ctx: CanvasRenderingContext2D,
   text: string,
   maxWidth: number,
   singleTokenOverhangPx = 0,
+): string[] {
+  const paragraphs = text.trim().split(/\r\n|\r|\n/);
+  if (paragraphs.length === 1) return wrapMeasuredLine(ctx, paragraphs[0], maxWidth, singleTokenOverhangPx);
+  return paragraphs.flatMap(paragraph => wrapMeasuredLine(ctx, paragraph, maxWidth, singleTokenOverhangPx));
+}
+
+function wrapMeasuredLine(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  maxWidth: number,
+  singleTokenOverhangPx: number,
 ): string[] {
   const words = text.trim().split(/\s+/).filter(Boolean);
   if (words.length === 0) return [''];
