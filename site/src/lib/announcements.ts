@@ -51,11 +51,11 @@ export const announcements: readonly Announcement[] = [
         ],
         bullets: [
           'Lay out DOCX text from the installed face that actually paints, with Windows Word line, spacing, grid and table placement rules.',
-          'Render the full CT_Blip picture-effect chain, path gradients and preset patterns across DOCX, XLSX and PPTX.',
+          'Render the full `CT_Blip` picture-effect chain, path gradients and preset patterns across DOCX, XLSX and PPTX.',
           'Bring PowerPoint text, Excel cells and ChartEx charts closer to their Office hosts.',
           'Paint the first XLSX viewport before the worksheet finishes loading, restore PPTX first-display speed and keep DOCX main-mode layout responsive.',
           'Bound parser amplification, fail closed on resource budgets and stop document text from injecting Markdown links, HTML or shell commands.',
-          'Optionally preview a supported subset of .doc, .xls and .ppt files through the experimental @silurus/ooxml-legacy-office add-on.',
+          'Optionally preview a supported subset of .doc, .xls and .ppt files through the experimental `@silurus/ooxml-legacy-office` add-on.',
         ],
       },
       {
@@ -74,7 +74,7 @@ export const announcements: readonly Announcement[] = [
         modules: ['DOCX', 'XLSX', 'PPTX'],
         paragraphs: [
           'Pictures render their complete DrawingML effect chain: colour changes, duotone, luminance, tints, blur, glow, shadows, soft edges, reflection, fill overlays and blend containers. Rectangular and outline path gradients, preset patterns with Office cell phase, WMF clipping and LZW TIFF strips are drawn as authored, and DrawingML line ends are sized like Office.',
-          'A picture-effect chain that is malformed or cannot be represented now raises OoxmlError(\'unsupported-image-effect\') instead of silently drawing a different image.',
+          'A picture-effect chain that is malformed or cannot be represented now raises `OoxmlError(\'unsupported-image-effect\')` instead of silently drawing a different image.',
         ],
       },
       {
@@ -82,7 +82,7 @@ export const announcements: readonly Announcement[] = [
         modules: ['PPTX', 'XLSX', 'Charts'],
         paragraphs: [
           'PowerPoint text follows the list-style chain for faces and sizes, built-in and per-level paragraph spacing, font alignment, compatible line spacing, per-language East Asian and complex-script theme fonts, and stacked vertical WordArt. Table style fallbacks, theme overrides and equation fallbacks also match PowerPoint more closely.',
-          'Excel derives column widths from the workbook\'s first font, applies table and PivotTable style font colours as Excel does, formats time-only and fractional-second formats, keeps cached TODAY() and NOW() values and renders one-cell-anchored pictures. The viewer gains a sheet list popover from the tab navigation, whole-row and whole-column selection outlines, and resizing of several selected bands at once.',
+          'Excel derives column widths from the workbook\'s first font, applies table and PivotTable style font colours as Excel does, formats time-only and fractional-second formats, keeps cached `TODAY()` and `NOW()` values and renders one-cell-anchored pictures. The viewer gains a sheet list popover from the tab navigation, whole-row and whole-column selection outlines, and resizing of several selected bands at once.',
           'Box-and-whisker, histogram and Pareto ChartEx charts follow Office aggregation, binning and paint order, and date and time axis labels use the worksheet number formatter.',
         ],
       },
@@ -96,14 +96,14 @@ export const announcements: readonly Announcement[] = [
         title: 'Hardening against hostile input',
         paragraphs: [
           'Parsers bound style-chain, field-stack, theme-style, column-style and input-sized allocations, and parser and image budgets fail closed with messages that name the resource and stage. Markdown projections escape document text, so documents can no longer inject links, HTML or shell commands. The MCP server confines file access to its configured path scope, the VS Code extension limits its webview resource roots, and the zip dependency was upgraded for published Rust advisories.',
-          'Non-OOXML input raises OoxmlError(\'not-ooxml\'), and a DOCX numbering level that Word cannot open raises OoxmlError(\'invalid-numbering\').',
+          'Non-OOXML input raises `OoxmlError(\'not-ooxml\')`, and a DOCX numbering level that Word cannot open raises `OoxmlError(\'invalid-numbering\')`.',
         ],
       },
       {
         title: 'Experimental legacy Office reading, as an optional add-on',
         modules: ['@silurus/ooxml-legacy-office'],
         paragraphs: [
-          'The experimental @silurus/ooxml-legacy-office add-on opens supported binary Word, Excel and PowerPoint files in the same viewers used for DOCX, XLSX and PPTX. It reads directly into the existing models without generating an intermediate OOXML package, keeps legacy readers outside ordinary OOXML imports, and rejects unsupported input instead of displaying a partial document. Try experimental legacy previews locally in Try Yours, without uploading a file.',
+          'The experimental `@silurus/ooxml-legacy-office` add-on opens supported binary Word, Excel and PowerPoint files in the same viewers used for DOCX, XLSX and PPTX. It reads directly into the existing models without generating an intermediate OOXML package, keeps legacy readers outside ordinary OOXML imports, and rejects unsupported input instead of displaying a partial document. Try experimental legacy previews locally in Try Yours, without uploading a file.',
         ],
       },
       {
@@ -111,7 +111,7 @@ export const announcements: readonly Announcement[] = [
         modules: ['@silurus/ooxml-legacy-office/doc', '@silurus/ooxml-legacy-office/xls', '@silurus/ooxml-legacy-office/ppt'],
         rationale: 'A separate package lets applications choose legacy previews without adding binary readers to ordinary OOXML viewing.',
         paragraphs: [
-          'Install @silurus/ooxml and @silurus/ooxml-legacy-office together; their versions must match exactly. Pass legacyDocSource(), legacyXlsSource() or legacyPptSource() to the matching viewer or Node session through modelSources. Each factory creates a source without fetching its reader.',
+          'Install `@silurus/ooxml` and `@silurus/ooxml-legacy-office` together; their versions must match exactly. Pass `legacyDocSource()`, `legacyXlsSource()` or `legacyPptSource()` to the matching viewer or Node session through `modelSources`. Each factory creates a source without fetching its reader.',
         ],
         examples: [
           {
@@ -135,9 +135,9 @@ await viewer.load(await file.arrayBuffer());`,
         title: 'Upgrading',
         paragraphs: [
           'No migration is required. Existing imports, options and loading calls keep working without code changes.',
-          'If your application inspects OoxmlError.code, four new codes can now appear: not-ooxml for files that are not Office documents, unsupported-image-effect for picture effects that cannot be drawn, invalid-numbering for Word numbering that Word itself cannot open, and unsupported-content for files the legacy add-on cannot read. Show them like any other load error.',
-          'Two optional settings are new. xlsxWorksheetLimits changes the worksheet size limits for one load, and XlsxSheetViewer\'s minRows, minCols, marginRows and marginCols set the minimum grid size and the blank rows and columns shown after the content.',
-          'To try the legacy add-on, install @silurus/ooxml-legacy-office at exactly the same version as @silurus/ooxml, configure only the sources you need, and upgrade both packages together from then on.',
+          'If your application inspects `OoxmlError.code`, four new codes can now appear: `not-ooxml` for files that are not Office documents, `unsupported-image-effect` for picture effects that cannot be drawn, `invalid-numbering` for Word numbering that Word itself cannot open, and `unsupported-content` for files the legacy add-on cannot read. Show them like any other load error.',
+          'Two optional settings are new. `xlsxWorksheetLimits` changes the worksheet size limits for one load, and `XlsxSheetViewer` options `minRows`, `minCols`, `marginRows` and `marginCols` set the minimum grid size and the blank rows and columns shown after the content.',
+          'To try the legacy add-on, install `@silurus/ooxml-legacy-office` at exactly the same version as `@silurus/ooxml`, configure only the sources you need, and upgrade both packages together from then on.',
           'See the Legacy Office files guide for browser and Node examples, deployment assets, support boundaries and failure handling.',
         ],
       },
@@ -1349,6 +1349,21 @@ const viewer = new DocxViewer(canvas, {
 ];
 
 export const latestAnnouncements = announcements.slice(0, 3);
+
+export interface InlineSegment {
+  readonly text: string;
+  readonly code: boolean;
+}
+
+/** Split announcement prose on backticks: `name` renders as inline code. An
+ *  unpaired trailing backtick stays literal text. */
+export function inlineSegments(value: string): InlineSegment[] {
+  const parts = value.split('`');
+  if (parts.length % 2 === 0) parts[parts.length - 2] += '`' + parts.pop();
+  return parts
+    .map((text, index) => ({ text, code: index % 2 === 1 }))
+    .filter(({ text, code }) => code || text.length > 0);
+}
 
 export function formatAnnouncementDate(value: string): string {
   return new Intl.DateTimeFormat('en', {
