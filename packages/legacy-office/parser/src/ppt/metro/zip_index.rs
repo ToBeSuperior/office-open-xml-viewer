@@ -143,17 +143,29 @@ fn policy(blob: &[u8], work_budget: &mut usize) -> Result<Policy, String> {
     let archive_offset = (start as u64)
         .checked_sub(relative_offset)
         .ok_or_else(unreadable)?;
+    let zip64_records: Vec<usize> = zip64_at
+        .into_iter()
+        .chain(eocd.checked_sub(20).filter(|_| zip64_at.is_some()))
+        .collect();
     Ok(Policy {
-        eocd,
-        zip64: zip64_at,
+        view: ooxml_common::zip::IndexView::for_validated_directory(
+            blob,
+            start,
+            eocd,
+            &zip64_records,
+        ),
         archive_offset,
+        entries: count,
     })
 }
 
 struct Policy {
-    eocd: usize,
-    zip64: Option<usize>,
+    /// The validated footer and directory, as the ZIP reader may see them
+    /// while indexing (shared `ooxml_common::zip::IndexView` rules).
+    view: ooxml_common::zip::IndexView,
     archive_offset: u64,
+    /// The number of directory records the preflight validated.
+    entries: usize,
 }
 
 /// zip 2.x retries earlier footer signatures after an index error. Block that
@@ -168,22 +180,18 @@ pub(super) struct IndexReader<'a> {
 
 impl std::io::Read for IndexReader<'_> {
     fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
-        let at = self.cursor.position() as usize;
-        if self.state.get() != IndexState::Ready {
-            let signature = self.cursor.get_ref().get(at..at.saturating_add(4));
-            // zip 2.x reads these fixed APPNOTE blocks with read_exact before
-            // using their count/record-size fields. Do not reject incidental
-            // signature bytes in the finder's bulk scan (e.g. an SFX stub).
-            if (output.len() == 22 && signature == Some(b"PK\x05\x06") && at != self.policy.eocd)
-                || (output.len() == 56
-                    && signature == Some(b"PK\x06\x06")
-                    && Some(at) != self.policy.zip64)
-            {
-                self.state.set(IndexState::DifferentFooter);
-                return Err(std::io::Error::other("unvalidated ZIP footer"));
-            }
+        if self.state.get() == IndexState::Ready {
+            return std::io::Read::read(&mut self.cursor, output);
         }
-        std::io::Read::read(&mut self.cursor, output)
+        let at = self.cursor.position() as usize;
+        let count = self
+            .policy
+            .view
+            .read(self.cursor.get_ref(), at, output)
+            .inspect_err(|_| self.state.set(IndexState::DifferentFooter))?;
+        self.cursor
+            .set_position((at.min(self.cursor.get_ref().len()) + count) as u64);
+        Ok(count)
     }
 }
 
@@ -207,6 +215,7 @@ pub(super) fn open<'a>(
     work_budget: &mut usize,
 ) -> Result<zip::ZipArchive<IndexReader<'a>>, String> {
     let policy = policy(blob, work_budget)?;
+    let expected_entries = policy.entries;
     let config = zip::read::Config {
         archive_offset: zip::read::ArchiveOffset::Known(policy.archive_offset),
     };
@@ -218,9 +227,45 @@ pub(super) fn open<'a>(
     };
     let unreadable = || unsupported("unreadable PowerPoint alternative shape XML package");
     let archive = zip::ZipArchive::with_config(config, reader).map_err(|_| unreadable())?;
-    if state.get() == IndexState::DifferentFooter {
+    // The index must be exactly the validated directory.
+    if state.get() == IndexState::DifferentFooter || archive.len() != expected_entries {
         return Err(unreadable());
     }
     state.set(IndexState::Ready);
     Ok(archive)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn repeated_unicode_path_fields_are_opaque_metadata() {
+        use std::io::Write;
+        let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        writer
+            .start_file("a.xml", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        writer.write_all(b"a").unwrap();
+        let zip = writer.finish().unwrap().into_inner();
+        let field = crate::opc_part::test_unicode_path_field("a.xml");
+        let once = crate::opc_part::test_with_central_extra(&zip, &field);
+        assert!(super::open(&once, &mut 1_000).is_ok());
+        let twice =
+            crate::opc_part::test_with_central_extra(&zip, &[field.clone(), field].concat());
+        // Unicode metadata is opaque to the index (OPC names are raw ASCII).
+        assert!(super::open(&twice, &mut 1_000).is_ok());
+    }
+
+    #[test]
+    fn eocd_signature_bytes_in_the_comment_are_inert() {
+        use std::io::Write;
+        let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        writer
+            .start_file("a.xml", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        writer.write_all(b"a").unwrap();
+        writer.set_comment("decoy PK\u{5}\u{6} record").unwrap();
+        let zip = writer.finish().unwrap().into_inner();
+        // Inert comment bytes are not a footer (OPC Annex B.2 allows comments).
+        assert!(super::open(&zip, &mut 1_000).is_ok());
+    }
 }

@@ -208,7 +208,7 @@ fn read_master_theme(
 fn open_part<'a, R: std::io::Read + std::io::Seek>(
     archive: &'a mut zip::ZipArchive<R>,
     name: &str,
-) -> Result<crate::opc_part::Entry<'a>, String> {
+) -> Result<crate::opc_part::Entry<'a, R>, String> {
     let index = crate::opc_part::entry_index(archive, name)
         .ok_or_else(|| unsupported("unreadable PowerPoint embedded part"))?;
     crate::opc_part::Entry::open(archive, index)
@@ -220,8 +220,15 @@ fn theme_part(
     work_budget: &mut usize,
 ) -> Result<String, String> {
     let unreadable = || unsupported("unreadable PowerPoint round-trip theme");
-    let mut archive =
-        zip::ZipArchive::new(std::io::Cursor::new(package)).map_err(|_| unreadable())?;
+    // The budgeted footer/index preflight opens at the validated archive
+    // offset, so the ZIP reader never scans the payload for signatures.
+    let mut archive = zip_index::open(package, work_budget).map_err(|error| {
+        if error.starts_with("UNSUPPORTED:") {
+            unreadable()
+        } else {
+            error
+        }
+    })?;
     if archive.len() > MAX_THEME_ENTRIES {
         return Err(crate::rejection::resource(
             "PowerPoint theme ZIP entry budget exceeded",
@@ -4021,7 +4028,7 @@ mod tests {
         }
 
         #[test]
-        fn a_footer_in_the_comment_cannot_bypass_the_index_reservation() {
+        fn a_footer_in_the_comment_is_never_seen_by_the_index() {
             let mut bytes = empty_package(2);
             let footer = bytes.len() - 22;
             bytes[footer + 20..footer + 22].copy_from_slice(&23u16.to_le_bytes());
@@ -4029,13 +4036,12 @@ mod tests {
             fake[..4].copy_from_slice(b"PK\x05\x06");
             fake[8..12].copy_from_slice(&[0xfe, 0xff, 0xfe, 0xff]);
             bytes.extend_from_slice(&fake);
-            // The dependency accepts trailing bytes after an EOCD comment and
-            // would try this later footer first. Only the reserved footer may
-            // reach its allocator, and ambiguous selection must fail closed.
-            error(
-                measure_inflation(&bytes, &mut usize::MAX.clone(), &mut 0),
-                "UNSUPPORTED:",
-            );
+            // The dependency would try this later footer first, but while it
+            // indexes, the comment reads as zero (shared IndexView): only the
+            // reserved footer reaches its allocator, and the inert comment
+            // bytes do not reject the package (OPC Annex B.2).
+            measure_inflation(&bytes, &mut usize::MAX.clone(), &mut 0)
+                .expect("only the reserved footer is indexed");
         }
 
         #[test]

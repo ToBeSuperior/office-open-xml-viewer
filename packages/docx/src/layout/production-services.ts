@@ -12,7 +12,7 @@ import { DOCX_GOOGLE_FONTS } from '../google-font-registry.js';
 import type { LoadedEmbeddedFontRoute } from '../embedded-fonts.js';
 import { normalizeFontFamilyUncached } from '../line-layout.js';
 import type { LayoutSourceStore } from './layout-source-store.js';
-import { createFontResolver, type FontInventoryFace } from './font-service.js';
+import { createFontResolver, type FontInventoryFace, type NativeRouteLineMetric } from './font-service.js';
 import type {
   MeasurementTextContext,
   VerticalGlyphMeasurementService,
@@ -33,6 +33,7 @@ import {
   createTextLayoutService,
   snapshotFontMetrics,
   type GlyphMeasureRequest,
+  type TextLayoutService,
 } from './text.js';
 import type { LayoutServices } from './types.js';
 import { ownsGlyphs, sameGlyphRaster } from '../glyph-raster-proof.js';
@@ -66,6 +67,8 @@ export interface ProductionLayoutServiceOptions {
   readonly installedSubstituteFamilies?: readonly string[];
   /** Normalized authored families the family presence probe found installed. */
   readonly installedFamilies?: readonly string[];
+  /** Admitted native route lines (native-route-line-metrics.ts). */
+  readonly nativeRouteMetrics?: Readonly<Record<string, NativeRouteLineMetric>>;
 }
 
 /** Registry families with a script-scoped visual substitute (core
@@ -88,10 +91,13 @@ function docxScriptScopedFamilies(
     }]));
 }
 
-export function createProductionLayoutServices(
+/** The production text service alone: font inventory, resolver and Canvas
+ * measurer. Native route enumeration resolves through this same service, so
+ * the routes it measures are exactly the routes layout requests. */
+export function createProductionTextLayoutService(
   source: LayoutSourceStore,
-  options: ProductionLayoutServiceOptions,
-): LayoutServices {
+  options: Omit<ProductionLayoutServiceOptions, 'verticalGlyphMeasurement'>,
+): TextLayoutService {
   const fontFamilyCharsets = Object.freeze(Object.fromEntries(
     Object.entries(source.fontFamilyCharsets)
       .map(([family, charset]) => [family.trim().toLowerCase(), charset]),
@@ -248,7 +254,7 @@ export function createProductionLayoutServices(
       }
     }
   }
-  const text = createTextLayoutService({
+  return createTextLayoutService({
     ...(context ? { glyphContours: acquireCanvasGlyphContours, glyphContourFingerprint: 'canvas-half-coverage-contours-v1' } : {}),
     fonts: createFontResolver(inventory, {
       installedFamilies: options.installedFamilies,
@@ -263,6 +269,7 @@ export function createProductionLayoutServices(
       scriptScopedFamilies: options.useGoogleFonts
         ? docxScriptScopedFamilies(options.installedSubstituteFamilies ?? [])
         : undefined,
+      nativeRouteMetrics: options.nativeRouteMetrics,
       nativeFamilyLists: Object.fromEntries(routedFontFamilies.map((family) => [
         family,
         normalizeFontFamilyUncached(
@@ -338,6 +345,13 @@ export function createProductionLayoutServices(
       },
     },
   });
+}
+
+export function createProductionLayoutServices(
+  source: LayoutSourceStore,
+  options: ProductionLayoutServiceOptions,
+): LayoutServices {
+  const text = createProductionTextLayoutService(source, options);
   const mathResources = options.mathResources ?? source.mathOccurrences.map(({ display, source: occurrenceSource }) => ({
     resourceKey: mathResourceKey(occurrenceSource, display ? 'display' : 'inline'),
     widthEm: 0,

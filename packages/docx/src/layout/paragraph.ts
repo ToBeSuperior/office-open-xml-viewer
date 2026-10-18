@@ -5,7 +5,7 @@ import { shadowInkBounds } from './vml-shadow.js';
 import { createParagraphAnchorReferenceWorkBudget } from './resource-budgets.js';
 import { addExactRational, exactRationalFromNumber, exactRationalToNumberUp } from './exact-geometry.js';
 import { revisionIsOmitted } from './revision-visibility.js';
-import { wordArabicTextKerned, wordKerningApplies } from './line-compatibility.js';
+import { wordArabicTextKerned, wordEastAsianAutoSpaceJustifiedMaximumPt, wordKerningApplies } from './line-compatibility.js';
 import type { LineGapPlan } from '../line-breaker/line-gaps.js';
 import { distributeLineSlack as distributeProportionalSlack } from '@silurus/ooxml-core';
 import { specifiedTextLineMetrics, specifiedTextParagraphIsHomogeneous } from './specified-line-spacing.js';
@@ -227,6 +227,10 @@ export type MeasuredTextPlanSegment = Readonly<
      * so application overlays can use the same character-height rectangle. */
     selectedFaceFontBox?: Readonly<{ ascentPt: number; descentPt: number }>;
     retainedGeometry?: RetainedTextGeometryPlan;
+    /** WORD_EAST_ASIAN_AUTO_SPACE gap before this segment's first glyph:
+     * the applied advance (already in `measuredWidthPt`) and its natural
+     * quarter em. Justification widens it first (see justifiedAutoSpaceExpansion). */
+    autoSpace?: Readonly<{ appliedPt: number; naturalPt: number }>;
   }
 >;
 
@@ -736,6 +740,57 @@ function coalesceAdjacentDecorations(placements: ParagraphPlacement[]): void {
   });
 }
 
+/** WORD_EAST_ASIAN_AUTO_SPACE under justification: positive slack first
+ * widens every automatic gap on the line, in proportion to its remaining
+ * room, up to half an em (twice its natural quarter em); only the rest reaches
+ * the ordinary opportunities. Each widening is owned by the segment before
+ * the gap as a trailing advance, exactly like an ordinary boundary gap. */
+function justifiedAutoSpaceExpansion(
+  segments: readonly MeasuredLinePlanSegment[],
+  slackPt: number,
+): Readonly<{ takenPt: number; trailingByIndex: ReadonlyMap<number, number> }> | undefined {
+  if (!(slackPt > 0)) return undefined;
+  const rooms: Array<[number, number]> = [];
+  let totalRoomPt = 0;
+  segments.forEach((segment, index) => {
+    if (index === 0 || segment.kind !== 'text' || !segment.autoSpace) return;
+    const roomPt = wordEastAsianAutoSpaceJustifiedMaximumPt(segment.autoSpace.naturalPt)
+      - segment.autoSpace.appliedPt;
+    if (!(roomPt > 0)) return;
+    rooms.push([index - 1, roomPt]);
+    totalRoomPt += roomPt;
+  });
+  if (!(totalRoomPt > 0)) return undefined;
+  const takenPt = Math.min(slackPt, totalRoomPt);
+  const trailingByIndex = new Map<number, number>();
+  for (const [index, roomPt] of rooms) {
+    trailingByIndex.set(index, (trailingByIndex.get(index) ?? 0) + takenPt * roomPt / totalRoomPt);
+  }
+  return { takenPt, trailingByIndex };
+}
+
+/** Merge {@link justifiedAutoSpaceExpansion} into a slack distribution. */
+function withAutoSpaceExpansion(
+  stretches: ReadonlyMap<number, SegStretch> | null,
+  perGapPt: number,
+  expansion: ReturnType<typeof justifiedAutoSpaceExpansion>,
+): ReadonlyMap<number, SegStretch> | null {
+  if (!expansion) return stretches;
+  const merged = new Map(stretches ?? []);
+  for (const [index, deltaPt] of expansion.trailingByIndex) {
+    const stretch = merged.get(index);
+    const ordinaryPt = stretch?.trailingGap ? stretch.trailingDelta ?? perGapPt : 0;
+    merged.set(index, {
+      splitBefore: stretch?.splitBefore ?? [],
+      internalStretch: stretch?.internalStretch ?? 0,
+      ...(stretch?.gapDeltas ? { gapDeltas: stretch.gapDeltas } : {}),
+      trailingGap: true,
+      trailingDelta: ordinaryPt + deltaPt,
+    });
+  }
+  return merged;
+}
+
 /** Converts a measured line snapshot into final point-space visual geometry.
  * Bidi order, alignment, compression, justification, and tab advances are
  * resolved here; paint consumes the resulting placements without source access. */
@@ -822,13 +877,22 @@ export function planLine(input: PlanLineInput): LineLayout {
     if (applyJustify || line.justifiedCompressionPt > 0) {
       // Opportunities and measured advances belong to the breaker. No text or
       // width reconstruction may change its accepted line in retained planning.
+      const autoSpace = applyJustify ? justifiedAutoSpaceExpansion(segments, lineSlackPt) : undefined;
+      const autoSpaceTakenPt = autoSpace?.takenPt ?? 0;
+      // A compressed line shrinks by its accepted overflow only; content
+      // forced onto it afterwards overflows the band.
+      const compressionSlackPt = line.justifiedCompressionPt > 0
+        && lineSlackPt < -line.justifiedCompressionPt - 1e-6
+        ? -line.justifiedCompressionPt
+        : lineSlackPt;
       const distribution = keepGraphemeSafeCuts(distributeProportionalSlack(
-        [], lineSlackPt, {
+        [], compressionSlackPt - autoSpaceTakenPt, {
           gapModel: { gaps: model.gaps, state: model.scan },
           proportional: true,
           unweightedExpansion: {
             gaps: model.expansionGaps,
-            slack: effectiveAvailableWidthPt - physicalStartOffsetPt - retainedNaturalWidthPt,
+            slack: effectiveAvailableWidthPt - physicalStartOffsetPt - retainedNaturalWidthPt
+              - autoSpaceTakenPt,
           },
         },
       ), segments);
@@ -836,25 +900,28 @@ export function planLine(input: PlanLineInput): LineLayout {
         naturalWidthPt = retainedNaturalWidthPt;
         lineSlackPt = effectiveAvailableWidthPt - physicalStartOffsetPt - naturalWidthPt;
       }
-      stretchByIndex = distribution?.perSeg ?? null;
       perGapPt = distribution?.perGap ?? 0;
-      distributedWidthPt = distributedDelta(distribution);
+      stretchByIndex = withAutoSpaceExpansion(distribution?.perSeg ?? null, perGapPt, autoSpace);
+      distributedWidthPt = distributedDelta(distribution) + autoSpaceTakenPt;
       if (line.justifiedCompressionPt > 0
         && Math.abs(distributedWidthPt + line.justifiedCompressionPt) > 1e-7) {
         throw new Error(`Justified fit and retained paint disagree: delta=${distributedWidthPt}, C=${line.justifiedCompressionPt}, slack=${lineSlackPt}, visible=${model.visibleWidthPx}, end=${model.lineEndSeparatorPx}`);
       }
     }
   } else if (applyJustify) {
+    const autoSpace = justifiedAutoSpaceExpansion(segments, lineSlackPt);
+    const autoSpaceTakenPt = autoSpace?.takenPt ?? 0;
+    const residualSlackPt = lineSlackPt - autoSpaceTakenPt;
     const distribution = keepGraphemeSafeCuts(distributeLineSlack(
-      distSegments, lineSlackPt, firstContentIndex,
+      distSegments, residualSlackPt, firstContentIndex,
       bidi ? lastDrawnIndex : segments.length,
       -(line.baselinePt - line.topPt) * .25,
-      lineSlackPt > 0,
-      input.alignment === 'thaiDistribute' && lineSlackPt > 0,
+      residualSlackPt > 0,
+      input.alignment === 'thaiDistribute' && residualSlackPt > 0,
     ), segments);
-    stretchByIndex = distribution?.perSeg ?? null;
     perGapPt = distribution?.perGap ?? 0;
-    distributedWidthPt = distributedDelta(distribution);
+    stretchByIndex = withAutoSpaceExpansion(distribution?.perSeg ?? null, perGapPt, autoSpace);
+    distributedWidthPt = distributedDelta(distribution) + autoSpaceTakenPt;
   }
 
   const drawnWidthPt = naturalWidthPt + distributedWidthPt;
@@ -965,6 +1032,7 @@ export function planLine(input: PlanLineInput): LineLayout {
         decorationTerminalAdvancePt,
         textLayoutService: _textLayoutService,
         textShapeRequest: _textShapeRequest,
+        autoSpace: _autoSpace,
         selectedFaceFontBox,
         retainedGeometry,
         direction: _direction,
@@ -2173,6 +2241,7 @@ function textPlanSegment(
         xPt:
           cluster.offsetPt * scaleX
           + (segment.leadingWordBoundaryPx ?? 0)
+          + (segment.autoSpaceLeadingPx ?? 0)
           + prefixSpacingPt
           + precedingWidthBalanceAdjustment
           + precedingPunctuationCompression,
@@ -2285,6 +2354,8 @@ function textPlanSegment(
     : 1;
   const hasInternalPunctuationCompression = segment.punctuationCompressions
     ?.some((compression) => compression.end < segment.text.length) ?? false;
+  const clusterOriginPaintOps = !segment.verticalRun && !segment.tateChuYoko
+    && hasInternalPunctuationCompression;
   const unpaddedPaintOps = segment.verticalRun
     ? (() => {
         if (!verticalGlyphMeasurement) {
@@ -2432,7 +2503,10 @@ function textPlanSegment(
       ...operation,
       ...(segment.optionalHyphenGlyph ? { range: { start: sourceOffset, end: sourceOffset } } : {}),
       offset: { ...operation.offset,
-        xPt: operation.offset.xPt + (segment.leadingWordBoundaryPx ?? 0) },
+        xPt: operation.offset.xPt + (segment.leadingWordBoundaryPx ?? 0)
+          // Punctuation-compressed groups take their origins from the
+          // clusters, which already hold the automatic East Asian gap.
+          + (clusterOriginPaintOps ? 0 : segment.autoSpaceLeadingPx ?? 0) },
       // Measurement resolves w:spacing, docGrid character pitch, and w:fitText
       // into one authoritative per-scalar pitch. A planned vertical upright or
       // rotate cell already owns that pitch in its retained origin and advance;
@@ -2468,6 +2542,9 @@ function textPlanSegment(
       ? { decorationTerminalAdvancePt: retainedDecorationTerminalAdvancePt }
       : {}),
     ...(retainedGeometry ? { retainedGeometry } : {}),
+    ...(segment.autoSpaceBeforePt !== undefined && (segment.autoSpaceLeadingPx ?? 0) > 0
+      ? { autoSpace: { appliedPt: segment.autoSpaceLeadingPx!, naturalPt: segment.autoSpaceBeforePt } }
+      : {}),
     ...(segment.selectedFaceFontBox ? { selectedFaceFontBox: segment.selectedFaceFontBox } : {}),
     ...(segment.textLayoutService ? { textLayoutService: segment.textLayoutService } : {}),
     ...(segment.textShapeRequest ? { textShapeRequest: segment.textShapeRequest } : {}),

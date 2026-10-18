@@ -131,7 +131,8 @@ export function runLineBreakerPass(input: LineBreakerPassInput): LayoutLine[] {
   // (WORD_IDEOGRAPHIC_SPACE_LINE_END_ALLOWANCE) the observed rule does not
   // define; a paragraph holding U+3000 keeps this compression rule disabled.
   breakerState.mixedSpaceEnabled = segs.some(
-    (segment) => 'text' in segment && segment.mixedSpaceAverageWidthRatio !== undefined,
+    (segment) => 'text' in segment
+      && (segment.mixedSpaceAverageWidthRatio !== undefined || segment.autoSpaceCompressible === true),
   ) && !segs.some((segment) => 'text' in segment && segment.text.includes('\u3000'));
 
   let operationState: PassOperationState;

@@ -1,5 +1,11 @@
 import { prepareDocxHostFontMetrics, type HostFontLineMeasurement } from './host-font-line-metrics.js';
-import { activeFontSet, loadOfficeFontFallbacks } from '@silurus/ooxml-core';
+import {
+  activeFontSet,
+  loadNativeRouteSentinels,
+  loadOfficeFontFallbacks,
+  type NativeRouteNormalLine,
+} from '@silurus/ooxml-core';
+import { admitDocxNativeRouteLines } from './native-route-line-metrics.js';
 import { normalizeDocxParserError } from './internal/parser-errors.js';
 import type { LayoutDiagnostic } from './layout/types.js';
 /**
@@ -40,7 +46,7 @@ import {
   type WorkerSvgDecodeResponse,
 } from '@silurus/ooxml-core/worker';
 import { prepareMathRuns, renderLayoutSourceToCanvas } from './renderer';
-import { createLayoutServices } from './layout-runtime.js';
+import { createLayoutServices, nativeRouteLineRequests } from './layout-runtime.js';
 import { DOCX_GOOGLE_FONTS, docxGoogleFontPlan, docxOfficeFontFallbackRequests } from './google-fonts';
 import { loadEmbeddedFonts } from './embedded-fonts';
 import type {
@@ -164,6 +170,7 @@ function getImage(path: string, mimeType: string): Promise<Blob> {
 }
 
 const hostFontMeasurements = new Map<number, (measurements: HostFontLineMeasurement[]) => void>();
+const nativeRouteMeasurements = new Map<number, (lines: (NativeRouteNormalLine | null)[]) => void>();
 
 self.onmessage = async (e: MessageEvent<RenderWorkerWireRequest | WorkerSvgDecodeResponse>) => {
   const req = e.data;
@@ -193,6 +200,11 @@ self.onmessage = async (e: MessageEvent<RenderWorkerWireRequest | WorkerSvgDecod
     hostFontMeasurements.delete(req.forId);
     return;
   }
+  if (req.type === 'nativeRouteLinesMeasured') {
+    nativeRouteMeasurements.get(req.forId)?.(req.lines);
+    nativeRouteMeasurements.delete(req.forId);
+    return;
+  }
   if (req.type === 'init') {
     host.setWasmInput(decodeDataUrl(req.wasmUrl) ?? req.wasmUrl);
     return;
@@ -209,6 +221,9 @@ self.onmessage = async (e: MessageEvent<RenderWorkerWireRequest | WorkerSvgDecod
       requestedGeneration = ++parseGeneration;
       for (const resolve of hostFontMeasurements.values()) resolve([]);
       hostFontMeasurements.clear();
+      // A superseded parse's measurement reply is discarded by the host.
+      for (const resolve of nativeRouteMeasurements.values()) resolve([]);
+      nativeRouteMeasurements.clear();
       layoutAbort?.abort();
       layoutAbort = null;
       await documentPull.reset();
@@ -280,7 +295,22 @@ self.onmessage = async (e: MessageEvent<RenderWorkerWireRequest | WorkerSvgDecod
         }
       }
       if (requestedGeneration !== parseGeneration) throw new Error('render-worker parse was superseded');
-      if (documentRequiresDomVerticalGlyphLayout(pulledModels.document)) {
+      // Absent authored faces (native-route-line-metrics.ts) are sized from
+      // measurements this realm must re-verify and complete with its own
+      // sentinel registrations. A realm that cannot register them would lay out
+      // differently from main mode, which can; such a document continues on
+      // the main thread instead, exactly like DOM-dependent vertical text.
+      // A realm without any FontFaceSet (a headless host) registers no font
+      // at all, embedded or local, and declines every measured line as main
+      // mode in that host does; it keeps laying out here.
+      const workerFontSet = activeFontSet();
+      const nativeSentinels = workerFontSet ? await loadNativeRouteSentinels(workerFontSet) : [];
+      if (requestedGeneration !== parseGeneration) {
+        if (nativeSentinels) unloadOfficeFontFallbacks(nativeSentinels);
+        throw new Error('render-worker parse was superseded');
+      }
+      if (!nativeSentinels || documentRequiresDomVerticalGlyphLayout(pulledModels.document)) {
+        if (nativeSentinels) unloadOfficeFontFallbacks(nativeSentinels);
         // The normalized public model deliberately omits parser-only sidecars
         // such as unavailable-drawing geometry. Stream the untouched parser
         // model to the main-thread normalization boundary one body block at a
@@ -297,16 +327,27 @@ self.onmessage = async (e: MessageEvent<RenderWorkerWireRequest | WorkerSvgDecod
         post({
           type: 'mainThreadVerticalFallback',
           id,
+          ...(nativeSentinels ? {} : { reason: 'nativeRouteSentinels' as const }),
           ...fallbackIdentity,
           usage: resourceUsage,
           ...(req.source ? { viewDefaults } : {}),
         });
         return;
       }
-      const adapted = layoutSourceModelAdapterFromOwnedModel(
-        pulledModels.document,
-        pulledModels.ownedLayoutDocument,
-      );
+      let adapted: ReturnType<typeof layoutSourceModelAdapterFromOwnedModel>;
+      let nativeRouteRequests: ReturnType<typeof nativeRouteLineRequests>;
+      try {
+        adapted = layoutSourceModelAdapterFromOwnedModel(
+          pulledModels.document,
+          pulledModels.ownedLayoutDocument,
+        );
+        nativeRouteRequests = nativeRouteLineRequests(adapted.source, adapted.document, {
+          useGoogleFonts: !!req.useGoogleFonts, cjkFallback: req.cjkFallback,
+        });
+      } catch (error) {
+        unloadOfficeFontFallbacks(nativeSentinels);
+        throw error;
+      }
       const source = adapted.source;
       const model = adapted.document;
       const requestedReviewIndexInput = {
@@ -317,6 +358,18 @@ self.onmessage = async (e: MessageEvent<RenderWorkerWireRequest | WorkerSvgDecod
       let embeddedFonts: Awaited<ReturnType<typeof loadEmbeddedFonts>> = { faces: [], metrics: {}, routes: [] };
       let officeFaces: FontFace[] = [];
       let fontsTransferred = false;
+      // Absent authored faces (native-route-line-metrics.ts): this realm has no
+      // DOM, so the owning document measures the native routes. Their lists do
+      // not depend on loaded resources, so the request leaves now and the
+      // document measures while this realm loads fonts; this realm loads its
+      // own sentinels to re-verify each measurement and to judge glyph
+      // ownership during layout.
+      const pendingNativeRouteLines = nativeRouteRequests.length > 0
+        ? new Promise<(NativeRouteNormalLine | null)[]>(resolve => {
+            nativeRouteMeasurements.set(id, resolve);
+            post({ type: 'measureNativeRouteLines', forId: id, requests: nativeRouteRequests });
+          })
+        : Promise.resolve([]);
       try {
         // ECMA-376 §17.8.1 / §17.8.3 — register embedded fonts into the worker's
         // FontFaceSet (self.fonts) before pagination measures text. Bytes are read
@@ -357,7 +410,7 @@ self.onmessage = async (e: MessageEvent<RenderWorkerWireRequest | WorkerSvgDecod
           ? await prepareMathRuns(model, requestedRenderers.math)
           : undefined;
         if (requestedGeneration !== parseGeneration) throw new Error('render-worker parse was superseded');
-        const layoutServices = createLayoutServices(source, {
+        const serviceOptions = {
           allowFootnoteContinuation: req.allowFootnoteContinuation === true,
           fontMetrics: embeddedFonts.metrics,
           useGoogleFonts: !!req.useGoogleFonts,
@@ -369,7 +422,15 @@ self.onmessage = async (e: MessageEvent<RenderWorkerWireRequest | WorkerSvgDecod
           installedFamilies: officeFonts.installed,
           mathResources: preparedMath?.records,
           mathDrawables: preparedMath?.drawables,
-        });
+        };
+        let nativeRouteMetrics: ReturnType<typeof admitDocxNativeRouteLines> | undefined;
+        const nativeRouteLines = await pendingNativeRouteLines;
+        officeFaces = [...officeFaces, ...nativeSentinels];
+        if (nativeRouteLines.some(Boolean)) {
+          nativeRouteMetrics = admitDocxNativeRouteLines(nativeRouteLines, activeFontSet());
+        }
+        if (requestedGeneration !== parseGeneration) throw new Error('render-worker parse was superseded');
+        const layoutServices = createLayoutServices(source, { ...serviceOptions, nativeRouteMetrics });
         const requestedDoc = retainRenderWorkerDocumentLayout(
           source,
           layoutServices,
@@ -385,6 +446,7 @@ self.onmessage = async (e: MessageEvent<RenderWorkerWireRequest | WorkerSvgDecod
         doc = requestedDoc;
       } finally {
         if (!fontsTransferred) {
+          if (!officeFaces.includes(nativeSentinels[0]!)) unloadOfficeFontFallbacks(nativeSentinels);
           try { unloadOfficeFontFallbacks(officeFaces); } catch {}
           try { unloadGoogleFonts(googleFaces); } catch {}
           try { unregisterEmbeddedFonts(embeddedFonts.faces); } catch {}

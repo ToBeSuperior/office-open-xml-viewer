@@ -17,7 +17,8 @@ import {
   OoxmlResourceMetricsSession,
 } from '@silurus/ooxml-core/worker';
 import { documentHasMath, prepareMathRuns } from '../renderer';
-import { createLayoutServices } from '../layout-runtime.js';
+import { createLayoutServices, prepareMainThreadNativeRouteMetrics } from '../layout-runtime.js';
+import { mainThreadFallbackWarning } from '../main-thread-fallback.js';
 import { DOCX_GOOGLE_FONTS, docxGoogleFontPlan, docxOfficeFontFallbackRequests } from '../google-fonts';
 import { loadEmbeddedFonts } from '../embedded-fonts';
 import {
@@ -55,7 +56,8 @@ type SourceDocxFriend = Pick<DocxDocument, keyof DocxDocument> & Record<
   '_chartEx' | '_tiff' | '_document' | '_embeddedFontFaces' | '_officeFontFaces' |
   '_googleFontFaces' | '_source' | '_layoutObservers' | '_layoutAbort' |
   '_replaceMainLayoutPublication' | '_isLayoutViewActive' | '_layoutLifecycle' |
-  '_layoutCompletion' | '_resourceUsage' | '_progressive' | '_allowFootnoteContinuation',
+  '_layoutCompletion' | '_resourceUsage' | '_progressive' | '_allowFootnoteContinuation' |
+  '_mainThreadFallbackReason',
   any
 >;
 
@@ -183,9 +185,7 @@ export async function loadDocxModelSource(
       );
       if (mode === 'worker' && doc._mode === 'main') {
         metrics.setMode('main');
-        console.warn(
-          "[ooxml] mode: 'worker' fell back to main-thread rendering because this document requires DOM OpenType vertical glyph selection.",
-        );
+        console.warn(mainThreadFallbackWarning(doc._mainThreadFallbackReason));
       }
       if (opts.math && doc._mode === 'worker' && !rendererDescriptors?.math) {
         console.warn(
@@ -274,7 +274,7 @@ export async function loadDocxModelSource(
       if (doc._mode === 'main' && doc._document && doc._source) {
         const layoutDocument = doc;
         const runtime = documentLayoutRuntimeOf(doc);
-        runtime.services = createLayoutServices(doc._source, {
+        const serviceOptions = {
           allowFootnoteContinuation: doc._allowFootnoteContinuation,
           fontMetrics: embeddedMetrics,
           useGoogleFonts: !!opts.useGoogleFonts,
@@ -286,6 +286,21 @@ export async function loadDocxModelSource(
           installedFamilies: 'installed' in officeFonts ? officeFonts.installed : undefined,
           mathResources: preparedMath?.records,
           mathDrawables: preparedMath?.drawables,
+        };
+        // Absent authored faces: see native-route-line-metrics.ts.
+        const nativeRoutes = await prepareMainThreadNativeRouteMetrics(
+          doc._source, doc._document, { useGoogleFonts: !!opts.useGoogleFonts, cjkFallback },
+        );
+        // destroy() may have drained this document's faces while the
+        // sentinels loaded: release a late acquisition before aborting.
+        if (signal?.aborted) {
+          unloadOfficeFontFallbacks(nativeRoutes.faces);
+          throw new PaginationAbortError();
+        }
+        doc._officeFontFaces = [...doc._officeFontFaces, ...nativeRoutes.faces];
+        runtime.services = createLayoutServices(doc._source, {
+          ...serviceOptions,
+          nativeRouteMetrics: nativeRoutes.nativeRouteMetrics,
         });
         const services = runtime.services;
         const retained = retainRenderWorkerDocumentLayout(

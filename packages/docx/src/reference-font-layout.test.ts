@@ -208,7 +208,9 @@ describe('native reference font vertical layout', () => {
   it('sizes an absent authored face from its painting fallback, not the authored catalog', () => {
     // Layout follows the face that paints: with Calibri absent, a native CSS
     // family list paints a browser fallback, so the authored catalog line box
-    // is not admitted and the span keeps that fallback's Canvas box. Pagination
+    // is not admitted and the span keeps that fallback's Canvas box unless the
+    // fallback's measured normal line was admitted for this route (a browser
+    // realm; see native-route-line-metrics.browser.test.ts). Pagination
     // differences from Office caused by the missing face are accepted.
     const layoutServices = services();
     const segment = buildSegments([{

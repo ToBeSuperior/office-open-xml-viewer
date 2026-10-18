@@ -18,7 +18,8 @@ import {
 // fixed cells end Word's line 1pt inside the authored content width (measured
 // by the no-space anchors: wrap at C=85.95, fit at 86.00 for an 85pt natural
 // line) and borderless cells end at the content width; the stub line width is
-// that measured band.
+// that measured band. Cells authored with automatic East Asian spacing on
+// also exercise WORD_EAST_ASIAN_AUTO_SPACE (its gap joins the shrinkable gaps).
 
 function sourceChunks(variant: Variant): string[] {
   if (variant.sourceRuns === 'single') return [variant.text];
@@ -63,11 +64,11 @@ const MODE_14 = { compatibilityMode: 14, characterSpacingControl: 'compressPunct
 describe('WORD_COMPRESSED_SPACE_LINE_FIT controls', () => {
   it('covers every measured cell exactly once', () => {
     expect(VARIANTS.reduce((sum, variant) => sum + variant.widthsTwips.length, 0)).toBe(1773);
-    expect(inScope.reduce((sum, variant) => sum + variant.widthsTwips.length, 0)).toBe(1443);
+    expect(inScope.reduce((sum, variant) => sum + variant.widthsTwips.length, 0)).toBe(1535);
     // Every excluded class names a measured cause outside this rule.
     expect(new Set(VARIANTS.flatMap((variant) => variant.outOfScope
       ? [variant.outOfScope.split(':')[0]] : []))).toEqual(new Set([
-      'autospace', 'kerning', 'punctuation', 'geometry', 'latin-only', 'unexplained',
+      'kerning', 'punctuation', 'geometry', 'latin-only', 'unexplained',
     ]));
   });
 

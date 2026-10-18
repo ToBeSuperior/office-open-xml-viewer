@@ -17,8 +17,8 @@ fn exhausted() -> String {
 /// prefixes, unread entries and buffered but unconsumed input cost no work.
 /// Output/retention budgets remain the caller's responsibility. CRC and size
 /// integrity are checked at EOF, after actual input/output accounting.
-pub(crate) struct Entry<'a> {
-    raw: zip::read::ZipFile<'a>,
+pub(crate) struct Entry<'a, R: Read> {
+    raw: zip::read::ZipFile<'a, R>,
     decoder: Option<flate2::Decompress>,
     buffer: [u8; 8192],
     start: usize,
@@ -28,11 +28,8 @@ pub(crate) struct Entry<'a> {
     finished: bool,
 }
 
-impl<'a> Entry<'a> {
-    pub(crate) fn open<R: Read + std::io::Seek>(
-        archive: &'a mut zip::ZipArchive<R>,
-        index: usize,
-    ) -> Result<Self, String> {
+impl<'a, R: Read + std::io::Seek> Entry<'a, R> {
+    pub(crate) fn open(archive: &'a mut zip::ZipArchive<R>, index: usize) -> Result<Self, String> {
         let raw = archive.by_index_raw(index).map_err(|_| unreadable())?;
         if raw.encrypted() {
             return Err(crate::rejection::encryption(
