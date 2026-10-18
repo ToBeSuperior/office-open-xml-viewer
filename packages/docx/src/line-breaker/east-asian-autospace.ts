@@ -14,6 +14,7 @@ export type EastAsianAutoSpaceClass = 'eastAsian' | 'latinLetter' | 'digit';
 // anything else (Greek, Cyrillic, U+3000, …).
 const EAST_ASIAN_LETTER = /^[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]$/u;
 const LETTER = /^\p{L}$/u;
+const GRAPHEME_EXTENDERS = /^[\p{Grapheme_Extend}\u200D]+$/u;
 const LATIN_LETTER = /^\p{Script=Latin}$/u;
 
 export function eastAsianAutoSpaceClass(character: string): EastAsianAutoSpaceClass | undefined {
@@ -109,23 +110,34 @@ export function assignEastAsianAutoSpace(
       eastAsianAutoSpaceClass(left), eastAsianAutoSpaceClass(right),
       environment.autoSpaceDE, environment.autoSpaceDN,
     );
+  // One linear pass; the array is rewritten once only when a seam was added.
+  let split: LayoutSeg[] | undefined;
   for (let index = 0; index < segs.length; index += 1) {
     const segment = segs[index]!;
-    if (!('text' in segment) || !participates(segment) || segment.seaBreaks !== undefined
-      || segment.text.length === 0) continue;
     const splits: number[] = [];
-    let before: string | undefined;
-    for (const cursor of [0, ...graphemeClusterOffsets(segment.text)]) {
-      const base = String.fromCodePoint(segment.text.codePointAt(cursor)!);
-      if (cursor > 0 && applies(before, base)) splits.push(cursor);
-      before = base;
+    if ('text' in segment && participates(segment) && segment.seaBreaks === undefined
+      && segment.text.length > 0) {
+      let before: string | undefined;
+      for (const cursor of [0, ...graphemeClusterOffsets(segment.text)]) {
+        const base = String.fromCodePoint(segment.text.codePointAt(cursor)!);
+        if (cursor > 0 && applies(before, base)) splits.push(cursor);
+        before = base;
+      }
     }
-    if (splits.length === 0) continue;
-    const bounds = [0, ...splits, segment.text.length];
-    const pieces = splits.map((_, piece) => segmentPiece(segment, bounds[piece]!, bounds[piece + 1]!));
-    pieces.push(segmentPiece(segment, bounds.at(-2)!, segment.text.length));
-    segs.splice(index, 1, ...pieces);
-    index += pieces.length - 1;
+    if (splits.length === 0) {
+      split?.push(segment);
+      continue;
+    }
+    split ??= segs.slice(0, index);
+    const text = segment as LayoutTextSeg;
+    const bounds = [0, ...splits, text.text.length];
+    for (let piece = 0; piece + 1 < bounds.length; piece += 1) {
+      split.push(segmentPiece(text, bounds[piece]!, bounds[piece + 1]!));
+    }
+  }
+  if (split) {
+    segs.length = 0;
+    for (const segment of split) segs.push(segment);
   }
   let previous: LayoutTextSeg | undefined;
   for (const segment of segs) {
@@ -136,8 +148,10 @@ export function assignEastAsianAutoSpace(
     segment.autoSpaceBeforePt = undefined;
     segment.autoSpaceCompressible = undefined;
     // An empty metric host (an anchor character) has no glyph and no
-    // advance; it neither forms nor interrupts the visible adjacency.
-    if (segment.text.length === 0) continue;
+    // advance; it neither forms nor interrupts the visible adjacency. A run
+    // holding only grapheme extenders (a variation selector or combining
+    // mark authored apart from its base) belongs to the preceding base.
+    if (segment.text.length === 0 || GRAPHEME_EXTENDERS.test(segment.text)) continue;
     const left = previous ? lastClusterBase(previous.text) : undefined;
     const right = firstScalar(segment.text);
     if (previous && applies(left, right)) {

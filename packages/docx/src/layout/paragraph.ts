@@ -2336,6 +2336,8 @@ function textPlanSegment(
     : 1;
   const hasInternalPunctuationCompression = segment.punctuationCompressions
     ?.some((compression) => compression.end < segment.text.length) ?? false;
+  const clusterOriginPaintOps = !segment.verticalRun && !segment.tateChuYoko
+    && hasInternalPunctuationCompression;
   const unpaddedPaintOps = segment.verticalRun
     ? (() => {
         if (!verticalGlyphMeasurement) {
@@ -2484,7 +2486,9 @@ function textPlanSegment(
       ...(segment.optionalHyphenGlyph ? { range: { start: sourceOffset, end: sourceOffset } } : {}),
       offset: { ...operation.offset,
         xPt: operation.offset.xPt + (segment.leadingWordBoundaryPx ?? 0)
-          + (segment.autoSpaceLeadingPx ?? 0) },
+          // Punctuation-compressed groups take their origins from the
+          // clusters, which already hold the automatic East Asian gap.
+          + (clusterOriginPaintOps ? 0 : segment.autoSpaceLeadingPx ?? 0) },
       // Measurement resolves w:spacing, docGrid character pitch, and w:fitText
       // into one authoritative per-scalar pitch. A planned vertical upright or
       // rotate cell already owns that pitch in its retained origin and advance;

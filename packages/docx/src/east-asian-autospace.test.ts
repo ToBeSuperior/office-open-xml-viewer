@@ -120,7 +120,7 @@ describe('WORD_EAST_ASIAN_AUTO_SPACE', () => {
     expect(small[2]!.bounds.xPt - small[1]!.bounds.xPt).toBeCloseTo(adv('A') + 8.5 / 4 + 1.5, 6);
     expect(small[2]!.clusters[1]!.offset.xPt - small[2]!.clusters[0]!.offset.xPt).toBeCloseTo(adv('甲'), 6);
     // Beyond that room the rest reaches the ordinary opportunities.
-    const large = justified(8);
+    const large = justified(6);
     const latinToNext = large[2]!.bounds.xPt - large[1]!.bounds.xPt;
     expect(latinToNext).toBeGreaterThan(adv('A') + 8.5 / 2);
     const pitch = large[2]!.clusters[1]!.offset.xPt - large[2]!.clusters[0]!.offset.xPt;
@@ -139,6 +139,23 @@ describe('WORD_EAST_ASIAN_AUTO_SPACE', () => {
     expect(first('left')).toBe([...head].slice(0, 9).join(''));
   });
 
+  it('shifts punctuation-compressed glyph groups by the gap once', () => {
+    const node = retainStubParagraph({
+      runs: [run('A甲、甲')], environment: MODE_14, bandPt: 1000, justification: 'left',
+    });
+    const ea = placementsOf(node, 0).find((placement) => placement.text.startsWith('甲'))!;
+    expect(ea.clusters[0]!.offset.xPt).toBeCloseTo(8.5 / 4, 9);
+    expect(ea.paintOps[0]!.offset.xPt).toBeCloseTo(ea.clusters[0]!.offset.xPt, 9);
+  });
+
+  it('leaves justified lines without an automatic gap on their established fit', () => {
+    const lines = retainStubParagraph({
+      runs: [run('甲甲 乙乙乙乙')], environment: { ...MODE_15, autoSpaceDE: false, autoSpaceDN: false },
+      bandPt: 29, justification: 'both',
+    }).lines;
+    expect(lines).toHaveLength(3);
+  });
+
   it('reads adjacency between grapheme-cluster bases, across and inside segments', () => {
     const segments = (...texts: string[]) => texts.map((text) =>
       ({ text, fontSize: 10, measuredWidth: 0 }) as unknown as LayoutTextSeg);
@@ -150,6 +167,9 @@ describe('WORD_EAST_ASIAN_AUTO_SPACE', () => {
     // mark belong to their East Asian base; a decomposed Latin letter to its base.
     expect(gaps(segments('葛\u{E0100}', 'A'))).toEqual([['葛\u{E0100}', undefined], ['A', 2.5]]);
     expect(gaps(segments('か\u3099', 'A'))).toEqual([['か\u3099', undefined], ['A', 2.5]]);
+    // An extender authored in its own run still belongs to the base before it.
+    expect(gaps(segments('葛', '\u{E0100}', 'A'))).toEqual([['葛', undefined], ['\u{E0100}', undefined], ['A', 2.5]]);
+    expect(gaps(segments('か', '\u3099', 'A'))).toEqual([['か', undefined], ['\u3099', undefined], ['A', 2.5]]);
     expect(gaps(segments('ﾃﾞ', 'A'))).toEqual([['ﾃﾞ', undefined], ['A', 2.5]]);
     expect(gaps(segments('e\u0301', '漢'))).toEqual([['e\u0301', undefined], ['漢', 2.5]]);
     // A boundary inside one segment (a Latin letter on the East Asian face)

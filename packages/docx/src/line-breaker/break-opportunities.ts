@@ -1426,7 +1426,11 @@ function splitCjkOverflow(context: BreakOpportunityIteratorContext, frame: TextF
   // (U+0020 and WORD_EAST_ASIAN_AUTO_SPACE). Admission is monotone in the
   // prefix length (C grows; S and E do not), so the same bounded search applies.
   let justifiedExtended = false;
-  if (!mixedSpaceExtended && breakerState.currentLine.length > 0 && justifiedCompressionApplies(context)) {
+  // Only a line holding an automatic gap: other prefixes keep their
+  // established natural CJK fit.
+  if (!mixedSpaceExtended && breakerState.currentLine.length > 0 && justifiedCompressionApplies(context)
+    && (leadingAutoSpacePx(context, s) > 0 || breakerState.currentLine.some((item) =>
+      'text' in item && (item.autoSpaceLeadingPx ?? 0) > 0))) {
     const characters = [...s.text];
     const admitted = (count: number): boolean => {
       const candidate = characters.slice(0, count).join('');
