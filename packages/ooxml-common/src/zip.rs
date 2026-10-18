@@ -384,11 +384,8 @@ fn validate_unicode_extra_fields(
         let id = le_u16(extra, cursor).ok_or(CandidateError::Malformed)?;
         let len = le_u16(extra, cursor + 2).ok_or(CandidateError::Malformed)? as usize;
         let Some(body) = extra.get(cursor + 4..cursor + 4 + len) else {
-            // A truncated Unicode field is malformed; truncated unrelated
-            // metadata was tolerated before and stays opaque to the index.
-            if matches!(id, 0x7075 | 0x6375) {
-                return Err(CandidateError::Malformed);
-            }
+            // Truncated trailing metadata (Unicode fields included) was
+            // tolerated before; it stays opaque to the index.
             break;
         };
         let (target, seen) = match id {
@@ -887,7 +884,7 @@ const ZIP64_EXTRA_FIELD_ID: u16 = 0x0001;
 /// An extra-field id the ZIP reader does not interpret.
 const OPAQUE_EXTRA_FIELD_ID: u16 = 0x7a7a;
 
-/// The extra block the ZIP reader sees: complete ZIP64 fields first, then
+/// The extra block the ZIP reader sees: the first complete ZIP64 field, then
 /// one opaque filler field (or, for fewer than four remaining bytes, zero
 /// padding the reader skips). The length is unchanged, the reader keeps one
 /// ignored field per record however many fields the block holds, and it
@@ -899,7 +896,9 @@ fn opaque_extra_block(extra: &[u8]) -> Box<[u8]> {
         let Some(field) = extra.get(cursor..cursor + 4 + len as usize) else {
             break;
         };
-        if id == ZIP64_EXTRA_FIELD_ID {
+        // Only the first ZIP64 field carries the validated sizes and offsets
+        // (the preflight reads the same one); repeats join the filler.
+        if id == ZIP64_EXTRA_FIELD_ID && block.is_empty() {
             block.extend_from_slice(field);
         }
         cursor += field.len();
@@ -2020,6 +2019,20 @@ mod tests {
         assert_eq!(preflight.index_view.rewrites.len(), 1);
         let mut archive = open_validated_zip(bytes).expect("many unknown fields");
         assert_eq!(read_zip_bytes(&mut archive, "word/b.xml").unwrap(), b"b");
+    }
+
+    #[test]
+    fn truncated_unicode_fields_and_repeated_zip64_fields_stay_opaque() {
+        for truncated in [[0x75, 0x70, 9, 0, 1], [0x75, 0x63, 9, 0, 1]] {
+            let bytes = with_central_extra(&zip_bytes(false), &truncated);
+            let mut archive = open_validated_zip(bytes).expect("truncated Unicode metadata");
+            assert_eq!(read_zip_bytes(&mut archive, "word/a.xml").unwrap(), b"a");
+        }
+        let repeated: Vec<u8> = (0..500).flat_map(|_| [1u8, 0, 0, 0]).collect();
+        let block = opaque_extra_block(&repeated);
+        assert_eq!(&block[..4], &[1, 0, 0, 0], "first ZIP64 field kept");
+        assert_eq!(le_u16(&block, 4), Some(OPAQUE_EXTRA_FIELD_ID));
+        assert_eq!(block.len(), repeated.len());
     }
 
     #[test]
