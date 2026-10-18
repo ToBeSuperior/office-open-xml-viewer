@@ -917,35 +917,6 @@ pub(super) fn parse_chart_image_fill(
     source: ChartImageSource,
 ) -> Option<ChartStyleFill> {
     let blip = child(blip_fill, "blip")?;
-    let mut duotone_count = 0usize;
-    let has_unsupported_effect = blip.children().any(|node| {
-        if !node.is_element() {
-            return false;
-        }
-        match node.tag_name().name() {
-            "alphaModFix" | "extLst" => false,
-            "duotone" => {
-                duotone_count += 1;
-                duotone_count > 1
-            }
-            _ => true,
-        }
-    });
-    if has_unsupported_effect {
-        return None;
-    }
-    let alpha_effects_valid = blip
-        .children()
-        .filter(|node| node.is_element() && node.tag_name().name() == "alphaModFix")
-        .all(|node| {
-            node.attribute("amt").is_none_or(|value| {
-                crate::units::drawingml_percentage_to_fraction(value)
-                    .is_some_and(|fraction| fraction >= 0.0)
-            })
-        });
-    if !alpha_effects_valid {
-        return None;
-    }
     let resolved_svg = crate::blip::svg_blip_rid(blip)
         .and_then(|relationship_id| image_resolver.resolve_image(source, &relationship_id));
     let resolved_raster = {
@@ -960,16 +931,29 @@ pub(super) fn parse_chart_image_fill(
     };
     let adapter = ColorResolverThemeAdapter(color_resolver);
     let src_rect = crate::blip::parse_src_rect(blip_fill);
-    let alpha = crate::blip::parse_blip_alpha(blip_fill);
-    // CT_Blip owns the effect sequence. A sibling <a:duotone> directly under
-    // blipFill is not schema-valid and must not silently become a compatibility
-    // fallback for chart markers.
+    // CT_Blip owns the effect sequence (§20.1.8.13), shared with pictures:
+    // alphaModFix is an ordered effect, every duotone keeps its own palette,
+    // and unsupported or malformed entries stay explicit so paint fails closed
+    // with a typed error instead of omitting the authored picture fill. A
+    // sibling <a:duotone> directly under blipFill is not schema-valid and must
+    // not silently become a compatibility fallback for chart markers.
+    let mut blip_effects =
+        crate::blip::parse_blip_effects(blip_fill, &adapter, color_resolver.tint_mode());
+    crate::blip::resolve_blip_effect_images(&mut blip_effects, &mut |relationship_id| {
+        image_resolver
+            .resolve_image(source, relationship_id)
+            .map(|(path, _)| path)
+    });
+    // The ordered chain bakes alpha once; only an identity/absent chain may
+    // keep the legacy paint-time alpha (always None or 1 then).
+    let alpha = if blip_effects.is_empty() {
+        crate::blip::parse_blip_alpha(blip_fill)
+    } else {
+        None
+    };
     let duotone = child(blip, "duotone").and_then(|_| {
         crate::blip::parse_blip_duotone(blip_fill, &adapter, color_resolver.tint_mode())
     });
-    if duotone_count == 1 && duotone.is_none() {
-        return None;
-    }
     let tile_node = child(blip_fill, "tile");
     let stretch_node = child(blip_fill, "stretch");
     // EG_FillModeProperties is optional and has no schema default. When absent
@@ -1003,6 +987,7 @@ pub(super) fn parse_chart_image_fill(
         tile,
         alpha,
         duotone,
+        blip_effects,
     })
 }
 

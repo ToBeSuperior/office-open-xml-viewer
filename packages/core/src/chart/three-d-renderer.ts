@@ -9,12 +9,12 @@ import type {
   ChartSeries,
 } from '../types/chart.js';
 import type { Fill } from '../types/common.js';
-import { chartImageFillSource, paintChartImageFill } from './image-fill.js';
+import { chartImageFillSource, chartFillRenderedSize, paintChartImageFill } from './image-fill.js';
 import {
   chartThreeDDatumFillDecision,
   threeDDatumStyleIndex,
 } from './three-d-datum-style.js';
-import { paintChartThreeDSurfacePicture } from './three-d-surface-picture.js';
+import { paintChartThreeDSurfacePicture, chartThreeDSurfacePictureSizePt } from './three-d-surface-picture.js';
 import {
   effectiveMarkerSymbol,
   hasVisiblePointMarkerOverride,
@@ -2641,7 +2641,10 @@ function walls(
     const faces = group.faces;
     if (!effective.fill || !faces.length) return;
     if (effective.fill.fillType === 'image') {
-      const image = chartImageFillSource(effective.fill);
+      const pictureFill = effective.fill;
+      const size = chartThreeDSurfacePictureSizePt(group.slab, ptToPx);
+      const image = chartImageFillSource(effective.fill,
+        size ? chartFillRenderedSize(effective.fill, size.widthPt, size.heightPt) : undefined);
       if (!image) return;
       const project = (point: ThreeDScenePoint): Point =>
         projection.projectUnbounded(point.x, point.y, point.depth);
@@ -2649,6 +2652,8 @@ function walls(
         ctx, effective.fill, image, surface, kind,
         group.slab, group.faces.map(face => face.faceIndex),
         project, axis.max - axis.min,
+        (widthPt, heightPt) => chartImageFillSource(pictureFill, chartFillRenderedSize(pictureFill, widthPt, heightPt)),
+        ptToPx,
       );
       return;
     }

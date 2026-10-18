@@ -658,7 +658,8 @@ pub struct PictureElement {
     /// source width/height. Only serialized when any edge is non-zero.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub src_rect: Option<SrcRect>,
-    /// a:blip > a:alphaModFix@amt (0.0–1.0). None = fully opaque.
+    /// Legacy picture opacity. Parsed alphaModFix lives in blip_effects; this
+    /// remains empty to avoid modulating later color/alpha replacements twice.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub alpha: Option<f64>,
     /// ECMA-376 §20.1.8.23 `<a:duotone>` recolour effect, resolved to its two
@@ -820,7 +821,8 @@ pub enum Fill {
         /// `fill_rect` is then `None`.
         #[serde(skip_serializing_if = "Option::is_none")]
         tile: Option<TileInfo>,
-        /// `a:blip > a:alphaModFix@amt` as a fraction (0.0–1.0). None = opaque.
+        /// Legacy image-fill opacity. Parsed alphaModFix is baked once by
+        /// blip_effects; this stays empty for parsed DrawingML.
         #[serde(skip_serializing_if = "Option::is_none")]
         alpha: Option<f64>,
         /// ECMA-376 §20.1.8.23 `<a:duotone>` recolour effect, resolved to its two

@@ -100,8 +100,6 @@ const SHARED_PAINT_IMPORTS = new Map([
     ['acquireBitmapCacheLease', 'value'],
     ['applyDuotone', 'value'],
     // Pixel corrections, effect budgets and cache keys consume decoded resources without acquiring layout.
-    ['applyBlipPixelEffects', 'value'],
-    ['assertBlipPixelEffectsBudget', 'value'],
     ['blipPixelEffectsKey', 'value'],
     ['autoContrastColor', 'value'],
     // A retained run-shading preset is rasterized as an 8x8 paint tile;
@@ -113,6 +111,14 @@ const SHARED_PAINT_IMPORTS = new Map([
     // Chart picture-marker discovery and lookup warm the document-owned image
     // cache before measurement-free chart paint. They expose no layout API.
     ['chartImageFillKey', 'value'],
+    ['chartImageFillPixelTransform', 'value'],
+    // Per-rendered-size chart picture preparation: a scratch-surface chart
+    // paint records the sizes; keys/lookups address the decoded sources.
+    ['chartImageFillNeedsRenderedSize', 'value'],
+    ['chartFillRenderedSizeKey', 'value'],
+    ['chartImageFillStoreLookup', 'value'],
+    ['collectChartFillRenderedSizes', 'value'],
+    ['assertChartFillRenderedSizeCount', 'value'],
     ['chartImageFillUsageSize', 'value'],
     ['collectChartImageFillUsages', 'value'],
     ['collectChartImageFillUsagesForCharts', 'value'],
@@ -126,6 +132,9 @@ const SHARED_PAINT_IMPORTS = new Map([
     ['deferBitmapCloseWhileLeased', 'value'],
     ['docxBorderDashArray', 'value'],
     ['drawImageCropped', 'value'],
+    // Pure geometry: the full source frame a stretched/cropped CT_Blip chain
+    // is evaluated on. It reads authored fractions only, never layout.
+    ['stretchedSourceFrame', 'value'],
     ['doubleRailGeometry', 'value'],
     ['fillDoubleBorder', 'value'],
     // Shared decoded-surface ownership is a paint resource concern. DOCX may
@@ -136,8 +145,10 @@ const SHARED_PAINT_IMPORTS = new Map([
     ['applyImageDataTransform', 'value'],
     ['decodeSvgBlobOnMainThread', 'value'],
     ['OoxmlDecodedImageLimitError', 'value'],
-    ['OoxmlResourceLimitError', 'value'],
     ['getCachedBitmapByPath', 'value'],
+    // Shared CT_Blip decoding/effects own bounded image resources only; the
+    // interpreter never acquires text, layout, or parser-model geometry.
+    ['getCachedDuotoneBitmapByPath', 'value'],
     ['getCachedDerivedBitmap', 'value'],
     ['getCachedSvgImageByPath', 'value'],
     // Header inspection reuses the document-owned byte profile to decide
@@ -149,6 +160,8 @@ const SHARED_PAINT_IMPORTS = new Map([
     ['isOoxmlDecodedImageLimitError', 'value'],
     // Lazy archive admission errors remain terminal at paint-resource catches.
     ['OoxmlResourceLimitError', 'value'],
+    // An invalid authored CT_Blip chain cannot be replaced by a raw fallback.
+    ['OoxmlError', 'value'],
     ['isTiffDecodeError', 'value'],
     // Missing optional image codecs are contained at paint-resource acquisition;
     // the placeholder consumes only the already-retained authored bounds.
@@ -205,6 +218,8 @@ const SHARED_PAINT_IMPORTS = new Map([
     ['ImageResourceOptions', 'type'],
     ['MathRenderer', 'type'],
     ['TiffRenderer', 'type'],
+    // Erased SVG decoder capability; paint forwards it to the shared image owner.
+    ['SvgBlobDecoder', 'type'],
   ])],
 ]);
 

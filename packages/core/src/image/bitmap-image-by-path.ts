@@ -57,7 +57,7 @@ import {
 } from './adaptive-image-budget.js';
 import type { TiffRenderer } from './tiff-contract.js';
 import { wmfRasterTarget } from './wmf.js';
-import type { SvgBlobDecoder } from '../worker/svg-decode-bridge.js';
+import type { SvgBlobDecoder } from './svg-raster.js';
 
 type FetchImage = (path: string, mime: string) => Promise<Blob>;
 export type DecodedBitmapCacheOwner = object;
@@ -367,6 +367,13 @@ export function releaseOwnedBitmap(bitmap: ImageBitmap | null | undefined): void
   } catch {
     // Resource release must not mask a post, callback, or draw failure.
   }
+}
+
+/** Nest a dependent-image operation under its owner's current byte policy.
+ * Unlike a fresh default lease this does not lower or raise a configured
+ * render-pass budget while an effect prepares its own image-fill sources. */
+export function acquireCurrentBitmapCacheLease(owner: DecodedBitmapCacheOwner): () => void {
+  return acquireBitmapCacheLease(owner, { decodedByteBudget: bitmapCacheFor(owner).retainedLimit });
 }
 
 /**
@@ -791,6 +798,7 @@ function getCachedOwnedBitmap(
   key: string,
   owner: DecodedBitmapCacheOwner,
   produce: () => Promise<ProducedBitmap>,
+  prepare?: () => Promise<void>,
 ): Promise<ImageBitmap | null> {
   const state = bitmapCacheFor(owner);
   const cache = state.entries;
@@ -804,7 +812,12 @@ function getCachedOwnedBitmap(
     });
   }
 
-  const produced = withDecodedImageSlot(owner, produce);
+  // A dependency load must finish before taking a decoder slot; cache
+  // publication still happens synchronously, so concurrent callers share the
+  // preparation as well as the transform. Cache hits do not re-decode fills.
+  const produced = prepare
+    ? Promise.resolve().then(prepare).then(() => withDecodedImageSlot(owner, produce))
+    : withDecodedImageSlot(owner, produce);
   // This branch exists only so eviction/teardown can eventually close a surface
   // owned by the entry. A failed producer owns nothing to close, so normalize
   // that outcome immediately instead of retaining a rejected cleanup promise.
@@ -884,13 +897,21 @@ export function getCachedDerivedBitmap(
   owner: DecodedBitmapCacheOwner,
   create: () => Promise<{ bitmap: ImageBitmap | null; owned: boolean }>,
   epoch?: DecodedBitmapCacheEpoch,
+  prepare?: () => Promise<void>,
 ): Promise<ImageBitmap | null> {
   if (epoch) assertCurrentDerivedEpoch(owner, namespace, epoch);
-  return getCachedDecodedBitmap(
-    `${DERIVED_CACHE_PREFIX}${namespace}`,
-    cacheKey,
+  return getCachedOwnedBitmap(
+    `${DERIVED_CACHE_PREFIX}${namespace}:${cacheKey}`,
     owner,
-    create,
+    () => {
+      if (epoch) assertCurrentDerivedEpoch(owner, namespace, epoch);
+      return create();
+    },
+    prepare ? async () => {
+      if (epoch) assertCurrentDerivedEpoch(owner, namespace, epoch);
+      await prepare();
+      if (epoch) assertCurrentDerivedEpoch(owner, namespace, epoch);
+    } : undefined,
   );
 }
 

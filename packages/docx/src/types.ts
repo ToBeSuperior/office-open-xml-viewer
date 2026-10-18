@@ -1202,6 +1202,9 @@ export type ShapeFill =
       tile?: TileInfo;
       alpha?: number;
       duotone?: Duotone;
+      /** Ordered CT_Blip effects (§20.1.8.13) of a DrawingML blipFill; parsed
+       *  fills carry alphaModFix here rather than in {@link alpha}. */
+      blipEffects?: BlipEffect[];
     };
 
 export type ShapeStrokeFill =
@@ -1493,9 +1496,8 @@ export interface ImageRun {
   /** Ordered CT_Blip pixel effects, including §20.1.8.42 picture corrections. */
   blipEffects?: BlipEffect[];
   /**
-   * ECMA-376 §20.1.8.6 `<a:alphaModFix@amt>` opacity as 0..1. Absent ⇒ fully
-   * opaque. When present the renderer multiplies the picture's `globalAlpha` by
-   * this fraction.
+   * Legacy model-source opacity. Parsed alphaModFix is baked once by
+   * blipEffects, so parsed pictures leave this absent.
    */
   alpha?: number;
   /**

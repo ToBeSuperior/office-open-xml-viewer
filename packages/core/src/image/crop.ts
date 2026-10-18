@@ -1,3 +1,5 @@
+import { OoxmlError } from '../errors/ooxml-error.js';
+import { imageEffectFrame } from './image-effect-frame.js';
 // Shared `<a:srcRect>` source-rectangle crop (ECMA-376 §20.1.8.55) for the docx,
 // pptx and xlsx renderers. The crop is a fraction of the image's NATIVE pixel
 // grid. Browser rasters may use a display-sized grid because the same fractional
@@ -91,6 +93,24 @@ function imageCropProjection(
   return plan;
 }
 
+/** {@link imageCropProjection} for effect and projected-surface frames, where
+ * an unrepresentable crop must fail closed instead of silently meaning "no
+ * crop". Rejects non-finite fractions and intermediate overflow (for example
+ * l = r = -1e308 yields an infinite logical width behind finite fractions). */
+export function checkedImageCropProjection(
+  srcRect: SrcRect | null | undefined,
+): Readonly<ImageCropProjection> | null {
+  if (srcRect) {
+    const { l, t, r, b } = srcRect;
+    if (![l, t, r, b, 1 - r - l, 1 - b - t].every(Number.isFinite)) {
+      throw new RangeError('Image crop is not representable');
+    }
+  }
+  const plan = imageCropProjection(srcRect);
+  if (plan && !Object.values(plan).every(Number.isFinite)) throw new RangeError('Image crop projection overflow');
+  return plan;
+}
+
 /** The decoded grid supplies pixels only, never retained layout geometry. */
 export function cropSourceMapping(
   img: CanvasImageSource, srcRect: SrcRect | null | undefined,
@@ -174,6 +194,33 @@ export function drawImageCropped(
   options?: Readonly<ImagePaintProjectionOptions>,
 ): void {
   const paint = (x: number, y: number, width: number, height: number, projection?: Readonly<ImageCropProjection> | null) => {
+    const frame = imageEffectFrame(img);
+    if (frame) {
+      // §20.1.8.15 grow changes effect coverage, never the authored picture
+      // frame. A source crop still selects that frame; only an uncropped
+      // picture paints the Gaussian's transparent outset beyond its bounds.
+      const { w, h } = imageNaturalSize(img);
+      let crop: Readonly<ImageCropProjection> | null;
+      try { crop = projection === undefined ? checkedImageCropProjection(srcRect) : projection; }
+      catch { throw new OoxmlError('unsupported-image-effect', 'Unrepresentable image effect crop'); }
+      const draw = (...coordinates: [number, number, number, number] | [number, number, number, number, number, number, number, number]) => {
+        // Canvas may silently ignore non-finite arguments. The effect frame
+        // must not turn a malformed crop/overflow into a missing picture.
+        if (!coordinates.every(Number.isFinite)) throw new OoxmlError('unsupported-image-effect', 'Unrepresentable image effect paint projection');
+        if (coordinates.length === 4) ctx.drawImage(img, ...coordinates);
+        else ctx.drawImage(img, ...coordinates);
+      };
+      if (!crop) {
+        draw(x - frame.x / frame.width * width, y - frame.y / frame.height * height,
+          w / frame.width * width, h / frame.height * height);
+      } else if (crop.sourceWidth > 0 && crop.sourceHeight > 0) {
+        draw(frame.x + crop.sourceX * frame.width, frame.y + crop.sourceY * frame.height,
+          crop.sourceWidth * frame.width, crop.sourceHeight * frame.height,
+          x + crop.dxFraction * width, y + crop.dyFraction * height,
+          crop.dwFraction * width, crop.dhFraction * height);
+      }
+      return;
+    }
     const c = cropSourceMapping(img, srcRect, projection);
     if (!c) ctx.drawImage(img, x, y, width, height);
     else if (c.sw > 0 && c.sh > 0 && c.dwFraction > 0 && c.dhFraction > 0) {
@@ -235,4 +282,25 @@ export function metafileRasterSize(
   const fracW = 1 - srcRect.l - srcRect.r;
   const fracH = 1 - srcRect.t - srcRect.b;
   return { widthPt: widthPt / fracW, heightPt: heightPt / fracH };
+}
+
+/** Physical extent of the whole (uncropped) source of a stretched blip fill
+ * (§20.1.8.55/.56): the fillRect insets shrink the destination, and the
+ * srcRect window is stretched across it, so the full source spans the
+ * destination divided by the visible source fraction. CT_Blip effects that
+ * are measured in EMUs (§20.1.8.15) are evaluated against this frame, the
+ * same mapping core uses for nested stretched fills. */
+export function stretchedSourceFrame(
+  width: number, height: number,
+  srcRect: SrcRect | null | undefined,
+  fillRect: Readonly<{ l?: number; t?: number; r?: number; b?: number }> | null | undefined,
+): { width: number; height: number } {
+  const destW = width * (1 - (fillRect?.l ?? 0) - (fillRect?.r ?? 0));
+  const destH = height * (1 - (fillRect?.t ?? 0) - (fillRect?.b ?? 0));
+  const cropW = 1 - (srcRect?.l ?? 0) - (srcRect?.r ?? 0);
+  const cropH = 1 - (srcRect?.t ?? 0) - (srcRect?.b ?? 0);
+  return {
+    width: Math.max(0, cropW > 0 ? destW / cropW : destW),
+    height: Math.max(0, cropH > 0 ? destH / cropH : destH),
+  };
 }

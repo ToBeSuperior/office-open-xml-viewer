@@ -1,6 +1,6 @@
 use ooxml_common::blip::{
-    blip_embed_rid, mime_from_ext, parse_blip_alpha, parse_blip_duotone, parse_blip_effects,
-    parse_src_rect, svg_blip_rid, BlipEffect, Duotone,
+    blip_embed_rid, mime_from_ext, parse_blip_duotone, parse_blip_effects, parse_src_rect,
+    svg_blip_rid, BlipEffect, Duotone,
 };
 use ooxml_common::depth::{parse_guarded, DepthGuard};
 use ooxml_common::drawing::{parse_xsd_bool, DrawingGroupSpec, DrawingGroupTransform, DrawingRect};
@@ -8839,6 +8839,9 @@ struct InlineBlip {
     alpha: Option<f64>,
     width_pt: f64,
     height_pt: f64,
+    rotation: f64,
+    flip_h: bool,
+    flip_v: bool,
 }
 
 /// Resolve a single picture drawing: the first `<a:blip>` of the container's
@@ -8870,11 +8873,34 @@ fn resolve_inline_blip(
     // §20.1.8.23 duotone recolour, resolved through the document theme.
     let duotone = blip_fill.and_then(|bf| parse_blip_duotone_docx(bf, theme));
     let blip_effects = blip_fill
-        .map(|bf| parse_blip_effects_docx(bf, theme))
+        .map(|bf| parse_blip_effects_docx(bf, theme, media_map))
         .unwrap_or_default();
     // §20.1.8.6 alphaModFix opacity (fraction, or None when opaque).
-    let alpha = blip_fill.and_then(parse_blip_alpha);
+    let alpha = None; // Ordered blip effects bake alpha exactly once.
     let (width_pt, height_pt) = drawing_extent_points(container)?;
+    // ECMA-376 §20.2.2.6 pic:spPr / §20.1.7.6 a:xfrm supplies the
+    // picture's orientation. wp:extent owns layout size, while these facts
+    // own paint and rotWithShape=false inside the recursive blip evaluator.
+    // Restrict lookup to this blip's picture, never a nested text-box drawing.
+    let xfrm = blip_fill
+        .and_then(|fill| fill.parent())
+        .and_then(|picture| {
+            picture
+                .children()
+                .find(|n| n.is_element() && n.tag_name().name() == "spPr")
+        })
+        .and_then(|properties| {
+            properties
+                .children()
+                .find(|n| n.is_element() && n.tag_name().name() == "xfrm")
+        });
+    let rotation = xfrm
+        .and_then(|n| n.attribute("rot"))
+        .and_then(|v| v.parse::<i32>().ok())
+        .unwrap_or(0) as f64
+        / 60000.0;
+    let flip_h = xfrm.is_some_and(|n| matches!(n.attribute("flipH"), Some("1" | "true")));
+    let flip_v = xfrm.is_some_and(|n| matches!(n.attribute("flipV"), Some("1" | "true")));
     Some(InlineBlip {
         image_path,
         mime_type,
@@ -8885,6 +8911,9 @@ fn resolve_inline_blip(
         alpha,
         width_pt,
         height_pt,
+        rotation,
+        flip_h,
+        flip_v,
     })
 }
 
@@ -9439,6 +9468,9 @@ fn parse_drawing_container(
             alpha,
             width_pt,
             height_pt,
+            rotation,
+            flip_h,
+            flip_v,
         } = match resolve_inline_blip(container, media_map, theme) {
             Some(b) => b,
             None => {
@@ -9454,9 +9486,9 @@ fn parse_drawing_container(
             src_rect,
             width_pt,
             height_pt,
-            rotation: 0.0,
-            flip_h: false,
-            flip_v: false,
+            rotation,
+            flip_h,
+            flip_v,
             anchor: false,
             anchor_x_pt: 0.0,
             anchor_y_pt: 0.0,
@@ -9692,6 +9724,9 @@ fn parse_drawing_container(
         alpha,
         width_pt,
         height_pt,
+        rotation,
+        flip_h,
+        flip_v,
     } = match resolve_inline_blip(container, media_map, theme) {
         Some(b) => b,
         None => {
@@ -9707,9 +9742,9 @@ fn parse_drawing_container(
         src_rect,
         width_pt,
         height_pt,
-        rotation: 0.0,
-        flip_h: false,
-        flip_v: false,
+        rotation,
+        flip_h,
+        flip_v,
         anchor: true,
         anchor_x_pt: pos_x,
         anchor_y_pt: pos_y,
@@ -10754,10 +10789,10 @@ fn parse_group_pic(
         .and_then(|bf| parse_blip_duotone_docx(bf, theme));
     let blip_effects = blip
         .parent()
-        .map(|bf| parse_blip_effects_docx(bf, theme))
+        .map(|bf| parse_blip_effects_docx(bf, theme, media_map))
         .unwrap_or_default();
     // §20.1.8.6 alphaModFix opacity (fraction, or None when opaque).
-    let alpha = blip.parent().and_then(parse_blip_alpha);
+    let alpha = None; // Ordered blip effects bake alpha exactly once.
 
     // Parse a:clrChange if present — used to make a specific color transparent.
     // clrFrom specifies the source color; clrTo with alpha=0 means replace with transparent.
@@ -13963,8 +13998,10 @@ fn parse_shape_fill(
                     src_rect: parse_src_rect(child),
                     fill_rect,
                     tile,
-                    alpha: parse_blip_alpha(child),
+                    // alphaModFix lives in the ordered chain (baked once).
+                    alpha: None,
                     duotone: parse_blip_duotone_docx(child, theme),
+                    blip_effects: parse_blip_effects_docx(child, theme, media_map),
                 }));
             }
             "noFill" => return FillSpec::NoFill,
@@ -14403,7 +14440,11 @@ fn parse_blip_duotone_docx(blip_fill: roxmltree::Node, theme: &ThemeColors) -> O
     )
 }
 
-fn parse_blip_effects_docx(blip_fill: roxmltree::Node, theme: &ThemeColors) -> Vec<BlipEffect> {
+fn parse_blip_effects_docx(
+    blip_fill: roxmltree::Node,
+    theme: &ThemeColors,
+    media_map: &HashMap<String, String>,
+) -> Vec<BlipEffect> {
     let mut effects = parse_blip_effects(
         blip_fill,
         &DocxSchemeResolver {
@@ -14412,27 +14453,8 @@ fn parse_blip_effects_docx(blip_fill: roxmltree::Node, theme: &ThemeColors) -> V
         },
         ooxml_common::color::TintMode::WordLiteral,
     );
-    // DOCX compatibility boundary, not full CT_Blip conformance (§20.1.8.13):
-    // alphaModFix (§20.1.8.6) still belongs to paint/globalAlpha. Feeding a
-    // clrChange (§20.1.8.16) to the shared RGB/alpha matcher would therefore
-    // compare the unmodulated source alpha. Keep the pre-existing DOCX path
-    // for this combination (grouped-picture chromakey; inline clrChange was
-    // unsupported), until ordered alpha is represented by the shared model.
-    let has_alpha = blip_fill.children().any(|blip| {
-        blip.tag_name().name() == "blip"
-            && blip
-                .children()
-                .any(|effect| effect.tag_name().name() == "alphaModFix")
-    });
-    let mut saw_duotone = false;
-    effects.retain(|effect| match effect {
-        BlipEffect::ColorChange { .. } => !has_alpha,
-        // The shared model has only one resolved palette (§20.1.8.23).
-        // Preserve DOCX's first-palette-once behavior: replaying it for later
-        // markers newly darkens/recolours pictures without resolving theirs.
-        // Distinct per-effect palettes remain unsupported.
-        BlipEffect::Duotone => !std::mem::replace(&mut saw_duotone, true),
-        _ => true,
+    ooxml_common::blip::resolve_blip_effect_images(&mut effects, &mut |rid| {
+        media_map.get(rid).cloned()
     });
     effects
 }
@@ -22519,6 +22541,7 @@ mod svg_blip_tests {
                       <a:duotone><a:srgbClr val="000000"/><a:srgbClr val="FFFFFF"/></a:duotone>
                       <a:lum bright="0" contrast="-50000"/>
                     </a:blip><a:stretch><a:fillRect/></a:stretch></pic:blipFill>
+                    <pic:spPr><a:xfrm rot="5400000" flipH="1" flipV="true"/></pic:spPr>
                   </pic:pic>
                 </a:graphicData></a:graphic>
               </wp:{container}>
@@ -22527,10 +22550,16 @@ mod svg_blip_tests {
             let doc = parse_from_bytes(&build_docx_with_media(&body)).expect("parse must succeed");
             let image = serde_json::to_value(only_image(&doc)).unwrap();
             assert_eq!(
+                image["rotation"], 90.0,
+                "{container} must retain the host orientation for recursive effects"
+            );
+            assert_eq!(image["flipH"], true);
+            assert_eq!(image["flipV"], true);
+            assert_eq!(
                 image["blipEffects"],
                 serde_json::json!([
                     {"type": "luminance", "bright": 0.9, "contrast": 0.0},
-                    {"type": "duotone"},
+                    {"type": "duotone", "clr1":"000000", "clr2":"FFFFFF"},
                     {"type": "luminance", "bright": 0.0, "contrast": -0.5}
                 ]),
                 "{container}"
@@ -22584,8 +22613,11 @@ mod svg_blip_tests {
         let data = build_docx_with_media(body);
         let doc = parse_from_bytes(&data).expect("parse must succeed");
         let img = only_image(&doc);
-        let a = img.alpha.expect("alphaModFix must populate alpha");
-        assert!((a - 0.60).abs() < 1e-9, "alpha={a}");
+        assert!(
+            img.alpha.is_none(),
+            "ordered alpha must not also be painted globally"
+        );
+        assert_eq!(img.blip_effects, vec![BlipEffect::AlphaModFix { amt: 0.6 }]);
     }
 
     /// A picture without an `<a:alphaModFix>` (and one at 100%) leaves `alpha`
@@ -28450,7 +28482,12 @@ mod inline_wps_shape_tests {
         assert_eq!(json["srcRect"]["b"], 0.25);
         assert_eq!(json["fillRect"]["l"], 0.1);
         assert_eq!(json["fillRect"]["r"], -0.07574);
-        assert_eq!(json["alpha"], 0.75);
+        // alphaModFix is an ordered effect, never also paint-time alpha.
+        assert!(json.get("alpha").is_none());
+        assert_eq!(
+            json["blipEffects"],
+            serde_json::json!([{"type": "alphaModFix", "amt": 0.75}])
+        );
     }
 
     #[test]

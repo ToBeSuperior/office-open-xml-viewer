@@ -302,6 +302,7 @@ impl ResolvedPictures {
                     ),
                     alpha: None,
                     duotone: None,
+                    blip_effects: Vec::new(),
                 });
             }
             sheets.insert(index, anchors);

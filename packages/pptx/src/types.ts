@@ -692,7 +692,7 @@ export interface PictureElement {
    * default to 0), so the renderer reads them without a fallback.
    */
   srcRect?: { l: number; t: number; r: number; b: number };
-  /** a:blip > a:alphaModFix@amt as 0..1. Undefined = fully opaque. */
+  /** Legacy model-source opacity. Parsed alphaModFix is baked once by blipEffects. */
   alpha?: number;
   /**
    * ECMA-376 §20.1.8.23 `<a:duotone>` recolour, resolved to its two endpoint
@@ -702,9 +702,9 @@ export interface PictureElement {
    */
   duotone?: Duotone;
   /**
-   * CT_Blip pixel effects (§20.1.8.13: grayscl, biLevel, clrChange) in
-   * document order, with a `duotone` entry marking where {@link duotone}
-   * applies. Absent when the blip carries none of them.
+   * Ordered CT_Blip effects (§20.1.8.13), including alpha modulation and
+   * independent duotone endpoints. Unsupported entries reject the chain.
+   * Absent for plain pictures and the legacy single-duotone fast path.
    */
   blipEffects?: BlipEffect[];
   /**

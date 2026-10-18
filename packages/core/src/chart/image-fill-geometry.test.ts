@@ -1,5 +1,6 @@
 import { expect, it, vi } from 'vitest';
-import { paintChartImageFill, withChartImageLookup } from './image-fill.js';
+import { chartImageFillHostKey, chartImageFillKey, chartImageFillPixelTransform, paintChartImageFill, withChartImageLookup } from './image-fill.js';
+import { setImageEffectFrame } from '../image/image-effect-frame.js';
 import { OoxmlDecodedImageLimitError } from '../image/pixel-budget.js';
 import { EMU_PER_PT, PT_TO_PX } from '../units.js';
 import type { ImageFill } from '../types/common.js';
@@ -74,4 +75,42 @@ it('fails closed when conversion rounding would misregister a huge mirrored tile
   // offset of the first has lost more precision than one tile is wide.
   expect(render(508)).toBe(true);
   expect(() => render(27273042316900)).toThrow(OoxmlDecodedImageLimitError);
+});
+
+it('tiles a chart fill by the authored frame of an effect-grown source', () => {
+  const recorded: number[] = [];
+  const ctx = new Proxy({}, {
+    get: (_target, key) => key === 'translate'
+      ? (x: number) => { recorded.push(x); }
+      : () => {},
+  }) as unknown as CanvasRenderingContext2D;
+  // A blur grow added 5 px on each side of a 10 px authored frame.
+  const grown = { width: 20, height: 10 } as CanvasImageSource;
+  setImageEffectFrame(grown, { x: 5, y: 0, width: 10, height: 10 });
+  const fill: ImageFill = {
+    fillType: 'image', imagePath: 'tile.png', mimeType: 'image/png', dpi: 96,
+    tile: { algn: 'tl', sx: 1, sy: 1, tx: 0, ty: 0 },
+  };
+  expect(withChartImageLookup(() => grown, () => paintChartImageFill(ctx, fill, 0, 0, 40, 10))).toBe(true);
+  // 96 dpi: one source pixel per CSS pixel, so the period is the 10 px frame.
+  expect(recorded[1]! - recorded[0]!).toBeCloseTo(10, 6);
+  // The 5 px outset reaches one neighbouring period on each horizontal side:
+  // 4 + 2 boundary + 2 outset columns, 1 + 2 boundary rows.
+  expect(recorded).toHaveLength(8 * 3);
+});
+
+it('evaluates a chart fill chain on the source grid at the fill DPI', () => {
+  const effects = [{ type: 'blur' as const, radius: 9525, grow: false }];
+  expect(chartImageFillPixelTransform({ fillType: 'image', imagePath: 'a.png', mimeType: 'image/png',
+    dpi: 192, blipEffects: effects }, { rotation: 30, flipH: true })).toEqual({ effects, duotone: null,
+    emuPerPixelX: 4762.5, emuPerPixelY: 4762.5, hostRotation: 30, hostFlipH: true, hostFlipV: false });
+  // Sampling DPI and host orientation are part of the decoded identity.
+  const fill = { fillType: 'image' as const, imagePath: 'a.png', mimeType: 'image/png', blipEffects: effects };
+  expect(chartImageFillKey({ ...fill, dpi: 96 })).not.toBe(chartImageFillKey({ ...fill, dpi: 192 }));
+  expect(chartImageFillHostKey(fill, { rotation: 0 })).not.toBe(chartImageFillHostKey(fill, { rotation: 90 }));
+  expect(chartImageFillHostKey({ ...fill, rotWithShape: false }, { rotation: 90 }))
+    .toBe(chartImageFillHostKey({ ...fill, rotWithShape: false }, { rotation: 0 }));
+  const duotone = { clr1: '000000', clr2: 'FFFFFF' };
+  expect(chartImageFillPixelTransform({ fillType: 'image', imagePath: 'a.png', mimeType: 'image/png', duotone }))
+    .toBe(duotone);
 });

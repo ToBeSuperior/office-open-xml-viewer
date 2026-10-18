@@ -2,8 +2,8 @@
 import type { ChartModel, ChartRect, ChartSeries } from '../../types/chart';
 import type { Fill } from '../../types/common';
 
-import { chartImageFillSource } from '../image-fill.js';
-import { paintChartThreeDSurfacePicture } from '../three-d-surface-picture.js';
+import { chartImageFillSource, chartFillRenderedSize } from '../image-fill.js';
+import { paintChartThreeDSurfacePicture, chartThreeDSurfacePictureSizePt } from '../three-d-surface-picture.js';
 import { paintChartStyleOuterEffectBehind } from '../style-effects.js';
 
 import { markerPaintComponents } from '../marker-style.js';
@@ -898,7 +898,9 @@ export function renderSurfaceChart(
     const effective = surfaceFacePaints[index];
     const imageFill = effective.fill?.fillType === 'image' ? effective.fill : null;
     if (imageFill) {
-      const image = chartImageFillSource(imageFill);
+      const size = chartThreeDSurfacePictureSizePt(surfaceSlabs[index], ptToPx);
+      const image = chartImageFillSource(imageFill,
+        size ? chartFillRenderedSize(imageFill, size.widthPt, size.heightPt) : undefined);
       const surface = chart.threeD?.[surfaceKinds[index]];
       if (image) {
         const project = (point: ThreeDScenePoint) =>
@@ -911,6 +913,8 @@ export function renderSurfaceChart(
               || projection.cameraFacing(face))
             .map(({ faceIndex }) => faceIndex),
           project, surfaceSpan,
+          (widthPt, heightPt) => chartImageFillSource(imageFill, chartFillRenderedSize(imageFill, widthPt, heightPt)),
+          ptToPx,
         );
       }
     }

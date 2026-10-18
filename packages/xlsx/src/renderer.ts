@@ -30,7 +30,8 @@ import type {
   ChartRegionMapRenderer,
   ChartExRenderer,
 } from '@silurus/ooxml-core';
-import { usesPathShade, trackPaintPath, currentStrokeBounds, chartImageFillKey, paintOptionalImagePlaceholder, pathFillModeOverlay, withDrawingMLShapeTransform, buildPresetGeometryFillPath } from '@silurus/ooxml-core';
+import { blipEffectsMayExtendCoverage, blipPixelEffectsKey, imageEffectFrame, stretchedSourceFrame, type BlipEffect, type BlipPixelEffects } from '@silurus/ooxml-core';
+import { usesPathShade, trackPaintPath, currentStrokeBounds, chartImageFillStoreLookup, paintOptionalImagePlaceholder, pathFillModeOverlay, withDrawingMLShapeTransform, buildPresetGeometryFillPath } from '@silurus/ooxml-core';
 import { placePhoneticRuns } from './phonetic.js';
 import { crispOffset, renderChart, renderSparkline, renderPresetShape, createAuxCanvas, PT_TO_PX, EMU_PER_PX, mathToMathML, rasterizeMathSvg, cachedTintedMathRaster, classifyCjkFont, classifyFontGeneric, googleCjkFontAlias, cjkFallbackChain, NON_CJK_SANS_FALLBACKS, NON_CJK_SERIF_FALLBACKS, isCjkBreakChar, xlsxBorderDashArray, drawImageCropped, hexToRgba, verticalTrLongMark, verticalVertGlyphReachable, applyStroke, resolveFill, type SparklineModel, type MathNode, type MathRenderer, type RasterizedMathSvg } from '@silurus/ooxml-core';
 import {
@@ -77,8 +78,128 @@ export { colWidthToPx, pxToColWidth, rowHeightToPx, pxToRowHeight };
  *  synchronous lookup. Kept here (not in the orchestrator) so both the
  *  synchronous renderer and the async orchestrator share one definition without
  *  a circular import. */
-export function imageCacheKey(imagePath: string, duotone?: Duotone | null): string {
-  return duotone ? `${imagePath}|duo:${duotone.clr1}:${duotone.clr2}` : imagePath;
+/** Painted extent of an effect-grown source drawn into a frame rectangle,
+ *  or null when the source has no effect outset. */
+function effectOutsetRect(
+  img: CanvasImageSource, x: number, y: number, w: number, h: number,
+): { x: number; y: number; width: number; height: number } | null {
+  const frame = imageEffectFrame(img);
+  if (!frame || !(frame.width > 0) || !(frame.height > 0)) return null;
+  const size = img as { width: number; height: number };
+  const sx = w / frame.width, sy = h / frame.height;
+  return { x: x - frame.x * sx, y: y - frame.y * sy, width: size.width * sx, height: size.height * sy };
+}
+
+/** Axis-aligned bounds of `rect` after the picture's flips and rotation
+ *  about the authored frame centre (cx, cy) — the transform paint applies,
+ *  so an asymmetric effect outset is culled where it is actually painted. */
+function transformedBoundsAbout(
+  rect: { x: number; y: number; width: number; height: number },
+  cx: number, cy: number, rotationDeg: number, flipH: boolean, flipV: boolean,
+): { x: number; y: number; width: number; height: number } {
+  const r = rotationDeg * Math.PI / 180, cos = Math.cos(r), sin = Math.sin(r);
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const [px, py] of [[rect.x, rect.y], [rect.x + rect.width, rect.y],
+    [rect.x, rect.y + rect.height], [rect.x + rect.width, rect.y + rect.height]] as const) {
+    const dx = (px - cx) * (flipH ? -1 : 1), dy = (py - cy) * (flipV ? -1 : 1);
+    const x = cx + dx * cos - dy * sin, y = cy + dx * sin + dy * cos;
+    minX = Math.min(minX, x); minY = Math.min(minY, y);
+    maxX = Math.max(maxX, x); maxY = Math.max(maxY, y);
+  }
+  return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+}
+
+export function imageCacheKey(
+  imagePath: string,
+  transform?: Duotone | BlipPixelEffects | null,
+  frame?: XlsxPictureEffectFrame,
+): string {
+  if (!transform) return imagePath;
+  // An ordered CT_Blip chain (§20.1.8.13) is keyed by an unambiguous tuple of
+  // the path, the shared structural effect key (which includes the host
+  // orientation) and the physical frame, because spatial effects such as blur
+  // (§20.1.8.15) are measured in EMUs. A lone duotone keeps its established
+  // colour-suffixed key.
+  if ('effects' in transform) {
+    const { widthPt, heightPt } = blipEffectFramePt(frame);
+    return JSON.stringify(['blip', imagePath, blipPixelEffectsKey(transform), widthPt, heightPt]);
+  }
+  return `${imagePath}|duo:${transform.clr1}:${transform.clr2}`;
+}
+
+/** Authored geometry of a worksheet picture that its CT_Blip effects are
+ *  evaluated against: the picture's own extent in EMUs and its host
+ *  rotation/flips (§20.1.8.45/.49 rotWithShape semantics in core). */
+export interface XlsxPictureEffectFrame {
+  readonly cx: number;
+  readonly cy: number;
+  readonly srcRect?: Readonly<{ l: number; t: number; r: number; b: number }> | null;
+  readonly rotation?: number;
+  readonly flipH?: boolean;
+  readonly flipV?: boolean;
+}
+
+/** Physical effect frame in points. Library policy: the frame is the
+ *  authored picture extent (`a:xfrm/a:ext`, else the anchor `xdr:ext`), not
+ *  the zoom-dependent display rectangle, so a radius in EMUs covers the same
+ *  share of the picture at every zoom and the cache identity stays stable.
+ *  Without an authored extent the core falls back to 96 DPI source pixels. */
+export function blipEffectFramePt(frame?: XlsxPictureEffectFrame): { widthPt: number; heightPt: number } {
+  if (!(frame && Number.isFinite(frame.cx) && Number.isFinite(frame.cy) && frame.cx > 0 && frame.cy > 0)) {
+    return { widthPt: 0, heightPt: 0 };
+  }
+  // The srcRect window is stretched over the picture, so the full source
+  // frame is the picture extent divided by the visible source fraction.
+  const full = stretchedSourceFrame(frame.cx / 12700, frame.cy / 12700, frame.srcRect, null);
+  return { widthPt: full.width, heightPt: full.height };
+}
+
+/** Effect frame of a top-level picture anchor. */
+export function imageAnchorEffectFrame(anchor: ImageAnchor): XlsxPictureEffectFrame {
+  const native = anchor.nativeExtCx > 0 && anchor.nativeExtCy > 0;
+  return {
+    cx: native ? anchor.nativeExtCx : anchor.anchorExtCx ?? 0,
+    cy: native ? anchor.nativeExtCy : anchor.anchorExtCy ?? 0,
+    srcRect: anchor.srcRect ?? null,
+    rotation: anchor.rotation ?? 0,
+    flipH: anchor.flipH ?? false,
+    flipV: anchor.flipV ?? false,
+  };
+}
+
+/** Effect frame of a picture leaf inside a group: its normalized share of the
+ *  group's authored extent, with the leaf's own rotation/flips. */
+export function groupLeafEffectFrame(
+  group: { readonly nativeExtCx: number; readonly nativeExtCy: number },
+  shape: ShapeInfo,
+): XlsxPictureEffectFrame {
+  return {
+    cx: group.nativeExtCx * shape.w,
+    cy: group.nativeExtCy * shape.h,
+    srcRect: shape.geom.type === 'image' ? shape.geom.srcRect ?? null : null,
+    rotation: shape.rot,
+    flipH: shape.flipH,
+    flipV: shape.flipV,
+  };
+}
+
+/** Decode-time pixel transform of a worksheet picture: its ordered CT_Blip
+ *  effects (each duotone with its own palette, alpha effects in place) when it
+ *  carries any, otherwise just the lone duotone. Shared by the synchronous
+ *  lookup and the async decoder so both compute the same cache key. */
+export function imagePixelTransform(image: {
+  readonly duotone?: Duotone | null;
+  readonly blipEffects?: readonly BlipEffect[] | null;
+}, frame?: XlsxPictureEffectFrame): Duotone | BlipPixelEffects | null {
+  return image.blipEffects?.length
+    ? {
+        effects: image.blipEffects,
+        duotone: image.duotone ?? null,
+        hostRotation: frame?.rotation ?? 0,
+        hostFlipH: frame?.flipH ?? false,
+        hostFlipV: frame?.flipV ?? false,
+      }
+    : image.duotone ?? null;
 }
 
 // Calibri is the workbook default font in Excel. When absent, keep the
@@ -4487,7 +4608,8 @@ function renderImages(
   for (const anchor of anchors) {
     // A `<a:duotone>` picture was recoloured at decode time and cached under a
     // colour-suffixed key (§20.1.8.23); look it up with the same key.
-    const lookupKey = imageCacheKey(anchor.imagePath, anchor.duotone);
+    const effectFrame = imageAnchorEffectFrame(anchor);
+    const lookupKey = imageCacheKey(anchor.imagePath, imagePixelTransform(anchor, effectFrame), effectFrame);
     const img = loadedImages.get(lookupKey);
     const tiffUnavailable = isOptionalImageUnavailable(loadedImages, lookupKey, 'tiff');
     if (!img && !tiffUnavailable) continue;
@@ -4508,10 +4630,13 @@ function renderImages(
 
     // A rotated rectangle can intersect the viewport even when its unrotated
     // box does not. Flips preserve the same axis-aligned bounds.
-    const bounds = rotatedImageBounds(
-      { x: canvasX, y: canvasY, width: imgW, height: imgH },
-      anchor.rotation,
-    );
+    // A prepared CT_Blip effect can extend beyond the authored frame (blur
+    // grow, glow, shadow); cull by the painted extent, not the frame alone.
+    const outset = img && !anchor.srcRect ? effectOutsetRect(img, canvasX, canvasY, imgW, imgH) : null;
+    const bounds = outset
+      ? transformedBoundsAbout(outset, canvasX + imgW / 2, canvasY + imgH / 2,
+        anchor.rotation ?? 0, anchor.flipH ?? false, anchor.flipV ?? false)
+      : rotatedImageBounds({ x: canvasX, y: canvasY, width: imgW, height: imgH }, anchor.rotation);
     if (bounds.x + bounds.width < clipX || bounds.x > clipX + scrollAreaW) continue;
     if (bounds.y + bounds.height < scrollAreaY || bounds.y > scrollAreaY + scrollAreaH) continue;
 
@@ -4603,8 +4728,11 @@ function renderShapeGroups(
     const canvasX = sheetAnchoredRectX(logicalCanvasX, w, canvasW, rtl);
     const canvasY = scrollAreaY + (y1 - scrollOriginSheetY) - scrollOffsetY;
 
-    if (canvasX + w < clipX || canvasX > clipX + scrollAreaW) continue;
-    if (canvasY + h < scrollAreaY || canvasY > scrollAreaY + scrollAreaH) continue;
+    // A picture leaf with a CT_Blip chain may paint an effect outset beyond
+    // the group rectangle; such groups are not culled by that rectangle.
+    const effectLeaf = anchor.shapes.some(shape => shape.geom?.type === 'image' && blipEffectsMayExtendCoverage(shape.geom.blipEffects ?? []));
+    if (!effectLeaf && (canvasX + w < clipX || canvasX > clipX + scrollAreaW)) continue;
+    if (!effectLeaf && (canvasY + h < scrollAreaY || canvasY > scrollAreaY + scrollAreaH)) continue;
 
     for (const shape of anchor.shapes) {
       const sx = canvasX + shape.x * w;
@@ -4612,7 +4740,7 @@ function renderShapeGroups(
       const sw = shape.w * w;
       const sh = shape.h * h;
       if (sw <= 0 || sh <= 0) continue;
-      drawShape(ctx, shape, sx, sy, sw, sh, cs, loadedImages, cjkFallback);
+      drawShape(ctx, shape, sx, sy, sw, sh, cs, loadedImages, cjkFallback, anchor);
     }
   }
 
@@ -4706,6 +4834,7 @@ function drawShape(
   cs: number,
   loadedImages?: Map<string, CanvasImageSource | null>,
   cjkFallback?: CjkLang,
+  group?: { readonly nativeExtCx: number; readonly nativeExtCy: number },
 ): void {
   if (usesPathShade(shape.strokeFill)) ctx = trackPaintPath(ctx);
   ctx.save();
@@ -4776,7 +4905,8 @@ function drawShape(
     // optional codec cannot provide carries an explicit frame-local placeholder
     // mark.
     const imageGeom = shape.geom;
-    const lookupKey = imageCacheKey(imageGeom.imagePath, imageGeom.duotone);
+    const effectFrame = group ? groupLeafEffectFrame(group, shape) : undefined;
+    const lookupKey = imageCacheKey(imageGeom.imagePath, imagePixelTransform(imageGeom, effectFrame), effectFrame);
     const img = loadedImages?.get(lookupKey);
     const tiffUnavailable = isOptionalImageUnavailable(loadedImages, lookupKey, 'tiff');
     if (img || tiffUnavailable) {
@@ -5831,7 +5961,7 @@ function renderCharts(
       0,
       threeD,
       regionMap,
-      fill => loadedImages?.get(chartImageFillKey(fill)),
+      loadedImages ? chartImageFillStoreLookup(loadedImages) : undefined,
       chartEx,
       // Excel PDF controls at 75/100/200% view zoom and two scroll positions
       // retain the same page-grid tile matrix. Moving the chart 5 pt moves its
