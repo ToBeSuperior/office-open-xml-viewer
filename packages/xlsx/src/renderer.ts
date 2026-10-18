@@ -29,7 +29,7 @@ import type {
   ChartRegionMapRenderer,
   ChartExRenderer,
 } from '@silurus/ooxml-core';
-import { blipPixelEffectsKey, imageEffectFrame, type BlipEffect, type BlipPixelEffects } from '@silurus/ooxml-core';
+import { blipEffectsMayExtendCoverage, blipPixelEffectsKey, imageEffectFrame, type BlipEffect, type BlipPixelEffects } from '@silurus/ooxml-core';
 import { usesPathShade, trackPaintPath, currentStrokeBounds, chartImageFillKey, paintOptionalImagePlaceholder, pathFillModeOverlay, withDrawingMLShapeTransform, buildPresetGeometryFillPath } from '@silurus/ooxml-core';
 import { placePhoneticRuns } from './phonetic.js';
 import { crispOffset, renderChart, renderSparkline, renderPresetShape, createAuxCanvas, PT_TO_PX, EMU_PER_PX, mathToMathML, rasterizeMathSvg, tintMathRaster, classifyCjkFont, classifyFontGeneric, googleCjkFontAlias, cjkFallbackChain, NON_CJK_SANS_FALLBACKS, NON_CJK_SERIF_FALLBACKS, isCjkBreakChar, xlsxBorderDashArray, drawImageCropped, hexToRgba, verticalTrLongMark, verticalVertGlyphReachable, applyStroke, resolveFill, type SparklineModel, type MathNode, type MathRenderer, type RasterizedMathSvg } from '@silurus/ooxml-core';
@@ -4713,7 +4713,7 @@ function renderShapeGroups(
 
     // A picture leaf with a CT_Blip chain may paint an effect outset beyond
     // the group rectangle; such groups are not culled by that rectangle.
-    const effectLeaf = anchor.shapes.some(shape => shape.geom?.type === 'image' && Boolean(shape.geom.blipEffects?.length));
+    const effectLeaf = anchor.shapes.some(shape => shape.geom?.type === 'image' && blipEffectsMayExtendCoverage(shape.geom.blipEffects ?? []));
     if (!effectLeaf && (canvasX + w < clipX || canvasX > clipX + scrollAreaW)) continue;
     if (!effectLeaf && (canvasY + h < scrollAreaY || canvasY > scrollAreaY + scrollAreaH)) continue;
 

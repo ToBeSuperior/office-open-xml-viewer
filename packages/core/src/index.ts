@@ -428,7 +428,7 @@ export {
 // CT_Blip pixel effects (grayscl, biLevel, clrChange) applied in document
 // order with the duotone, through the same decode cache.
 export {
-  applyBlipPixelEffects, blipEffectImageFills,
+  applyBlipPixelEffects, blipEffectImageFills, blipEffectsMayExtendCoverage,
   assertBlipPixelEffectsBudget,
   blipLuminance,
   blipPixelEffectsKey,

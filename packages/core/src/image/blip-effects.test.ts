@@ -2,6 +2,7 @@ import { ImageEffectWorkLedger } from './image-effect-work.js';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   applyBlipPixelEffects,
+  blipEffectsMayExtendCoverage,
   blipPixelEffectsKey,
   blipPixelEffectWork,
   assertBlipPixelEffectsBudget,
@@ -901,4 +902,26 @@ it.each([
     offscreenFactory: (() => ({ width: 1, height: 1, getContext: () => ctx })) as unknown as OffscreenFactory };
   applyBlipPixelEffects(buffer([1, 2, 3, 255]), { effects: [{ type: 'fill', fill }], hostRotation: 45, hostFlipH: flipH }, runtime);
   expect(rotate).toHaveBeenCalledWith(sign * 45 * Math.PI / 180);
+});
+
+it('classifies only chains that can paint outside their frame as spatial', () => {
+  expect(blipEffectsMayExtendCoverage([{ type: 'grayscale' }, { type: 'alphaModFix', amt: 0.5 },
+    { type: 'blur', radius: 12700, grow: false }])).toBe(false);
+  expect(blipEffectsMayExtendCoverage([{ type: 'blur', radius: 12700, grow: true }])).toBe(true);
+  expect(blipEffectsMayExtendCoverage([{ type: 'alphaMod', container: { kind: 'tree',
+    effects: [{ type: 'relativeOffset', tx: 1, ty: 0 }] } }])).toBe(true);
+});
+
+it('fails closed when a recursive tiled gradient brush has no auxiliary surface', () => {
+  const fill = { fillType: 'gradient' as const, gradType: 'linear', angle: 0,
+    stops: [{ position: 0, color: '000000' }, { position: 1, color: 'FFFFFF' }],
+    tileRect: { l: 0, t: 0, r: 0.5, b: 0 } };
+  const ctx = { save() {}, restore() {}, beginPath() {}, rect() {}, clip() {}, fillRect() {},
+    createLinearGradient: () => ({ addColorStop() {} }), getTransform: () => ({ a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 }),
+    getImageData: () => ({ data: new Uint8ClampedArray(4), width: 1, height: 1 }) };
+  const runtime = { offscreenFactory: (() => ({ width: 1, height: 1, getContext: () => ctx })) as unknown as OffscreenFactory };
+  const buf = buffer([1, 2, 3, 255]);
+  expect(() => applyBlipPixelEffects(buf, { effects: [{ type: 'fill', fill }] }, runtime))
+    .toThrowError(expect.objectContaining({ code: 'unsupported-image-effect' }));
+  expect([...buf.data]).toEqual([1, 2, 3, 255]);
 });

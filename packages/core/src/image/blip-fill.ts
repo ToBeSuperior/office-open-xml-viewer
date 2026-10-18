@@ -2,7 +2,8 @@ import type { Fill } from '../types/common.js';
 import type { BlipEffectFill } from './blip-effects.js';
 import type { EffectBuffer } from './blip-blur.js';
 import { imageEffectFrame } from './image-effect-frame.js';
-import { resolveFill } from '../shape/paint.js';
+import { resolveFill, usesPathShade } from '../shape/paint.js';
+import { createAuxCanvasForContext } from '../canvas/aux-canvas.js';
 import { drawImageCropped, imageNaturalSize } from './crop.js';
 import { defaultOffscreenFactory, type OffscreenFactory } from './duotone.js';
 import { OoxmlError } from '../errors/ooxml-error.js';
@@ -204,6 +205,16 @@ export function effectFillPixels(
       // Gradients (including path shades), patterns and solid colors use the
       // existing shared fill painter, preserving its palette/geometry policy.
       const recipe: Fill = fill.fillType === 'gradient' ? { ...fill, stops: [...fill.stops] } : fill;
+      // The shared painter silently degrades a tiled gradient or a path shade
+      // to a native gradient when its auxiliary surface is unavailable. Inside
+      // a CT_Blip chain that would alter authored pixels, so require the
+      // surface up front and fail closed with the typed effect error.
+      if (recipe.fillType === 'gradient' && (gradientNeedsTileSurface(recipe) || usesPathShade(recipe))) {
+        const probe = createAuxCanvasForContext(ctx, 1, 1);
+        const probeContext = probe?.getContext('2d');
+        if (probe) probe.width = 0;
+        if (!probe || !probeContext) throw new OoxmlError('unsupported-image-effect', 'Gradient brush surface unavailable');
+      }
       const paint = resolveFill(recipe, ctx, 0, 0, w, h, hostRotation, 1);
       // The ordinary pattern painter can fall back to a solid color when
       // its preset/surface is unavailable. Recursive effects must fail closed.
@@ -215,4 +226,10 @@ export function effectFillPixels(
     // Release the raster backing store before the next graph branch.
     (surface as { width: number; height: number }).width = 0;
   }
+}
+
+function gradientNeedsTileSurface(fill: Extract<Fill, { fillType: 'gradient' }>): boolean {
+  const tile = fill.tileRect;
+  return tile != null && fill.stops.length > 1
+    && ((tile.l ?? 0) !== 0 || (tile.t ?? 0) !== 0 || (tile.r ?? 0) !== 0 || (tile.b ?? 0) !== 0);
 }

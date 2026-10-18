@@ -717,6 +717,20 @@ describe('render-orchestrator image decode (lazy bytes)', () => {
     expect(fetchImage.mock.calls.map(([path]) => path)).toContain('xl/media/image2.png');
   });
 
+  it('prefetchImages keeps culling an off-viewport picture whose chain is pointwise', async () => {
+    vi.stubGlobal('createImageBitmap', vi.fn(async (blob: Blob) => new FakeBitmap(blob.type)));
+    const fetchImage = vi.fn(async (path: string, mime: string) =>
+      new Blob([new TextEncoder().encode(path)], { type: mime }));
+    const ws = worksheetWithImages();
+    const leaf = ws.shapeGroups![0]!.shapes[0]!.geom;
+    if (leaf.type !== 'image') throw new Error('fixture leaf must be a picture');
+    leaf.blipEffects = [{ type: 'grayscale' }, { type: 'alphaModFix', amt: 0.5 }];
+    await prefetchImages(ws, new Map(), fetchImage, {
+      viewport: { row: 1, col: 1, rows: 2, cols: 2 },
+    }).catch(() => undefined);
+    expect(fetchImage.mock.calls.map(([path]) => path)).not.toContain('xl/media/image2.png');
+  });
+
   it('prefetchImages retains an off-cell anchor whose signed offset reaches the viewport', async () => {
     vi.stubGlobal('createImageBitmap', vi.fn(async (blob: Blob) => new FakeBitmap(blob.type)));
     const fetchImage = vi.fn(async (path: string, mime: string) =>

@@ -18,6 +18,7 @@ import {
   isOoxmlDecodedImageLimitError,
   OoxmlResourceLimitError,
   OoxmlError,
+  blipEffectsMayExtendCoverage,
   isTiffDecodeError,
   isOptionalImageCodecUnavailableError,
   EMU_PER_PT,
@@ -449,7 +450,7 @@ export async function prefetchImages(
         opts?.viewport,
         geometry,
         frame,
-        Boolean(img.blipEffects?.length),
+        blipEffectsMayExtendCoverage(img.blipEffects ?? []),
       )) continue;
       const display = anchorDisplaySize(img, ws, geometry, opts?.cellScale ?? 1);
       // Key by (path + duotone colours) so a recoloured picture is looked up
@@ -497,7 +498,7 @@ export async function prefetchImages(
         opts?.viewport,
         geometry,
         frame,
-        grp.shapes.some(shape => shape.geom?.type === 'image' && Boolean(shape.geom.blipEffects?.length)),
+        grp.shapes.some(shape => shape.geom?.type === 'image' && blipEffectsMayExtendCoverage(shape.geom.blipEffects ?? [])),
       )) continue;
       for (const shape of grp.shapes) {
         if (shape.geom.type === 'image') {

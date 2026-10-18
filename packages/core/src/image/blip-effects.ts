@@ -146,6 +146,27 @@ export function blipEffectImageFills(effects: readonly BlipEffect[]): BlipEffect
   return result;
 }
 
+/** Whether a chain can paint outside its authored frame: a growing blur
+ * (§20.1.8.15), glow (§20.1.8.32), outer/preset shadow (§20.1.8.49/.52),
+ * reflection (§20.1.8.50), relative offset (§20.1.8.51), transform
+ * (§20.1.8.61) or a positive alpha outset (§20.1.8.4), at any container
+ * depth. Pointwise chains never extend coverage, so hosts may keep culling
+ * them by the picture rectangle. Nested image-fill recipes are clipped to
+ * the picture and do not count. */
+export function blipEffectsMayExtendCoverage(effects: readonly BlipEffect[]): boolean {
+  for (const effect of blipEffectNodes(effects, false)) {
+    switch (effect.type) {
+      case 'blur': if (effect.grow) return true; break;
+      case 'shadow': if (!effect.inner) return true; break;
+      case 'alphaOutset': if (effect.radius > 0) return true; break;
+      case 'glow': case 'presetShadow': case 'reflection': case 'relativeOffset': case 'transform':
+        return true;
+      default: break;
+    }
+  }
+  return false;
+}
+
 /** Iterative ownership traversal. Image fills own independent decode recipes;
  * container/DAG recipes share the current evaluator. Both consume the same
  * finite projection envelope; active lists detect cycles without recursion. */
