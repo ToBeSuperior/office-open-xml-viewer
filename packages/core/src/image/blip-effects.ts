@@ -299,13 +299,6 @@ export function blipGrayLevel(r: number, g: number, b: number): number {
   return Math.floor(blipLuminance(r, g, b) * 255 + 1e-6);
 }
 
-/** Evaluated primitive/control steps, including recursive branches and
- * compound-effect lowering. Convolution taps and definition lookup visits
- * additionally consume the independent pixel-work budget. */
-function blipPixelEffectPasses(value: BlipPixelEffects): number {
-  return effectPlan(value, 0).count;
-}
-
 type EffectGrid = Pick<EffectBuffer, 'width' | 'height' | 'frame'>;
 interface EffectContext {
   names: Map<string, BlipEffectContainer>;
