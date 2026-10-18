@@ -313,11 +313,18 @@ type TableCellLayoutInput = TableLayoutInput['rows'][number]['cells'][number];
  * re-enter this acquisition's paragraph services. */
 const rotatedCellReacquisitions = new WeakMap<TableLayoutInput, ReadonlyMap<string, RotatedCellAcquisition>>();
 
-/** Let a projection of a retained table (its rows re-sliced into a new input)
- * re-acquire the retained table's rotated cells. */
-export function shareRotatedCellReacquisition(from: TableLayoutInput, to: TableLayoutInput): void {
-  const rotated = rotatedCellReacquisitions.get(from);
-  if (rotated) rotatedCellReacquisitions.set(to, rotated);
+/** Let a projection of retained tables (their rows re-sliced, or an adjacent
+ * group's members combined, into a new input) re-acquire their rotated cells. */
+export function shareRotatedCellReacquisition(
+  from: TableLayoutInput | readonly TableLayoutInput[],
+  to: TableLayoutInput,
+): void {
+  const sources = (Array.isArray(from) ? from : [from]) as readonly TableLayoutInput[];
+  const shared = new Map<string, RotatedCellAcquisition>();
+  for (const source of sources) {
+    rotatedCellReacquisitions.get(source)?.forEach((rotated, cellId) => shared.set(cellId, rotated));
+  }
+  if (shared.size > 0) rotatedCellReacquisitions.set(to, shared);
 }
 
 /**

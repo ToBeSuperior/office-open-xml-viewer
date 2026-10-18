@@ -375,6 +375,32 @@ describe('ECMA-376 §17.4.72 cell text direction', () => {
     expect(text.y).toBeCloseTo(160, 0);
   });
 
+  it('re-runs rotated lines laid out as one adjacent table group', async () => {
+    // Two adjacent tables form one logical table: the second's exact row takes
+    // the group's 1pt inside rule instead of its own 6pt top rule, so its line
+    // spans 81..160pt and right-aligned text ends at y=160, as in one table.
+    const rule = { style: 'single', width: 6, color: null };
+    const ruledTable = (text: string, offset: number) => {
+      const ruled = tableOf([
+        row([cell(text, { textDirection: 'tbRl', alignment: 'right' }), cell('x')], 80, 'exact'),
+      ]);
+      ruled.borders = {
+        ...ruled.borders, top: rule, bottom: rule, insideH: { style: 'single', width: 1, color: null },
+      } as DocTable['borders'];
+      return Object.assign(ruled, {
+        __tableLayout: {
+          effectiveStyleId: null, ordinaryFlow: true,
+          logicalSequenceId: 'table-sequence:0', logicalRowOffset: offset, logicalTotalRows: 2,
+          grid: { authored: true, columns: [{ width: '2000' }, { width: '2000' }], requiredColumnCount: 2 },
+          preferredWidth: null, layout: { kind: 'fixed' }, cellSpacing: null,
+        },
+      });
+    };
+    const calls = await render(ruledTable('CD', 1), [{ type: 'table', ...ruledTable('AB', 0) } as BodyElement]);
+    const text = calls.find((call) => call.text.includes('CD'))!;
+    expect(text.y).toBeCloseTo(140, 0);
+  });
+
   it('lets a taller neighbour lengthen the line and centres text along it', async () => {
     const calls = await render(tableOf([
       row([

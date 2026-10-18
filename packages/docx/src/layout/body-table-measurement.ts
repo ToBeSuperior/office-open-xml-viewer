@@ -678,6 +678,7 @@ function combinedAdjacentGroupAcquisition(
       records.map((record) => record.input),
     ),
   );
+  shareRotatedCellReacquisition(records.map((record) => record.input), combinedInput);
   const combinedLayout = layoutRetainedTableInput(
     combinedInput, adjacentGroupPlacement(request), services,
   ).layout;
