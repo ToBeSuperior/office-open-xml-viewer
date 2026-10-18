@@ -1,7 +1,6 @@
 //! Passive color projection of MS-XLS Theme (2.4.326).
 use super::{u16_at, u32_at, unsupported, Record};
 use std::collections::BTreeSet;
-use std::io::Cursor;
 mod xml;
 
 const A: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
@@ -120,11 +119,23 @@ impl Colors {
     }
 
     fn package(bytes: &[u8]) -> Result<Self, String> {
-        let entries = preflight(bytes)?;
+        let (entries, end) = preflight(bytes)?;
         // Share actual decoder-input work across the entire relationship chain.
         let mut work_budget = super::MAX_RECORDS;
-        let mut archive = zip::ZipArchive::new(Cursor::new(bytes))
+        // Preflight proved the directory ends at its EOCD with no prefix, so
+        // open at offset 0 rather than letting the reader scan for signatures.
+        let config = zip::read::Config {
+            archive_offset: zip::read::ArchiveOffset::Known(0),
+        };
+        // Index through the validated footer and directory only (shared
+        // `IndexView` rules), then read entries from the real bytes.
+        let directory_start = u32_at(bytes, end + 16)? as usize;
+        let view =
+            ooxml_common::zip::IndexView::for_validated_directory(bytes, directory_start, end, &[]);
+        let (reader, indexing) = ooxml_common::zip::PackageReader::with_view(bytes, view);
+        let mut archive = zip::ZipArchive::with_config(config, reader)
             .map_err(|_| unsupported("invalid BIFF theme ZIP"))?;
+        indexing.set(false);
         let mut names = BTreeSet::new();
         let mut total = 0u64;
         // Preflight excludes ZIP64/split declarations and caps the entry
@@ -152,11 +163,14 @@ impl Colors {
                     "encrypted BIFF theme ZIP entry",
                 ));
             }
+            let name = entry
+                .name()
+                .map_err(|_| unsupported("invalid BIFF theme ZIP entry"))?;
             if entry.is_symlink()
-                || !names.insert(ooxml_common::rels::part_name_equivalence_key(entry.name()))
-                || (entry.name() != "[Content_Types].xml"
-                    && ooxml_common::rels::part_name_equivalence_key(&normalize("", entry.name())?)
-                        != ooxml_common::rels::part_name_equivalence_key(entry.name()))
+                || !names.insert(ooxml_common::rels::part_name_equivalence_key(&name))
+                || (name != "[Content_Types].xml"
+                    && ooxml_common::rels::part_name_equivalence_key(&normalize("", &name)?)
+                        != ooxml_common::rels::part_name_equivalence_key(&name))
             {
                 return Err(unsupported("unsafe or oversized BIFF theme ZIP entry"));
             }
@@ -239,7 +253,7 @@ impl Colors {
 }
 
 fn part(
-    archive: &mut zip::ZipArchive<Cursor<&[u8]>>,
+    archive: &mut zip::ZipArchive<ooxml_common::zip::PackageReader<&[u8]>>,
     name: &str,
     work_budget: &mut usize,
 ) -> Result<Vec<u8>, String> {
@@ -309,7 +323,9 @@ fn normalize(source: &str, target: &str) -> Result<String, String> {
         .ok_or_else(|| unsupported("unsupported BIFF theme part URI"))
 }
 
-fn preflight(bytes: &[u8]) -> Result<usize, String> {
+/// Validate the embedded package's footer and directory; returns the entry
+/// count and the EOCD offset.
+fn preflight(bytes: &[u8]) -> Result<(usize, usize), String> {
     if bytes.len() > MAX_ZIP_BYTES {
         return Err(crate::rejection::resource(
             "BIFF theme ZIP byte budget exceeded",
@@ -340,7 +356,7 @@ fn preflight(bytes: &[u8]) -> Result<usize, String> {
     {
         return Err(unsupported("unsupported BIFF theme ZIP directory"));
     }
-    Ok(count)
+    Ok((count, end))
 }
 
 /// Test fixture: a deflated ZIP of the given parts, as Office stores a
@@ -348,7 +364,7 @@ fn preflight(bytes: &[u8]) -> Result<usize, String> {
 #[cfg(test)]
 pub(super) fn test_zip(parts: &[(&str, String)]) -> Vec<u8> {
     use std::io::Write;
-    let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
     let options = zip::write::SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated)
         .unix_permissions(0o644);
@@ -365,6 +381,18 @@ mod tests {
     const A: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
     const R: &str = "http://schemas.openxmlformats.org/package/2006/relationships";
     const REL: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+
+    #[test]
+    fn repeated_unicode_path_fields_are_opaque_metadata() {
+        let zip = test_zip(&[("a.xml", "a".into())]);
+        let field = crate::opc_part::test_unicode_path_field("a.xml");
+        let once = crate::opc_part::test_with_central_extra(&zip, &field);
+        assert!(preflight(&once).is_ok());
+        let twice =
+            crate::opc_part::test_with_central_extra(&zip, &[field.clone(), field].concat());
+        // Unicode metadata is opaque to the index (OPC names are raw ASCII).
+        assert!(preflight(&twice).is_ok());
+    }
 
     fn package(theme: &str) -> Vec<u8> {
         test_zip(&[
@@ -400,7 +428,7 @@ mod tests {
             .iter()
             .map(|(name, xml)| (name.as_str(), xml.clone()))
             .collect();
-        assert_eq!(preflight(&test_zip(&refs[..64])).unwrap(), 64);
+        assert_eq!(preflight(&test_zip(&refs[..64])).unwrap().0, 64);
         assert!(Colors::package(&test_zip(&refs))
             .err()
             .unwrap()

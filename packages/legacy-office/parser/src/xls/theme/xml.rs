@@ -132,7 +132,7 @@ pub(super) fn parse(bytes: &[u8]) -> Result<Node, String> {
                     root = Some(node);
                 }
             }
-            Event::Text(t) if t.as_ref().iter().all(u8::is_ascii_whitespace) => {}
+            Event::Text(t) if t.iter().all(u8::is_ascii_whitespace) => {}
             Event::Comment(_) => {}
             Event::Decl(d) if !declaration && stack.is_empty() && root.is_none() => {
                 declaration = true;

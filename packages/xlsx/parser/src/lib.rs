@@ -10010,7 +10010,7 @@ mod pivot_metadata_tests {
                 let mut entry = archive.by_index(index).unwrap();
                 let mut content = Vec::new();
                 std::io::Read::read_to_end(&mut entry, &mut content).unwrap();
-                zip.start_file(entry.name(), options).unwrap();
+                zip.start_file(entry.name().unwrap(), options).unwrap();
                 zip.write_all(&content).unwrap();
             }
             zip.start_file("xl/styles.xml", options).unwrap();
