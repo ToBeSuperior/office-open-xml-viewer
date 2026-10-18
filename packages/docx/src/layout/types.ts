@@ -532,7 +532,14 @@ export type ImagePaintResourceDescriptor = Readonly<{
    * (§20.1.8.45/.49 rotWithShape): the fill paints inside the rotated shape,
    * so the image itself carries no rotation but its page-fixed effects must
    * still be evaluated against the host's rotation and flips. */
-  effectHost?: Readonly<{ rotation?: number; flipH?: boolean; flipV?: boolean }>;
+  effectHost?: Readonly<{
+    rotation?: number; flipH?: boolean; flipV?: boolean;
+    /** Stretched fill insets (§20.1.8.56): with srcRect they define the full
+     * source frame the chain's EMU measurements are evaluated on. */
+    fillRect?: Readonly<{ l?: number; t?: number; r?: number; b?: number }>;
+    /** A tiled fill samples its source at the fill DPI (§20.1.8.58). */
+    tileDpi?: number;
+  }>;
 }>;
 
 export type ChartPaintResourceDescriptor = Readonly<{

@@ -428,7 +428,7 @@ export {
 // CT_Blip pixel effects (grayscl, biLevel, clrChange) applied in document
 // order with the duotone, through the same decode cache.
 export {
-  applyBlipPixelEffects, blipEffectImageFills, blipEffectsMayExtendCoverage,
+  applyBlipPixelEffects, blipEffectImageFills, blipEffectsMayExtendCoverage, blipEffectsCoverageReach,
   assertBlipPixelEffectsBudget,
   blipLuminance,
   blipPixelEffectsKey,
@@ -440,6 +440,7 @@ export {
 } from './image/blip-effects';
 export type { BlendMode } from './image/blip-fill';
 export { imageEffectError } from './image/image-effect-error';
+export { srcRectHasVisibleArea, stretchedSourceFrame } from './image/crop';
 export { imageEffectFrame, imageEffectOutsetPeriods } from './image/image-effect-frame';
 export {
   getCachedDuotoneBitmapByPath,

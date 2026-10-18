@@ -301,3 +301,24 @@ export function metafileRasterSize(
   const fracH = 1 - srcRect.t - srcRect.b;
   return { widthPt: widthPt / fracW, heightPt: heightPt / fracH };
 }
+
+/** Physical extent of the whole (uncropped) source of a stretched blip fill
+ * (§20.1.8.55/.56): the fillRect insets shrink the destination, and the
+ * srcRect window is stretched across it, so the full source spans the
+ * destination divided by the visible source fraction. CT_Blip effects that
+ * are measured in EMUs (§20.1.8.15) are evaluated against this frame, the
+ * same mapping core uses for nested stretched fills. */
+export function stretchedSourceFrame(
+  width: number, height: number,
+  srcRect: SrcRect | null | undefined,
+  fillRect: Readonly<{ l?: number; t?: number; r?: number; b?: number }> | null | undefined,
+): { width: number; height: number } {
+  const destW = width * (1 - (fillRect?.l ?? 0) - (fillRect?.r ?? 0));
+  const destH = height * (1 - (fillRect?.t ?? 0) - (fillRect?.b ?? 0));
+  const cropW = 1 - (srcRect?.l ?? 0) - (srcRect?.r ?? 0);
+  const cropH = 1 - (srcRect?.t ?? 0) - (srcRect?.b ?? 0);
+  return {
+    width: Math.max(0, cropW > 0 ? destW / cropW : destW),
+    height: Math.max(0, cropH > 0 ? destH / cropH : destH),
+  };
+}

@@ -26,6 +26,7 @@ import {
   resolvedCachedBitmapVariantKey,
   sourceRasterTargetSize,
   chartImageFillKey,
+  stretchedSourceFrame,
   chartImageFillPixelTransform,
   chartImageFillUsageSize,
   collectChartImageFillUsages,
@@ -301,12 +302,16 @@ function imageDecodeRequests(
   for (const image of images) {
     const demand = demandByResource.get(`${image.kind}:${image.resourceKey}`);
     if (!demand) continue;
-    const raster = metafileRasterSize(
-      image.mimeType,
-      image.srcRect,
-      image.blipEffects?.length ? image.intrinsicSize.widthPt : demand.widthPt,
-      image.blipEffects?.length ? image.intrinsicSize.heightPt : demand.heightPt,
-    );
+    // A chain measured in EMUs (§20.1.8.15) is evaluated on the full source
+    // frame: the srcRect window stretched over the (fillRect-inset) extent.
+    // A tiled fill instead samples its source at the fill DPI (§20.1.8.58).
+    const tileDpi = image.blipEffects?.length ? image.effectHost?.tileDpi : undefined;
+    const raster = tileDpi !== undefined
+      ? { widthPt: 0, heightPt: 0 }
+      : image.blipEffects?.length
+        ? (frame => ({ widthPt: frame.width, heightPt: frame.height }))(stretchedSourceFrame(
+          image.intrinsicSize.widthPt, image.intrinsicSize.heightPt, image.srcRect, image.effectHost?.fillRect))
+        : metafileRasterSize(image.mimeType, image.srcRect, demand.widthPt, demand.heightPt);
     if (!raster) continue;
     const request: ImageDecodeRequest = {
       // §20.1.8.15: rad is physical. Keep each authored occurrence's
@@ -319,9 +324,12 @@ function imageDecodeRequests(
       ...(image.colorReplaceFrom === undefined ? {} : { colorReplaceFrom: image.colorReplaceFrom }),
       ...(image.duotone === undefined ? {} : { duotone: image.duotone as Duotone }),
       ...(image.blipEffects?.length ? { blipEffects: image.blipEffects,
-        orientation: image.effectHost
-          ? { hostRotation: image.effectHost.rotation, hostFlipH: image.effectHost.flipH, hostFlipV: image.effectHost.flipV }
-          : { hostRotation: image.rotation, hostFlipH: image.flipH, hostFlipV: image.flipV } } : {}),
+        orientation: {
+          ...(image.effectHost
+            ? { hostRotation: image.effectHost.rotation, hostFlipH: image.effectHost.flipH, hostFlipV: image.effectHost.flipV }
+            : { hostRotation: image.rotation, hostFlipH: image.flipH, hostFlipV: image.flipV }),
+          ...(tileDpi === undefined ? {} : { emuPerPixelX: 914400 / tileDpi, emuPerPixelY: 914400 / tileDpi }),
+        } } : {}),
       ...(image.vmlStrokePattern === undefined ? {} : { vmlStrokePattern: image.vmlStrokePattern as Duotone }),
       widthPt: raster.widthPt,
       heightPt: raster.heightPt,

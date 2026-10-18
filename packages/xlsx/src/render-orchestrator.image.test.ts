@@ -707,14 +707,23 @@ describe('render-orchestrator image decode (lazy bytes)', () => {
     const fetchImage = vi.fn(async (path: string, mime: string) =>
       new Blob([new TextEncoder().encode(path)], { type: mime }));
     const ws = worksheetWithImages();
-    const leaf = ws.shapeGroups![0]!.shapes[0]!.geom;
+    const group = ws.shapeGroups![0]!;
+    group.nativeExtCx = group.nativeExtCy = 914400;
+    const leaf = group.shapes[0]!.geom;
     if (leaf.type !== 'image') throw new Error('fixture leaf must be a picture');
-    leaf.blipEffects = [{ type: 'blur', radius: 914400, grow: true }];
-    await prefetchImages(ws, new Map(), fetchImage, {
-      viewport: { row: 1, col: 1, rows: 2, cols: 2 },
-    }).catch(() => undefined);
-    // The blurred picture is acquired although its rectangle is off-viewport.
-    expect(fetchImage.mock.calls.map(([path]) => path)).toContain('xl/media/image2.png');
+    const acquired = async (radius: number) => {
+      fetchImage.mockClear();
+      leaf.blipEffects = [{ type: 'blur', radius, grow: true }];
+      await prefetchImages(ws, new Map(), fetchImage, {
+        viewport: { row: 1, col: 1, rows: 2, cols: 2 },
+      }).catch(() => undefined);
+      return fetchImage.mock.calls.map(([path]) => path).includes('xl/media/image2.png');
+    };
+    // A blur reaching a whole picture width beyond the rectangle can paint
+    // into the viewport, so the off-viewport picture is acquired; a 1 pt blur
+    // cannot, so the picture stays culled.
+    expect(await acquired(2 * 914400)).toBe(true);
+    expect(await acquired(12700)).toBe(false);
   });
 
   it('prefetchImages keeps culling an off-viewport picture whose chain is pointwise', async () => {

@@ -111,6 +111,7 @@ import {
   imageEffectError,
   imageEffectOutsetPeriods,
   imageEffectFrame,
+  stretchedSourceFrame,
   chartImageFillKey,
   chartImageFillPixelTransform,
   chartImageFillHostKey,
@@ -2342,7 +2343,10 @@ async function prepareBackground(
         pixelTransform(fill),
         fetchImage,
         {
-          ...tiledEffectExtent(fill, canvasW / scale / PT_TO_EMU, canvasH / scale / PT_TO_EMU),
+          ...(fill.blipEffects?.length && !fill.tile
+            ? (frame => ({ widthPt: frame.width, heightPt: frame.height }))(stretchedSourceFrame(
+              canvasW / scale / PT_TO_EMU, canvasH / scale / PT_TO_EMU, fill.srcRect, fill.fillRect))
+            : tiledEffectExtent(fill, canvasW / scale / PT_TO_EMU, canvasH / scale / PT_TO_EMU)),
           ...(planned ?? {}),
           tiff,
           svgDecoder,
@@ -2648,8 +2652,13 @@ function shapeFillKey(fill: ImageFill, widthEmu: number, heightEmu: number, host
     fill.svgImagePath ?? null,
     imagePlanKey(fill.imagePath, pixelTransform(fill, host)),
     // §20.1.8.15 rad uses physical coordinates. Prepared identity and paint
-    // lookup must retain the same authored frame as the effect decoder.
-    ...(fill.blipEffects?.length ? [widthEmu, heightEmu] : []),
+    // lookup must retain the same authored frame as the effect decoder: the
+    // full source frame of a stretched fill (fillRect/srcRect included).
+    ...(fill.blipEffects?.length
+      ? (frame => [frame.width, frame.height])(fill.tile
+        ? { width: widthEmu, height: heightEmu }
+        : stretchedSourceFrame(widthEmu, heightEmu, fill.srcRect, fill.fillRect))
+      : []),
   ]);
 }
 
@@ -7006,12 +7015,18 @@ async function preparePicture(
       // §20.1.8.23 duotone recolour on the raster blip (once, at decode time,
       // cached under a colour-suffixed key). No duotone ⇒ this is exactly the
       // former `getCachedBitmapByPath` decode.
+      // A chain measured in EMUs (§20.1.8.15) is evaluated on the picture's
+      // full source frame: the srcRect window is stretched over the picture.
+      const effectFrame = el.blipEffects?.length
+        ? stretchedSourceFrame(el.width / PT_TO_EMU, el.height / PT_TO_EMU, el.srcRect, null)
+        : null;
       bitmap = await getCachedDuotoneBitmapByPath(
         el.imagePath,
         el.mimeType,
         pixelTransform(el),
         fetchImage,
-        { widthPt, heightPt, ...(target ?? {}), tiff, svgDecoder },
+        { widthPt: effectFrame?.width ?? widthPt, heightPt: effectFrame?.height ?? heightPt,
+          ...(target ?? {}), tiff, svgDecoder },
       );
     }
     // Skip a picture whose blip is an unsupported metafile (null bitmap), the
@@ -8644,10 +8659,15 @@ async function renderSlideLeased(
     }>();
     for (const { fill, width, height, host } of slideImageFillUsages(slide)) {
       if (!(width > 0) || !(height >= 0)) continue;
+      // A stretched chain is evaluated on the full source frame (fillRect and
+      // srcRect included); that frame is also part of the prepared identity.
+      const effectFrame = fill.blipEffects?.length && !fill.tile
+        ? stretchedSourceFrame(width, height, fill.srcRect, fill.fillRect)
+        : { width, height };
       const key = shapeFillKey(fill, width, height, host);
       const prior = shapeFills.get(key);
-      const widthPt = width / PT_TO_EMU;
-      const heightPt = height / PT_TO_EMU;
+      const widthPt = effectFrame.width / PT_TO_EMU;
+      const heightPt = effectFrame.height / PT_TO_EMU;
       const fr = fill.fillRect ?? {};
       const target = rasterTargetOptions(
         emuToPx(width, scale) * (1 - (fr.l ?? 0) - (fr.r ?? 0)),

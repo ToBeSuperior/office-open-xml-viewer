@@ -1,6 +1,7 @@
 import { counterRotatedFillTransform } from './fill-frame';
 import type { GradientFill, GradientStop } from '../types/common';
 import { createAuxCanvasForContext } from '../canvas/aux-canvas';
+import { brushSurfaceUnavailable } from '../canvas/strict-brush-surface';
 
 /** Append the fill-bearing outline; coordinates belong to the supplied box.
  * The caller owns beginPath. Decorative, unfilled paths must be excluded. */
@@ -531,7 +532,7 @@ export function resolvePathShade(
   const target = surface?.getContext('2d') as CanvasRenderingContext2D | null | undefined;
   const stops = [...fill.stops].sort((a, b) => a.position - b.position);
   const ramp = colorTable(ctx, stops);
-  if (!surface || !target || !ramp || typeof target.createImageData !== 'function') return null;
+  if (!surface || !target || !ramp || typeof target.createImageData !== 'function') return brushSurfaceUnavailable();
   const first = rgba(stops[0].color);
   const last = rgba(stops[stops.length - 1].color);
   // Keep the solver's double precision: Float32 can round s<1 to exactly 1

@@ -29,7 +29,7 @@ import type {
   ChartRegionMapRenderer,
   ChartExRenderer,
 } from '@silurus/ooxml-core';
-import { blipEffectsMayExtendCoverage, blipPixelEffectsKey, imageEffectFrame, type BlipEffect, type BlipPixelEffects } from '@silurus/ooxml-core';
+import { blipEffectsMayExtendCoverage, blipPixelEffectsKey, imageEffectFrame, stretchedSourceFrame, type BlipEffect, type BlipPixelEffects } from '@silurus/ooxml-core';
 import { usesPathShade, trackPaintPath, currentStrokeBounds, chartImageFillKey, paintOptionalImagePlaceholder, pathFillModeOverlay, withDrawingMLShapeTransform, buildPresetGeometryFillPath } from '@silurus/ooxml-core';
 import { placePhoneticRuns } from './phonetic.js';
 import { crispOffset, renderChart, renderSparkline, renderPresetShape, createAuxCanvas, PT_TO_PX, EMU_PER_PX, mathToMathML, rasterizeMathSvg, tintMathRaster, classifyCjkFont, classifyFontGeneric, googleCjkFontAlias, cjkFallbackChain, NON_CJK_SANS_FALLBACKS, NON_CJK_SERIF_FALLBACKS, isCjkBreakChar, xlsxBorderDashArray, drawImageCropped, hexToRgba, verticalTrLongMark, verticalVertGlyphReachable, applyStroke, resolveFill, type SparklineModel, type MathNode, type MathRenderer, type RasterizedMathSvg } from '@silurus/ooxml-core';
@@ -132,6 +132,7 @@ export function imageCacheKey(
 export interface XlsxPictureEffectFrame {
   readonly cx: number;
   readonly cy: number;
+  readonly srcRect?: Readonly<{ l: number; t: number; r: number; b: number }> | null;
   readonly rotation?: number;
   readonly flipH?: boolean;
   readonly flipV?: boolean;
@@ -143,9 +144,13 @@ export interface XlsxPictureEffectFrame {
  *  share of the picture at every zoom and the cache identity stays stable.
  *  Without an authored extent the core falls back to 96 DPI source pixels. */
 export function blipEffectFramePt(frame?: XlsxPictureEffectFrame): { widthPt: number; heightPt: number } {
-  return frame && Number.isFinite(frame.cx) && Number.isFinite(frame.cy) && frame.cx > 0 && frame.cy > 0
-    ? { widthPt: frame.cx / 12700, heightPt: frame.cy / 12700 }
-    : { widthPt: 0, heightPt: 0 };
+  if (!(frame && Number.isFinite(frame.cx) && Number.isFinite(frame.cy) && frame.cx > 0 && frame.cy > 0)) {
+    return { widthPt: 0, heightPt: 0 };
+  }
+  // The srcRect window is stretched over the picture, so the full source
+  // frame is the picture extent divided by the visible source fraction.
+  const full = stretchedSourceFrame(frame.cx / 12700, frame.cy / 12700, frame.srcRect, null);
+  return { widthPt: full.width, heightPt: full.height };
 }
 
 /** Effect frame of a top-level picture anchor. */
@@ -154,6 +159,7 @@ export function imageAnchorEffectFrame(anchor: ImageAnchor): XlsxPictureEffectFr
   return {
     cx: native ? anchor.nativeExtCx : anchor.anchorExtCx ?? 0,
     cy: native ? anchor.nativeExtCy : anchor.anchorExtCy ?? 0,
+    srcRect: anchor.srcRect ?? null,
     rotation: anchor.rotation ?? 0,
     flipH: anchor.flipH ?? false,
     flipV: anchor.flipV ?? false,
@@ -169,6 +175,7 @@ export function groupLeafEffectFrame(
   return {
     cx: group.nativeExtCx * shape.w,
     cy: group.nativeExtCy * shape.h,
+    srcRect: shape.geom.type === 'image' ? shape.geom.srcRect ?? null : null,
     rotation: shape.rot,
     flipH: shape.flipH,
     flipV: shape.flipV,

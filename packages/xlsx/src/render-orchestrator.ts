@@ -18,7 +18,8 @@ import {
   isOoxmlDecodedImageLimitError,
   OoxmlResourceLimitError,
   OoxmlError,
-  blipEffectsMayExtendCoverage,
+  blipEffectsCoverageReach,
+  srcRectHasVisibleArea,
   isTiffDecodeError,
   isOptionalImageCodecUnavailableError,
   EMU_PER_PT,
@@ -196,6 +197,27 @@ function anchorDisplaySize(
   return rect.width > 0 && rect.height > 0 ? { width: rect.width, height: rect.height } : null;
 }
 
+/** Effect reach per side as a fraction of the anchor rectangle, or null
+ * when it cannot be bounded statically (see blipEffectsCoverageReach). */
+type EffectCullReach = { readonly x: number; readonly y: number } | null;
+const NO_EFFECT_REACH: EffectCullReach = { x: 0, y: 0 };
+
+function chainCullReach(
+  effects: readonly import('@silurus/ooxml-core').BlipEffect[] | undefined,
+  leafCx: number, leafCy: number, anchorCx: number, anchorCy: number,
+): EffectCullReach {
+  if (!effects?.length) return NO_EFFECT_REACH;
+  const reach = blipEffectsCoverageReach(effects, leafCx, leafCy);
+  if (reach === null) return null;
+  if (reach.x === 0 && reach.y === 0) return NO_EFFECT_REACH;
+  if (!(anchorCx > 0 && anchorCy > 0)) return null;
+  return { x: reach.x / anchorCx, y: reach.y / anchorCy };
+}
+
+function maxCullReach(left: EffectCullReach, right: EffectCullReach): EffectCullReach {
+  return left === null || right === null ? null : { x: Math.max(left.x, right.x), y: Math.max(left.y, right.y) };
+}
+
 function anchorMayIntersectViewport(
   anchor: CellAnchorRange,
   ws: Worksheet,
@@ -208,15 +230,14 @@ function anchorMayIntersectViewport(
     readonly freezeRows: number;
     readonly freezeCols: number;
   },
-  spatialEffectsMayReach = false,
+  effectReach: EffectCullReach = NO_EFFECT_REACH,
 ): boolean {
   // Tagged acquisition facts share paint's validity policy even for a whole
   // sheet preload. Preserve the historical eager preload for untagged models.
-  // A picture carrying a CT_Blip chain can paint a spatial outset (blur grow,
-  // glow, shadow, reflection) beyond its rectangle whose extent is only known
-  // once the chain is evaluated, so it is acquired without viewport culling;
-  // paint culls it by its prepared effect frame.
-  if (!viewport || spatialEffectsMayReach) return anchor.anchorTag === undefined
+  // A CT_Blip chain that can paint outside its rectangle (blur grow, glow,
+  // shadow, reflection, offset) is culled by its conservative reach; one whose
+  // reach cannot be bounded statically is acquired without viewport culling.
+  if (!viewport || effectReach === null) return anchor.anchorTag === undefined
     || anchorDisplaySize(anchor, ws, geometry, frame?.scale ?? 1) !== null;
   const axes = geometry ?? getGridGeometryForWorksheet(ws);
   const scale = frame?.scale ?? 1;
@@ -224,8 +245,9 @@ function anchorMayIntersectViewport(
   // Culling uses the same display rectangle as paint (single resolver).
   const rect = resolveWorksheetAnchorRect(ws, anchor, col, row, scale);
   if (rect.width <= 0 || rect.height <= 0) return false;
+  const reachX = rect.width * effectReach.x, reachY = rect.height * effectReach.y;
   const bounds = rotatedImageBounds(
-    { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+    { x: rect.x - reachX, y: rect.y - reachY, width: rect.width + 2 * reachX, height: rect.height + 2 * reachY },
     anchor.rotation,
   );
   const effectiveFreeze = frame
@@ -320,7 +342,11 @@ export async function decodeImageSource(
   // sub-rect, so the fractional crop lands correctly; raster blips and uncropped
   // metafiles pass the box through unchanged. The shared base cache retains
   // exact required-resolution variants and reuses a larger sufficient one.
-  const sized = metafileRasterSize(mimeType, srcRect, widthPt, heightPt);
+  // An ordered chain's caller already supplies the full source frame
+  // (blipEffectFramePt), which is also the cropped metafile's raster frame.
+  const sized = duotone && 'effects' in duotone
+    ? (srcRect && !srcRectHasVisibleArea(srcRect) ? null : { widthPt, heightPt })
+    : metafileRasterSize(mimeType, srcRect, widthPt, heightPt);
   if (!sized) return null;
   const decodeRaster = (): Promise<ImageBitmap | null> =>
     getCachedDuotoneBitmapByPath(imagePath, mimeType, duotone, fetchImage, {
@@ -450,7 +476,8 @@ export async function prefetchImages(
         opts?.viewport,
         geometry,
         frame,
-        blipEffectsMayExtendCoverage(img.blipEffects ?? []),
+        (effectFrame => chainCullReach(img.blipEffects, effectFrame.cx, effectFrame.cy,
+          effectFrame.cx, effectFrame.cy))(imageAnchorEffectFrame(img)),
       )) continue;
       const display = anchorDisplaySize(img, ws, geometry, opts?.cellScale ?? 1);
       // Key by (path + duotone colours) so a recoloured picture is looked up
@@ -498,7 +525,10 @@ export async function prefetchImages(
         opts?.viewport,
         geometry,
         frame,
-        grp.shapes.some(shape => shape.geom?.type === 'image' && blipEffectsMayExtendCoverage(shape.geom.blipEffects ?? [])),
+        grp.shapes.reduce<EffectCullReach>((reach, shape) => shape.geom?.type === 'image'
+          ? maxCullReach(reach, chainCullReach(shape.geom.blipEffects, grp.nativeExtCx * shape.w,
+            grp.nativeExtCy * shape.h, grp.nativeExtCx, grp.nativeExtCy))
+          : reach, NO_EFFECT_REACH),
       )) continue;
       for (const shape of grp.shapes) {
         if (shape.geom.type === 'image') {

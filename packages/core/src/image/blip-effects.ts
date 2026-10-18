@@ -154,17 +154,56 @@ export function blipEffectImageFills(effects: readonly BlipEffect[]): BlipEffect
  * them by the picture rectangle. Nested image-fill recipes are clipped to
  * the picture and do not count. */
 export function blipEffectsMayExtendCoverage(effects: readonly BlipEffect[]): boolean {
+  const reach = blipEffectsCoverageReach(effects, 1, 1);
+  return reach === null || reach.x > 0 || reach.y > 0;
+}
+
+/** Conservative reach of a chain's painted coverage beyond its authored
+ * frame, per side, in the frame's units (`width`/`height`, EMU for hosts),
+ * or null when it cannot be bounded statically (a scaling/skewing transform).
+ * Every spatial node at any container depth is summed, so nested or chained
+ * outsets are over-estimated, never under-estimated. Hosts use it to keep
+ * viewport culling for effect pictures (pointwise chains reach 0). */
+export function blipEffectsCoverageReach(
+  effects: readonly BlipEffect[], width: number, height: number,
+): { x: number; y: number } | null {
+  let x = 0, y = 0;
+  const finite = (v: number) => (Number.isFinite(v) ? Math.abs(v) : Infinity);
   for (const effect of blipEffectNodes(effects, false)) {
     switch (effect.type) {
-      case 'blur': if (effect.grow) return true; break;
-      case 'shadow': if (!effect.inner) return true; break;
-      case 'alphaOutset': if (effect.radius > 0) return true; break;
-      case 'glow': case 'presetShadow': case 'reflection': case 'relativeOffset': case 'transform':
-        return true;
+      case 'blur': if (effect.grow) { x += finite(effect.radius); y += finite(effect.radius); } break;
+      case 'alphaOutset': if (effect.radius > 0) { x += finite(effect.radius); y += finite(effect.radius); } break;
+      case 'glow': x += finite(effect.glow.radius); y += finite(effect.glow.radius); break;
+      case 'shadow':
+        if (!effect.inner) {
+          const d = finite(effect.shadow.dist) + finite(effect.shadow.blur);
+          // A scaled/skewed outer shadow can exceed the frame by its scale.
+          const k = Math.max(1, finite(effect.shadow.sx ?? 1), finite(effect.shadow.sy ?? 1));
+          x += d + (k - 1) * width; y += d + (k - 1) * height;
+        }
+        break;
+      case 'presetShadow':
+        for (const shadow of effect.shadows) {
+          const d = finite(shadow.dist) + finite(shadow.blur);
+          x += d; y += d;
+        }
+        break;
+      case 'reflection': {
+        // A reflection mirrors at most the whole frame beyond an edge.
+        const r = effect.reflection;
+        const d = finite(r.dist ?? 0) + finite(r.blur ?? 0);
+        x += width + d; y += height + d;
+        break;
+      }
+      case 'relativeOffset': x += finite(effect.tx) * width; y += finite(effect.ty) * height; break;
+      case 'transform':
+        if (effect.sx !== 1 || effect.sy !== 1 || effect.kx !== 0 || effect.ky !== 0) return null;
+        x += finite(effect.tx); y += finite(effect.ty);
+        break;
       default: break;
     }
   }
-  return false;
+  return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
 }
 
 /** Iterative ownership traversal. Image fills own independent decode recipes;

@@ -108,7 +108,11 @@ function collectDescriptorCandidates(
           ...(shape.fill.duotone === undefined ? {} : { duotone: shape.fill.duotone }),
           ...(shape.fill.blipEffects?.length ? {
             blipEffects: shape.fill.blipEffects,
-            effectHost: { rotation: shape.rotation, flipH: shape.flipH, flipV: shape.flipV },
+            effectHost: {
+              rotation: shape.rotation, flipH: shape.flipH, flipV: shape.flipV,
+              ...(shape.fill.fillRect === undefined ? {} : { fillRect: { ...shape.fill.fillRect } }),
+              ...(shape.fill.tile ? { tileDpi: 96 } : {}),
+            },
           } : {}),
           ...(shape.fill.vml === undefined ? {} : { vmlFill: shape.fill.vml }),
         },

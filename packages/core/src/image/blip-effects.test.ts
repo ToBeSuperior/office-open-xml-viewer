@@ -925,3 +925,24 @@ it('fails closed when a recursive tiled gradient brush has no auxiliary surface'
     .toThrowError(expect.objectContaining({ code: 'unsupported-image-effect' }));
   expect([...buf.data]).toEqual([1, 2, 3, 255]);
 });
+
+it('fails closed when a recursive tiled gradient pattern cannot be built after its surface allocates', () => {
+  const fill = { fillType: 'gradient' as const, gradType: 'linear', angle: 0,
+    stops: [{ position: 0, color: '000000' }, { position: 1, color: 'FFFFFF' }],
+    tileRect: { l: 0, t: 0, r: 0.5, b: 0 } };
+  const surfaceContext = () => ({ save() {}, restore() {}, fillRect() {}, translate() {}, scale() {}, drawImage() {},
+    createLinearGradient: () => ({ addColorStop() {} }), getTransform: () => ({ a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 }) });
+  vi.stubGlobal('OffscreenCanvas', class { constructor(readonly width: number, readonly height: number) {}
+    getContext() { return surfaceContext(); } });
+  try {
+    const ctx = { ...surfaceContext(), beginPath() {}, rect() {}, clip() {}, createPattern: () => null,
+      getImageData: () => ({ data: new Uint8ClampedArray(4), width: 1, height: 1 }) };
+    const runtime = { offscreenFactory: (() => ({ width: 1, height: 1, getContext: () => ctx })) as unknown as OffscreenFactory };
+    const buf = buffer([1, 2, 3, 255]);
+    expect(() => applyBlipPixelEffects(buf, { effects: [{ type: 'fill', fill }] }, runtime))
+      .toThrowError(expect.objectContaining({ code: 'unsupported-image-effect' }));
+    expect([...buf.data]).toEqual([1, 2, 3, 255]);
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
