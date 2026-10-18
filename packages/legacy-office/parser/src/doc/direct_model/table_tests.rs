@@ -2284,12 +2284,12 @@ fn two_root_nested_frame_source(first: Vec<u8>, second: Vec<u8>) -> Vec<u8> {
 #[test]
 fn nested_cell_frame_flow_warning_names_each_root_body_element_once() {
     // The private parser/layout wire is the contract: a fixed code, the
-    // native WordDocument stream as part and the final root body index only.
+    // shared main-document part and the final root body index only.
     let warning = |index: usize| {
         serde_json::json!({
-            "code": "NATIVE_DOC_NESTED_CELL_FRAME_FLOW",
+            "code": "NESTED_CELL_FRAME_FLOW",
             "severity": "warning",
-            "part": "WordDocument",
+            "part": "document",
             "path": [index],
         })
     };

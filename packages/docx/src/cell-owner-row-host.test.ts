@@ -1628,16 +1628,16 @@ describe('cell-owner row host at the production layout boundary', () => {
     expect(at(blocking, 'after').y).toBe(PAGE - 200);
   });
 
-  describe('owner segments of an upright table on a native BtoT section page', () => {
-    // A native producer's BtoT section (raw MS-ODRAW MSOTXFL 2 on its nominal
-    // btLr token) has a counter-clockwise frame: logical inline runs
+  describe('owner segments of an upright table on a bottomToTop section page', () => {
+    // A producer's bottomToTop section flow (on its nominal btLr token) has
+    // a counter-clockwise frame: logical inline runs
     // physically upward from the bottom edge and logical block runs
     // rightward, so logical y = physical x. The Transitional btLr token keeps
     // the clockwise frame. Physical margins top 30 / bottom 70 keep the two
     // column ends apart; left/right stay 40.
     const nativeSection = () => ({
       ...section({ textDirection: 'btLr', marginTop: 30, marginBottom: 70 } as Partial<SectionProps>),
-      __sectionPlacement: { sectionId: 'section:0', nativeTextFlow: 2 },
+      __sectionPlacement: { sectionId: 'section:0', sectionFlow: 'bottomToTop' },
     }) as unknown as SectionProps;
     const native = (body: BodyElement[]) => layout(body, { section: nativeSection() });
     const hostedTable = (framePr: FramePr, ...rows: DocTableRow[]) =>

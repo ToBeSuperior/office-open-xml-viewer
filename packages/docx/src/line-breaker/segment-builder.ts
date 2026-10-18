@@ -1684,8 +1684,8 @@ function appendRunsToSegments(
   segmentBuildContext: SegmentBuildContext,
   selectedMetric: SegmentBuildContext['selectedMetric'],
 ): void {
-  // A native reserved-separator paragraph holds only text-free metric
-  // participants; coalescing them would drop a participant's own CHPX.
+  // A reserved-separator paragraph holds only text-free metric
+  // participants; coalescing them would drop a participant's own properties.
   const sequences = runs.some((run) => run.type === 'text'
     && (run as ParagraphTextBearingRun).noteSeparatorCharacter !== undefined)
     ? new Map<number, never>()
@@ -1731,7 +1731,7 @@ function appendRunsToSegments(
         continue;
       }
       if ((run as ParagraphTextBearingRun).noteSeparatorCharacter !== undefined) {
-        // MS-DOC 2.3.3 reserved separator character: the U+0003/U+0004 rule
+        // Reserved separator character: the U+0003/U+0004 rule
         // control or its story's content paragraph mark. Neither has a glyph
         // here; the rule ink is retained separately. As for a suppressed note
         // mark, a bounded Latin probe resolves the run's own four font slots

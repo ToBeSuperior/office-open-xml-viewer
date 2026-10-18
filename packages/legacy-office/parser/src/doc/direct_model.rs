@@ -5,9 +5,8 @@ use super::{unsupported, AcquiredDoc, Fields};
 use docx_model::paragraph_breaks::ParaPiece;
 use docx_model::{
     BodyElement, CellElement, DocRun, Document, DocumentSettings, DocumentTypographySettingsWire,
-    HeadersFooters, ParseDiagnostic, PARSE_DIAGNOSTIC_CODE_NATIVE_DOC_NESTED_CELL_FRAME_FLOW,
-    PARSE_DIAGNOSTIC_PART_NATIVE_DOC_NESTED_CELL_FRAME_FLOW,
-    PARSE_DIAGNOSTIC_SEVERITY_NATIVE_DOC_NESTED_CELL_FRAME_FLOW,
+    HeadersFooters, ParseDiagnostic, PARSE_DIAGNOSTIC_CODE_NESTED_CELL_FRAME_FLOW,
+    PARSE_DIAGNOSTIC_PART_NESTED_CELL_FRAME_FLOW, PARSE_DIAGNOSTIC_SEVERITY_NESTED_CELL_FRAME_FLOW,
 };
 
 #[cfg(test)]
@@ -357,21 +356,15 @@ fn report_nested_cell_frame_flow(
             }
         }
         if has_frame {
-            let code = fixed_string(
-                PARSE_DIAGNOSTIC_CODE_NATIVE_DOC_NESTED_CELL_FRAME_FLOW,
-                budget,
-            )?;
-            let part = fixed_string(
-                PARSE_DIAGNOSTIC_PART_NATIVE_DOC_NESTED_CELL_FRAME_FLOW,
-                budget,
-            )?;
+            let code = fixed_string(PARSE_DIAGNOSTIC_CODE_NESTED_CELL_FRAME_FLOW, budget)?;
+            let part = fixed_string(PARSE_DIAGNOSTIC_PART_NESTED_CELL_FRAME_FLOW, budget)?;
             let mut path = Vec::new();
             budget.push(&mut path, index)?;
             budget.push(
                 diagnostics,
                 ParseDiagnostic {
                     code,
-                    severity: PARSE_DIAGNOSTIC_SEVERITY_NATIVE_DOC_NESTED_CELL_FRAME_FLOW,
+                    severity: PARSE_DIAGNOSTIC_SEVERITY_NESTED_CELL_FRAME_FLOW,
                     part,
                     path,
                 },

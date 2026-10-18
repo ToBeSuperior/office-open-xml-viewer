@@ -1179,7 +1179,10 @@ pub(super) fn chart_style_fill_ref_xml(
         StyleMatrixLookup::Missing => return ChartStyleMatrixRecipe::Missing,
         StyleMatrixLookup::Entry(entry) => entry,
     };
-    ChartStyleMatrixRecipe::Xml(entry.to_xml())
+    // A budget crossing has latched the typed operation error; degrade locally.
+    entry
+        .to_xml()
+        .map_or(ChartStyleMatrixRecipe::Missing, ChartStyleMatrixRecipe::Xml)
 }
 
 pub(super) fn parse_chart_style_line(
@@ -1227,7 +1230,10 @@ pub(super) fn chart_style_line_ref_xml(
         StyleMatrixLookup::Missing => return ChartStyleMatrixRecipe::Missing,
         StyleMatrixLookup::Entry(entry) => entry,
     };
-    ChartStyleMatrixRecipe::Xml(entry.to_xml())
+    // A budget crossing has latched the typed operation error; degrade locally.
+    entry
+        .to_xml()
+        .map_or(ChartStyleMatrixRecipe::Missing, ChartStyleMatrixRecipe::Xml)
 }
 
 /// Resolution state for one effectRef. Unlike fill/line compatibility, a
@@ -1272,7 +1278,10 @@ pub(super) fn chart_style_effect_ref_xml(
     match format_scheme.lookup_effect_ref(index) {
         StyleMatrixLookup::NoStyle => ChartStyleEffectRecipe::NoStyle,
         StyleMatrixLookup::Missing => ChartStyleEffectRecipe::Missing,
-        StyleMatrixLookup::Entry(entry) => ChartStyleEffectRecipe::Xml(entry.to_xml()),
+        // A budget crossing has latched the typed operation error.
+        StyleMatrixLookup::Entry(entry) => entry
+            .to_xml()
+            .map_or(ChartStyleEffectRecipe::Missing, ChartStyleEffectRecipe::Xml),
     }
 }
 
@@ -1500,7 +1509,7 @@ pub(super) fn classic_style_two_axis_line_width_emu(resolver: &dyn ColorResolver
         StyleMatrixLookup::Entry(entry) => entry,
         StyleMatrixLookup::NoStyle | StyleMatrixLookup::Missing => return None,
     };
-    let xml = entry.to_xml();
+    let xml = entry.to_xml().ok()?;
     let document = crate::depth::parse_guarded(&xml).ok()?;
     let line = document
         .descendants()

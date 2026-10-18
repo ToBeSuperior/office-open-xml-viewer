@@ -550,7 +550,7 @@ export interface ChartAnchor {
 /** Which DrawingML anchor element (ECMA-376 Part 1 §20.5.2) carried the
  *  object. This is a normative fact recorded from the actual XML element name
  *  and is never inferred from geometry. Absent means "not recorded" (older
- *  models, VML/OLE previews, legacy binary conversion). */
+ *  models, VML/OLE previews, producers without DrawingML anchors). */
 export type DrawingAnchorTag = 'oneCellAnchor' | 'twoCellAnchor';
 
 export interface ShapeAnchor {

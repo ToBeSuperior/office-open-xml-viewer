@@ -144,6 +144,9 @@ const KNOWN_PAIR_RULES = new Map<string, KnownPairRule>([
   ['xml-tree:depth', { stage: 'parsing', part: 'optional', configurable: false }],
   ['worksheet-row:projected-bytes', { stage: 'parsing', part: 'optional', configurable: false }],
   ['worksheet-shell:projected-bytes', { stage: 'parsing', part: 'optional', configurable: false }],
+  ['theme-style-reparse:bytes', { stage: 'parsing', part: 'forbidden', configurable: false }],
+  ['style-inheritance:depth', { stage: 'parsing', part: 'required', configurable: false }],
+  ['complex-field:depth', { stage: 'parsing', part: 'forbidden', configurable: false }],
 ]);
 const KNOWN_RESOURCES = new Set(
   [...KNOWN_PAIR_RULES.keys()].map((pair) => pair.slice(0, pair.indexOf(':'))),
