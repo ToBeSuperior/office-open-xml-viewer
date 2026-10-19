@@ -1117,11 +1117,16 @@ impl Row {
             // current cell border (TC80 or an earlier cell assignment) while
             // keeping its type and width; a later assignment replaces the
             // whole border, color included. 0xFFFFFFFF "specifies that there
-            // is no corresponding border": it agrees with an absent or
-            // cleared border and is then inert. Over a visible border the two
-            // facts contradict and no precedence is documented, so that row
-            // stays an unsupported table property, as does a cell side whose
-            // current value is a style-aware assignment not yet resolved.
+            // is no corresponding border": it agrees with an explicitly
+            // cleared cell border and is then inert. An explicit cell value,
+            // cleared or not, wins over row-level arrays and table styles
+            // (see direct_model::tables), so the operand is fully resolved
+            // here. MS-DOC documents no precedence for the remaining cases,
+            // which keep the row an unsupported table property: a cell side
+            // without an explicit border (its effective border would come
+            // from sprmTTableBorders or a table style), a side whose current
+            // value is a style-aware assignment not yet resolved, and the
+            // no-border value over a visible border.
             0xd61a..=0xd61d => {
                 let side = match code {
                     0xd61a => 0,
@@ -1147,8 +1152,9 @@ impl Row {
                     .collect::<Result<Vec<_>, String>>()?;
                 let resolvable = self.cells.iter().zip(&colors).all(|(cell, color)| {
                     cell.prepared_borders[side].is_none()
-                        && (color.is_some()
-                            || cell.borders[side].as_ref().is_none_or(Border::is_cleared))
+                        && cell.borders[side]
+                            .as_ref()
+                            .is_some_and(|border| color.is_some() || border.is_cleared())
                 });
                 if !resolvable {
                     return Ok(false);
@@ -2505,5 +2511,46 @@ mod tests {
         ] {
             assert!(row.apply(0xd61a, &operand).is_err());
         }
+    }
+    #[test]
+    fn border_color_arrays_over_inherited_borders_stay_unsupported() {
+        // Two cells without TC80 entries: their effective sides come from
+        // the row-level array or a table style, which MS-DOC gives no
+        // precedence against a per-cell color array.
+        let cv = |value: [u8; 4]| {
+            let mut operand = vec![8];
+            operand.extend(value);
+            operand.extend(value);
+            operand
+        };
+        let mut row_level = Row::default();
+        row_level
+            .apply(0xd608, &[6, 0, 2, 0, 0, 0xe8, 3, 0xd0, 7])
+            .unwrap();
+        let mut borders = vec![24];
+        for _ in 0..6 {
+            borders.extend([8, 1, 6, 0]);
+        }
+        assert!(row_level.apply(0xd605, &borders).unwrap());
+        let mut styled = Row::default();
+        styled
+            .apply(0xd608, &[6, 0, 2, 0, 0, 0xe8, 3, 0xd0, 7])
+            .unwrap();
+        assert!(!styled.apply(0x563a, &7u16.to_le_bytes()).unwrap());
+        for row in [&mut row_level, &mut styled] {
+            for value in [[0x12, 0x34, 0x56, 0], [0, 0, 0, 0xff], [255; 4]] {
+                assert!(!row.apply(0xd61a, &cv(value)).unwrap());
+                assert!(row.cells.iter().all(|cell| cell.borders[0].is_none()));
+            }
+        }
+        assert_eq!(
+            row_level.borders[0]
+                .as_ref()
+                .unwrap()
+                .direct_spec()
+                .color
+                .as_deref(),
+            Some("ff0000")
+        );
     }
 }
