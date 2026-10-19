@@ -114,7 +114,13 @@ function context(installed: readonly string[] = []) {
   }
   const ctx = target as unknown as CanvasRenderingContext2D;
   const texts = () => ops.filter((op) => op.op === 'fillText');
-  return { ctx, ops, texts, counts };
+  // What Canvas paints: with direction 'rtl' it mirrors paired punctuation.
+  const MIRROR: Record<string, string> = { '(': ')', ')': '(', '[': ']', ']': '[', '<': '>', '>': '<' };
+  const painted = () => texts().map((op) => {
+    const text = op.args[0] as string;
+    return op.direction === 'rtl' ? [...text].map((char) => MIRROR[char] ?? char).join('') : text;
+  });
+  return { ctx, ops, texts, counts, painted };
 }
 
 function play(file: Uint8Array, installed: readonly string[] = []) {
@@ -360,8 +366,24 @@ describe('WMF text: META_EXTTEXTOUT options and Dx', () => {
     // parenthesis is mirrored (UAX #9 L4).
     const latin = play(picture(font(), extText(0, 50, ascii('AB'), { options: 0x0080, dx: [10, 30] })));
     expect(latin.texts().map((op) => op.args)).toEqual([['A', 0, 50], ['B', 10, 50]]);
+    // Painted exactly once mirrored: Canvas must not mirror the cell again.
     const paren = play(picture(font({ charset: 177 }), extText(0, 50, [0x28, 0xe0], { options: 0x0080, dx: [10, 10] })));
-    expect(paren.texts().map((op) => op.args[0])).toEqual([')', 'א']);
+    expect(paren.painted()).toEqual([')', 'א']);
+    const single = play(picture(font({ charset: 177 }), extText(0, 50, [0x28, 0xe0], { options: 0x0080 })));
+    expect(single.painted()).toEqual([')א']);
+  });
+
+  it('keeps cursive joining: Dx in joining scripts is reported, justification paints whole words', () => {
+    // Code page 1256 beh, beh: separate cells would paint two isolated forms.
+    const dx = play(picture(font({ charset: 178 }), extText(0, 50, [0xc8, 0xc8], { dx: [10, 10] })));
+    expect(dx.texts()).toEqual([]);
+    expect(dx.unsupported).toEqual(['META_EXTTEXTOUT (per-character advances in a cursive-joining script)']);
+    const extra = play(picture(font({ charset: 178 }), record(0x0108, u16(2)), extText(0, 50, [0xc8, 0xc8])));
+    expect(extra.unsupported).toEqual(['META_EXTTEXTOUT (per-character advances in a cursive-joining script)']);
+    const justified = play(picture(font({ charset: 178 }), record(0x020a, [...u16(1), ...u16(4)]),
+      extText(0, 50, [0xc8, 0xc8, 0x20, 0xc8, 0xc8])));
+    expect(justified.texts().map((op) => op.args[0]).sort()).toEqual([' ', 'بب', 'بب']);
+    expect(justified.unsupported).toEqual([]);
   });
 
   it('reports an empty ETO_OPAQUE output as drawn, without needing a font', () => {

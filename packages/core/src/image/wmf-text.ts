@@ -378,6 +378,13 @@ function measuredAverageWidth(ctx: AnyCtx, css: (px: number) => string): number 
   return total / 1000 / PROBE_EM;
 }
 
+// Scripts whose letters join cursively (Unicode Joining_Type D/L/R/C):
+// Arabic and its supplements/extensions, Syriac, N'Ko, Mandaic, Mongolian,
+// Phags-pa, Manichaean, Psalter Pahlavi, Hanifi Rohingya, Sogdian, Old
+// Uyghur, Chorasmian and Adlam. Presentation forms are already shaped.
+const CURSIVE_JOINING_SCRIPT =
+  /[\u0600-\u06ff\u0700-\u074f\u0750-\u077f\u07c0-\u07ff\u0840-\u085f\u0860-\u086f\u0870-\u08ff\u1800-\u18af\ua840-\ua87f\u{10ac0}-\u{10aff}\u{10b80}-\u{10baf}\u{10d00}-\u{10d3f}\u{10f30}-\u{10fdf}\u{1e900}-\u{1e95f}]/u;
+
 const MISSING_CONTROL_FAMILY = '__ooxml_wmf_missing_face_control_5b2e__';
 
 /** Whether Canvas draws `text` from `face` itself on this host: compare its
@@ -505,25 +512,34 @@ export function drawWmfText(s: WmfTextState, out: WmfTextOutput): { drew: boolea
     return width;
   };
 
-  // Draw groups: one Canvas call per run of same-face units when the natural
-  // advances apply, else one call per character at its own pen position.
-  interface Group { text: string; font: string; pen: number; rise: number; advance: number; x: number; level: number }
+  // Draw groups. Natural advances: one Canvas call per run of same-face
+  // units. Justification alone: one call per word, with the break
+  // characters as their own cells. Dx or CharExtra: one cell per character.
+  interface Group { text: string; font: string; pen: number; rise: number; advance: number; x: number; level: number; extra: number; brk: boolean }
+  const perCharacter = out.dx !== null || charExtraPx !== 0;
+  // Separate Canvas calls cannot join cursive scripts across cells, and the
+  // Canvas API exposes no per-glyph positioning of one shaped run.
+  if (perCharacter && units.length > 1 && units.some((unit) => CURSIVE_JOINING_SCRIPT.test(unit.text))) {
+    return { problem: 'per-character advances in a cursive-joining script' };
+  }
   const groups: Group[] = [];
-  let pen = 0;
   let rise = 0;
   for (const unit of units) {
     const unitFont = fontFor(unit);
-    if (!spaced) {
+    const isBreak = unit.count === 1 && out.bytes[unit.start] === 0x20;
+    let extra = 0;
+    if (justified && isBreak) {
+      extra += s.breakQuotientPx;
+      if (s.breakErrorPx > 0) { extra += 1; s.breakErrorPx -= 1; }
+    }
+    if (!perCharacter) {
       const last = groups.at(-1);
-      if (last && last.font === unitFont) last.text += unit.text;
-      else groups.push({ text: unit.text, font: unitFont, pen: 0, rise: 0, advance: 0, x: 0, level: 0 });
+      const separate = justified && (isBreak || last?.brk === true);
+      if (last && last.font === unitFont && !separate) last.text += unit.text;
+      else groups.push({ text: unit.text, font: unitFont, pen: 0, rise: 0, advance: 0, x: 0, level: 0, extra, brk: justified && isBreak });
       continue;
     }
-    let advance = charExtraPx;
-    if (justified && unit.count === 1 && out.bytes[unit.start] === 0x20) {
-      advance += s.breakQuotientPx;
-      if (s.breakErrorPx > 0) { advance += 1; s.breakErrorPx -= 1; }
-    }
+    let advance = charExtraPx + extra;
     let unitRise = 0;
     if (out.dx) {
       for (let b = unit.start; b < unit.start + unit.count; b++) {
@@ -533,18 +549,18 @@ export function drawWmfText(s: WmfTextState, out: WmfTextOutput): { drew: boolea
     } else {
       advance += measure(unit.text, unitFont);
     }
-    groups.push({ text: unit.text, font: unitFont, pen, rise, advance, x: 0, level: 0 });
-    pen += advance;
+    groups.push({ text: unit.text, font: unitFont, pen: 0, rise, advance, x: 0, level: 0, extra: 0, brk: false });
     rise += unitRise;
   }
   const rtl = (s.textAlign & TA_RTLREADING) !== 0 || (out.options & ETO_RTLREADING) !== 0;
   const useCpFlag = (s.textAlign & TA_UPDATECP) !== 0;
   const needTotal = horizontal !== 0 || rtl || useCpFlag || s.bkMode === OPAQUE || font.underline || font.strikeout;
-  if (!spaced && (needTotal || groups.length > 1)) {
-    // Shape each same-face run as a whole (complex scripts, no kerning).
+  let pen = 0;
+  if (perCharacter || needTotal || groups.length > 1) {
     for (const group of groups) {
+      // Same-face runs are shaped as a whole (complex scripts, no kerning).
+      if (!perCharacter) group.advance = measure(group.text, group.font) + group.extra;
       group.pen = pen;
-      group.advance = measure(group.text, group.font);
       pen += group.advance;
     }
   }
@@ -626,7 +642,11 @@ export function drawWmfText(s: WmfTextState, out: WmfTextOutput): { drew: boolea
     for (const group of groups) {
       if (!group.text) continue;
       const gx = cellX(group);
-      ctx.direction = groups.length === 1 ? (rtl ? 'rtl' : 'ltr') : (group.level & 1 ? 'rtl' : 'ltr');
+      // Lone cells were mirrored above (UAX #9 L4) and are painted LTR so
+      // Canvas does not mirror them again; longer runs leave bidi and
+      // mirroring inside the run to Canvas.
+      ctx.direction = groups.length === 1 ? (rtl ? 'rtl' : 'ltr')
+        : [...group.text].length === 1 ? 'ltr' : (group.level & 1 ? 'rtl' : 'ltr');
       const gy = oy + baseline + group.rise;
       ctx.font = group.font;
       if (hScale === 1) {
