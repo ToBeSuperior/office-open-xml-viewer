@@ -81,6 +81,7 @@ export class SheetTabBar {
   private capturedPointer: number | null = null;
   /** Button whose list waits for {@link heldPointer}'s release. */
   private pendingOpener: HTMLButtonElement | null = null;
+  private rtl = false;
   /** Zero-delay open queued after a release (see {@link onNavPointerUp}). */
   private openTimer: number | undefined;
 
@@ -270,6 +271,7 @@ export class SheetTabBar {
    *  logical reading order; `row-reverse` places that sequence right-to-left.
    *  Move the strip's leading gap with it so the spacing stays symmetric. */
   setDirection(rtl: boolean): void {
+    this.rtl = rtl;
     this.tabBar.style.flexDirection = rtl ? 'row-reverse' : 'row';
     this.tabStrip.style.marginLeft = rtl ? '0' : `${TAB_GAP}px`;
     this.tabStrip.style.marginRight = rtl ? `${TAB_GAP}px` : '0';
@@ -460,7 +462,9 @@ export class SheetTabBar {
     // return focus to it, so focus the scroll button first.
     opener.focus({ preventScroll: true });
     if (!list.matches(':popover-open')) list.showPopover();
-    this.placeSheetList(opener);
+    // Both scroll buttons open the list at the same place: aligned to the
+    // nav group's outer edge (its left edge, or its right edge in RTL).
+    this.placeSheetList(this.navGroup);
     const current = this.listItems[this.activeIndex] ?? this.listItems.find((item) => item !== undefined);
     if (current) this.focusListItem(current);
   }
@@ -516,8 +520,9 @@ export class SheetTabBar {
       `${Math.max(0, Math.min(SHEET_LIST_MAX_W, viewport.clientWidth - 2 * SHEET_LIST_EDGE))}px`;
     const { width, height } = list.getBoundingClientRect();
     list.style.top = `${above ? anchor.top - height : anchor.bottom}px`;
+    const left = this.rtl ? anchor.right - width : anchor.left;
     list.style.left =
-      `${Math.max(SHEET_LIST_EDGE, Math.min(anchor.left, viewport.clientWidth - width - SHEET_LIST_EDGE))}px`;
+      `${Math.max(SHEET_LIST_EDGE, Math.min(left, viewport.clientWidth - width - SHEET_LIST_EDGE))}px`;
   }
 
   /** Focus without scrolling the page; scroll only the list to the item. */
