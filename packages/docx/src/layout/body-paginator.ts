@@ -1464,7 +1464,10 @@ function* paginateBodyPassSteps(
     // in an earlier reference-line plan of the fragment being admitted)
     // lends it to the new band-final note at commit instead of charging a
     // second reserve.
-    if (footnoteLayoutsByPage.get(state.flow.pageIndex)?.some((note) => note.trailing)) return undefined;
+    // A column band (WORD_PER_COLUMN_FOOTNOTE_BANDS) owns its own notice.
+    const band = activeFootnoteBandId();
+    if (footnoteLayoutsByPage.get(state.flow.pageIndex)
+      ?.some((note) => note.trailing && note.flowDomainId === band)) return undefined;
     if (pendingCarriesNotice) return undefined;
     return () => {
       if (!session.layoutStory) throw new Error('A footnote continuation notice requires story layout');
@@ -1600,10 +1603,12 @@ function* paginateBodyPassSteps(
     // §17.18.33: the page's one continuation notice ends its note band. A note
     // committed after the carrier takes the already-reserved notice; a later
     // continuing partition on this page reserves none (continuationNoticeFor).
-    const carriers = retainedLayouts.flatMap((note, index) => note.trailing ? [index] : []);
+    // The notice and its reserve stay inside the band that reserved them.
+    const bandIndexes = retainedLayouts.flatMap((note, index) => note.flowDomainId === band ? [index] : []);
+    const carriers = bandIndexes.filter((index) => retainedLayouts[index]!.trailing);
     if (carriers.length > 1) throw new Error('A page note band owns exactly one continuation notice');
     const carrierIndex = carriers[0];
-    const lastIndex = retainedLayouts.length - 1;
+    const lastIndex = bandIndexes.at(-1)!;
     if (carrierIndex !== undefined && carrierIndex !== lastIndex) {
       const moved = moveContinuationNotice(retainedLayouts[carrierIndex]!, retainedLayouts[lastIndex]!);
       retainedLayouts[carrierIndex] = moved.carrier;
@@ -2922,7 +2927,11 @@ function* paginateBodyPassSteps(
   // physical-page transition commits and the pending line cursor advances.
   while (pendingFootnoteContinuations.size > 0) {
     yield* commitTransition(
-      advanceToPage(state.flow, state.flow.section, 'overflow'),
+      // A column band continues in the next column of the page first
+      // (WORD_PER_COLUMN_FOOTNOTE_BANDS).
+      perColumnFootnoteBands()
+        ? advanceColumnOrPage(state.flow, 'overflow')
+        : advanceToPage(state.flow, state.flow.section, 'overflow'),
       input.sequence.length,
     );
     // Text-only tail transitions have no anchor prescan to suspend them.

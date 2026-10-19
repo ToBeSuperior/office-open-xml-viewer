@@ -41,6 +41,7 @@ function model(
   compatibilityMode: number,
   references: Readonly<Record<number, string>>,
   notes: Readonly<Record<string, number>>,
+  bodyLines = 40,
 ): DocxDocumentModel {
   return {
     section: {
@@ -48,7 +49,7 @@ function model(
       headerDistance: 36, footerDistance: 36, titlePage: false, evenAndOddHeaders: false, sectionStart: 'nextPage',
       columns: { count: 2, spacePt: 20, equalWidth: true, sep: false, cols: [] },
     } as unknown as SectionProps,
-    body: Array.from({ length: 40 }, (_, index) => paragraph(label('L', index + 1), references[index + 1])) as unknown as BodyElement[],
+    body: Array.from({ length: bodyLines }, (_, index) => paragraph(label('L', index + 1), references[index + 1])) as unknown as BodyElement[],
     headers: { default: null, first: null, even: null },
     footers: { default: null, first: null, even: null },
     fontFamilyClasses: { Arial: 'swiss' },
@@ -133,4 +134,40 @@ it('places document-end notes after the text in the column where it ends', () =>
   const endnotes = layout.pages[0]!.layers.notes.filter((node): node is NoteLayout => node.kind === 'note');
   expect(endnotes.map((note) => [note.story.blocks.map(text).join(''), note.flowBounds.xPt, note.flowBounds.yPt]))
     .toEqual([['E1-01', 172, 112]]);
+});
+
+it('keeps a continuation notice with the column band that reserved it', () => {
+  // Reserved 10pt separator stories and a 10pt continuation notice. Note 1
+  // (6 lines) on L07 continues from column 1, whose band reserves the notice;
+  // note 2 on L09 joins column 2's band. The notice stays in column 1.
+  const control = textRun('');
+  const storyParagraph = { ...paragraph(''), runs: [], paragraphMarkFontFacts: { fontFamily: 'Arial', fontSize: 10 } };
+  const story = { paragraph: { paragraph: storyParagraph, contentMark: { run: control } } };
+  const rule = (mark: 'short' | 'full') => ({ rule: { mark, control: { run: control } }, ...story });
+  const document = model(11, { 7: '1', 9: '2' }, { 1: 6, 2: 1 });
+  (document as unknown as Record<string, unknown>).__noteLayoutSettings = {
+    footnoteSeparator: 'short', footnoteContinuationSeparator: 'full',
+    reservedSeparators: { footnote: {
+      separator: rule('short'), continuationSeparator: rule('full'), continuationNotice: story,
+    } },
+  };
+  const layout = render(document);
+  const notes = layout.pages[0]!.layers.notes.filter((node): node is NoteLayout => node.kind === 'note');
+  expect(notes.map((note) => [note.story.blocks.map(text).join(''), note.flowBounds.xPt < 162, note.trailing?.role]))
+    .toEqual([
+      ['N1-01', true, 'continuationNotice'],
+      ['N1-02N1-03N1-04N1-05N1-06', false, undefined],
+      ['N2-01', false, undefined],
+    ]);
+});
+
+it('continues a note outliving the body into the next column before a new page', () => {
+  // Three body lines end in column 1 with a 20-line note on L03: column 1
+  // keeps a six-line head, column 2's band the next nine lines and page 2
+  // the last five.
+  const layout = render(model(11, { 3: '1' }, { 1: 20 }, 3));
+  const lineCounts = layout.pages.map((page) => page.layers.notes
+    .filter((node): node is NoteLayout => node.kind === 'note')
+    .map((note) => [note.flowBounds.xPt < 162 ? 1 : 2, note.story.blocks.length]));
+  expect(lineCounts).toEqual([[[1, 6], [2, 9]], [[1, 5]]]);
 });
