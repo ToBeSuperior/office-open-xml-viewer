@@ -47,7 +47,7 @@ import {
 import { officeFaceWebAlias } from '../fonts/font-stack.js';
 import { classifyFontGeneric, cjkFallbackChain, type CjkLang } from '../fonts/scripts.js';
 import { quoteCssFontFamily } from '../internal/css-font-family.js';
-import { buildVisualOrder, getDefaultBidiEngine, hasStrongRtl } from '../text/bidi/index.js';
+import { buildVisualOrder, getDefaultBidiEngine, hasStrongRtl, REMOVED_LEVEL } from '../text/bidi/index.js';
 import { joiningType, joinsToFollowing, joinsToPreceding } from '../text/joining-type.js';
 import { referenceFontDecoration } from '../text/font-decoration.js';
 import { DECORATION_LINE_WIDTH_EM, STRIKE_RISE_EM } from '../text/underline.js';
@@ -384,6 +384,20 @@ function measuredAverageWidth(ctx: AnyCtx, css: (px: number) => string): number 
 }
 
 const ZWJ = '\u200d';
+
+/** UAX #9 resolved level of each unit's first code unit (paragraph level for
+ *  characters removed by X9). */
+function resolvedUnitLevels(texts: readonly string[], rtl: boolean): number[] {
+  const logical = texts.join('');
+  if (!rtl && !hasStrongRtl(logical)) return texts.map(() => 0);
+  const { levels, paragraphLevel } = getDefaultBidiEngine().computeLevels(logical, rtl ? 'rtl' : 'ltr');
+  let offset = 0;
+  return texts.map((text) => {
+    const level = levels[offset];
+    offset += text.length;
+    return level === REMOVED_LEVEL ? paragraphLevel : level;
+  });
+}
 const LAM = 0x0644;
 // Lam followed by one of these alefs forms the obligatory lam-alef ligature.
 const LAM_ALEF_PARTNERS = new Set([0x0622, 0x0623, 0x0625, 0x0627, 0x0671]);
@@ -569,15 +583,39 @@ export function drawWmfText(s: WmfTextState, out: WmfTextOutput): { drew: boolea
     if (s.breakErrorPx > 0) { extra += 1; s.breakErrorPx -= 1; }
     return extra;
   };
+  const rtlReading = (s.textAlign & TA_RTLREADING) !== 0 || (out.options & ETO_RTLREADING) !== 0;
   if (!perCharacter) {
-    for (const unit of units) {
+    // Runs placed separately (justified words, face changes) must each be a
+    // single bidi level, so their visual order can be resolved between them.
+    const splitRuns = justified || units.some((unit) => fontFor(unit) !== fontFor(units[0]));
+    const unitLevels = splitRuns ? resolvedUnitLevels(units.map((unit) => unit.text), rtlReading) : null;
+    units.forEach((unit, index) => {
       const unitFont = fontFor(unit);
       const extra = breakExtraFor(unit);
       const isBreak = justified && unit.count === 1 && out.bytes[unit.start] === 0x20;
+      const level = unitLevels?.[index] ?? 0;
       const last = groups.at(-1);
-      const separate = justified && (isBreak || last?.brk === true);
+      const separate = (justified && (isBreak || last?.brk === true)) || (last !== undefined && last.level !== level);
       if (last && last.font === unitFont && !separate) last.text += unit.text;
-      else groups.push({ text: unit.text, font: unitFont, pen: 0, rise: 0, advance: 0, x: 0, level: 0, extra, brk: isBreak, joinBefore: false, joinAfter: false });
+      else groups.push({ text: unit.text, font: unitFont, pen: 0, rise: 0, advance: 0, x: 0, level, extra, brk: isBreak, joinBefore: false, joinAfter: false });
+    });
+    // A word split at a level boundary keeps its cursive joins (ZWJ context):
+    // letters join across runs of Transparent characters (e.g. LRM), as in
+    // UAX #44 Joining_Type, when every run in between shares the face.
+    const nonTransparent = (text: string, fromEnd: boolean) =>
+      (fromEnd ? [...text].reverse() : [...text]).find((char) => joiningType(char.codePointAt(0)!) !== 'T');
+    for (let k = 1; k < groups.length; k++) {
+      const after = groups[k];
+      const right = nonTransparent(after.text, false);
+      if (after.brk || right === undefined) continue;
+      let j = k - 1;
+      while (j >= 0 && !groups[j].brk && groups[j].font === after.font && nonTransparent(groups[j].text, true) === undefined) j--;
+      if (j < 0 || groups[j].brk || groups[j].font !== after.font) continue;
+      const left = nonTransparent(groups[j].text, true)!;
+      if (joinsToFollowing(left.codePointAt(0)!) && joinsToPreceding(right.codePointAt(0)!)) {
+        for (let m = j; m < k; m++) groups[m].joinAfter = true;
+        for (let m = j + 1; m <= k; m++) groups[m].joinBefore = true;
+      }
     }
   } else {
     // Character cells: a base character with its following Transparent marks
@@ -604,14 +642,16 @@ export function drawWmfText(s: WmfTextState, out: WmfTextOutput): { drew: boolea
       rise += cellRise;
     }
   }
-  const rtl = (s.textAlign & TA_RTLREADING) !== 0 || (out.options & ETO_RTLREADING) !== 0;
+  const rtl = rtlReading;
   const useCpFlag = (s.textAlign & TA_UPDATECP) !== 0;
   const needTotal = horizontal !== 0 || rtl || useCpFlag || s.bkMode === OPAQUE || font.underline || font.strikeout;
   let pen = 0;
   if (perCharacter || needTotal || groups.length > 1) {
     for (const group of groups) {
       // Same-face runs are shaped as a whole (complex scripts, no kerning).
-      if (!perCharacter) group.advance = measure(group.text, group.font) + group.extra;
+      if (!perCharacter) {
+        group.advance = measure(`${group.joinBefore ? ZWJ : ''}${group.text}${group.joinAfter ? ZWJ : ''}`, group.font) + group.extra;
+      }
       group.pen = pen;
       pen += group.advance;
     }

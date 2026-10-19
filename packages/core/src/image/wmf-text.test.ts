@@ -396,6 +396,21 @@ describe('WMF text: META_EXTTEXTOUT options and Dx', () => {
     expect(justified.unsupported).toEqual([]);
   });
 
+  it('splits justified words at bidi level boundaries and keeps joins across the split', () => {
+    // LTR paragraph, code page 1255: alef, bet, "A", space, "Z" with BreakExtra 1.
+    // The Hebrew run and "A" are separate runs; "A" stays right of the Hebrew.
+    const mixed = play(picture(font({ charset: 177 }), record(0x020a, [...u16(1), ...u16(1)]),
+      extText(0, 50, [0xe0, 0xe1, 0x41, 0x20, 0x5a])));
+    expect(mixed.texts().map((op) => [op.args, op.direction])).toEqual([
+      [['אב', 0, 50], 'rtl'], [['A', 20, 50], 'ltr'], [[' ', 30, 50], 'ltr'], [['Z', 41, 50], 'ltr'],
+    ]);
+    // Code page 1256 beh, LRM, beh (levels 1, 0, 1): three runs, and the
+    // behs still join across the Transparent LRM.
+    const lrm = play(picture(font({ charset: 178 }), record(0x020a, [...u16(1), ...u16(1)]),
+      extText(0, 50, [0xc8, 0xfd, 0xc8, 0x20, 0x41])));
+    expect(lrm.texts().map((op) => op.args[0]).slice(0, 3)).toEqual(['ب\u200d', '\u200d\u200e\u200d', '\u200dب']);
+  });
+
   it.each([
     ['Arabic', 0x0628], ['Syriac', 0x0712], ["N'Ko", 0x07d3], ['Mandaic', 0x0841], ['Syriac Supplement', 0x0860],
     ['Mongolian', 0x182a], ['Phags-pa', 0xa840], ['Manichaean', 0x10ac1], ['Psalter Pahlavi', 0x10b82],
