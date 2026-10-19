@@ -485,9 +485,12 @@ export function wordParagraphFootnoteMayContinue(input: Readonly<{
   hardBreakBeforeNextNote: boolean;
   wholeNoteFitsOnlyWithoutTrailingAfter: boolean;
   pageOpensWithIncomingTail: boolean;
+  /** The note joins a column band (WORD_PER_COLUMN_FOOTNOTE_BANDS). */
+  columnBand: boolean;
 }>): boolean {
   return !input.wholeNoteFitsWithReference
-    && (!input.wholeNoteFitsFreshPage || input.textAfterReference || input.hardBreakBeforeNextNote
+    && (input.columnBand || !input.wholeNoteFitsFreshPage || input.textAfterReference
+      || input.hardBreakBeforeNextNote
       || input.wholeNoteFitsOnlyWithoutTrailingAfter || input.pageOpensWithIncomingTail);
 }
 
@@ -533,4 +536,24 @@ export function wordFootnoteLookaheadBoundary(entry: BodyLayoutInput['sequence']
   return (entry.kind === 'authored-break' && entry.break !== 'column')
     || (entry.kind === 'begin-section' && entry.section.startType !== 'continuous')
     || (entry.kind === 'body-block' && entry.block.kind === 'paragraph' && entry.block.pageBreakBefore);
+}
+
+export const WORD_PER_COLUMN_FOOTNOTE_BANDS = defineCompatibilityRule({
+  id: 'word-per-column-footnote-bands',
+  evidence: {
+    kind: 'office-observation',
+    syntheticFixtureId: 'multi-column-footnote-ieee-controls',
+    application: 'Microsoft Word',
+    version: 'Microsoft 365',
+    platform: 'Windows (ExportAsFixedFormat)',
+  },
+  description: 'ECMA-376 §17.11.21 puts pageBottom footnotes at the bottom of the page without defining multi-column note geometry. In Windows Word controls of two- and three-column sections (equal and 144/288pt columns, exact 12pt body and 10pt note lines), compatibility modes 11, 12 and 14 give each column its own note band, independent of footnoteLayoutLikeWW8 and the other legacy compatibility flags: a column\'s band holds the notes referenced in that column, wraps them at that column\'s width, starts with its own one-line separator band (also for an empty separator story) and ends at the body bottom, even when a column break ends the column early; a column without references keeps its full height. A note that does not fit continues at the top of the next column\'s band, before that column\'s own notes, and then on the next page; the reference line stays with as much of the note as fits, even when the whole note would fit the next column or a fresh page with nothing after the reference (one-line paragraphs closed by the reference, 10- and 20-line notes), unlike the single-column fallback of WORD_PARAGRAPH_FOOTNOTE_CONTINUATION. Endnotes follow the text in the column flow. Compatibility mode 15 (with or without footnoteLayoutLikeWW8) instead uses one page-wide note area (WORD_PAGE_WIDE_COLUMN_FOOTNOTE_AREA). An omitted compatibility mode and a reference in a one-column region of a page whose later region has columns are not measured and keep the page band.',
+});
+
+/** Gate of {@link WORD_PER_COLUMN_FOOTNOTE_BANDS} for the active region. */
+export function wordPerColumnFootnoteBandsApply(
+  compatibilityMode: number | undefined,
+  regionColumnCount: number,
+): boolean {
+  return compatibilityMode !== undefined && compatibilityMode < 15 && regionColumnCount > 1;
 }

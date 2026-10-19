@@ -1679,7 +1679,9 @@ function layoutBodyNotes(
     const leading = first && reservedDefinitions
       ? acquireReservedNoteSeparator(context, request, reservedDefinitions[
         request.continuing === true ? 'continuationSeparator' : 'separator'
-      ], noteTopPt, `${request.kind}:${id}:page:${request.pageIndex}:separator`)
+      ], noteTopPt, request.container.id.includes(':band:')
+        ? `${request.kind}:${id}:${request.container.id}:separator`
+        : `${request.kind}:${id}:page:${request.pageIndex}:separator`)
       : undefined;
     // An ordinary DOCX formatted listed story (§17.11.9) replaces only the
     // scalar band height of its role with its own acquired paragraph advance
@@ -1792,7 +1794,11 @@ function layoutBodyNotes(
     });
     const note: NoteLayout = Object.freeze({
       kind: 'note',
-      id: `${request.kind}:${id}:page:${request.pageIndex}`,
+      // A column band (WORD_PER_COLUMN_FOOTNOTE_BANDS) can hold a later part
+      // of a note continued from an earlier column of the same page.
+      id: request.container.id.includes(':band:')
+        ? `${request.kind}:${id}:${request.container.id}`
+        : `${request.kind}:${id}:page:${request.pageIndex}`,
       source,
       flowDomainId: request.container.id,
       ordinaryFlow: true,

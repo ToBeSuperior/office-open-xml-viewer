@@ -21,6 +21,7 @@ import {
   createBodyPaginationState,
   createCanonicalPageDraft,
   addPageFootnoteReserves,
+  setBodyFootnoteReserve,
   setBodyBalanceTarget,
   type BodyPageTransitionFactory,
   type BodyPaginationState,
@@ -114,6 +115,7 @@ import {
   wordFlowNeutralPreBreakAnchorParagraph,
   wordPreBreakHostAnchorExtentPt,
   wordPreBreakInlineDrawingResource,
+  wordPerColumnFootnoteBandsApply,
 } from './body-pagination-compatibility.js';
 import {
   wordContinuousSectionRestartDisplayNumber,
@@ -1365,6 +1367,7 @@ function* paginateBodyPassSteps(
       throw new Error(`Document page budget exceeded (${MAX_BODY_LAYOUT_PAGES} pages)`);
     }
     const previousPageIndex = state.flow.pageIndex;
+    const previousFlowDomainId = acquisitionLocation(state).flowDomainId;
     const opensAutomaticPage = transition.events.some((event) => (
       event.type === 'next-page' && event.reason === 'overflow'
     ));
@@ -1386,6 +1389,13 @@ function* paginateBodyPassSteps(
     } else {
       const nextLocation = acquisitionLocation(state);
       session.moveAcquisitionCursor(nextLocation);
+      // WORD_PER_COLUMN_FOOTNOTE_BANDS: a new column owns its own note band;
+      // continuations of the previous column's notes open it.
+      if (nextLocation.flowDomainId !== previousFlowDomainId
+        && (perColumnFootnoteBands() || pageHasColumnFootnoteBands(state.flow.pageIndex))) {
+        state = setBodyFootnoteReserve(state, footnoteReserveForActiveBand());
+        if (perColumnFootnoteBands()) placePendingFootnoteContinuations();
+      }
       // §17.18.77 keeps the physical page but opens a distinct flow domain.
       // The outgoing source scan intentionally stopped at the section mark, so
       // acquire incoming page-owned wrap authority before its first paragraph.
@@ -1401,6 +1411,39 @@ function* paginateBodyPassSteps(
   // (FootnotePartition.hostShiftPt; footnoteBandPlan).
   const footnoteHostShiftsByPage = new Map<number, Map<string, number>>();
   const pendingFootnoteContinuations = new Map<string, FootnoteCursor>();
+  // WORD_PER_COLUMN_FOOTNOTE_BANDS: below compatibility mode 15 each column of
+  // a multi-column region owns the note band of the references it paints;
+  // otherwise the page owns one band. Band ids double as note containers.
+  const footnoteIdsByBand = new Map<string, Set<string>>();
+  const footnoteReserveByBand = new Map<string, number>();
+  const pageFootnoteBandId = (pageIndex: number) => `notes:page:${pageIndex}`;
+  const perColumnFootnoteBands = (): boolean => wordPerColumnFootnoteBandsApply(
+    input.compatibilityMode,
+    activeRegion(state).columns.length,
+  );
+  const activeFootnoteBandId = (): string => {
+    const pageBand = pageFootnoteBandId(state.flow.pageIndex);
+    return perColumnFootnoteBands()
+      ? `${pageBand}:band:${activeRegion(state).id}:${state.flow.columnIndex}`
+      : pageBand;
+  };
+  const pageHasColumnFootnoteBands = (pageIndex: number): boolean => {
+    const prefix = `${pageFootnoteBandId(pageIndex)}:band:`;
+    return [...footnoteReserveByBand.keys()].some((band) => band.startsWith(prefix));
+  };
+  /** The reserve of the active flow domain: the page band plus its own
+   * column band, or for a page-wide domain below column bands, the deepest. */
+  const footnoteReserveForActiveBand = (): number => {
+    const pageBand = pageFootnoteBandId(state.flow.pageIndex);
+    const wide = footnoteReserveByBand.get(pageBand) ?? 0;
+    if (perColumnFootnoteBands()) return wide + (footnoteReserveByBand.get(activeFootnoteBandId()) ?? 0);
+    let deepest = 0;
+    for (const [band, reservePt] of footnoteReserveByBand) {
+      if (band.startsWith(`${pageBand}:band:`)) deepest = Math.max(deepest, reservePt);
+    }
+    return wide + deepest;
+  };
+  const bandHasFootnotes = (band: string): boolean => (footnoteIdsByBand.get(band)?.size ?? 0) > 0;
   // Pages whose note band opens with a committed incoming tail: real
   // retained lines of a note continued from an earlier page, placed before
   // any body (placePendingFootnoteContinuations). Not a newly referenced note,
@@ -1480,6 +1523,7 @@ function* paginateBodyPassSteps(
       throw new Error('Footnote layout requires a note-capable layout session');
     }
     const plannedTopsPt = reserves[state.flow.pageIndex]?.footnoteTopsPt;
+    const band = activeFootnoteBandId();
     const layouts = ids.length === 0 ? Object.freeze([]) : session.layoutNotes!({
       kind: 'footnote',
       referenceIds: Object.freeze(ids),
@@ -1487,7 +1531,7 @@ function* paginateBodyPassSteps(
       section: location.section,
       ...(plannedTopsPt ? { plannedTopsPt } : {}),
       container: {
-        id: `notes:page:${state.flow.pageIndex}`,
+        id: band,
         kind: 'footnote',
         bounds: {
           xPt: location.availableBounds.xPt,
@@ -1496,7 +1540,7 @@ function* paginateBodyPassSteps(
           heightPt: location.section.geometry.pageHeight,
         },
       },
-      firstOnPage: committed.size === 0 && pendingIds.size === 0,
+      firstOnPage: !bandHasFootnotes(band) && pendingIds.size === 0,
     });
     const continuations: Array<Readonly<{ id: string; cursor: FootnoteCursor }>> = [];
     const admittedLayouts = layouts.map((note, index) => {
@@ -1530,6 +1574,10 @@ function* paginateBodyPassSteps(
       footnoteIdsByPage.set(state.flow.pageIndex, retained);
     }
     ids.forEach((id) => retained!.add(id));
+    const band = activeFootnoteBandId();
+    let bandIds = footnoteIdsByBand.get(band);
+    if (!bandIds) footnoteIdsByBand.set(band, bandIds = new Set<string>());
+    ids.forEach((id) => bandIds!.add(id));
     const retainedLayouts = footnoteLayoutsByPage.get(state.flow.pageIndex) ?? [];
     // Reusable full-note acquisition may have first been requested during a
     // rejected admission on another page. Intact notes need destination
@@ -1566,12 +1614,22 @@ function* paginateBodyPassSteps(
     // Adding independently summed reference groups changes floating-point
     // association and can disagree with that exact geometry authority.
     state = addPageFootnoteReserves(state, layouts.map(note => note.advancePt));
-    footnoteReserveByPage.set(
-      state.flow.pageIndex,
-      state.footnoteReservePt,
-    );
+    let bandReservePt = footnoteReserveByBand.get(band) ?? 0;
+    let pageReservePt = footnoteReserveByPage.get(state.flow.pageIndex) ?? 0;
+    for (const note of layouts) {
+      bandReservePt += note.advancePt;
+      pageReservePt += note.advancePt;
+    }
+    footnoteReserveByBand.set(band, bandReservePt);
+    // The page's retained note advances in commit order (the page invariant).
+    footnoteReserveByPage.set(state.flow.pageIndex, pageReservePt);
     continuations.forEach(({ id, cursor }) => pendingFootnoteContinuations.set(id, cursor));
   };
+  /** The deepest committed content a growing note band must not cover: the
+   * active column alone for a column band, every column for a page band. */
+  const committedFootnoteContentEndPt = (): number => (
+    perColumnFootnoteBands() ? state.flow.cursorBlockPt : state.flow.deepestColumnBlockPt
+  );
   placePendingFootnoteContinuations = () => {
     if (pendingFootnoteContinuations.size === 0) return;
     const pending = [...pendingFootnoteContinuations];
@@ -1589,7 +1647,7 @@ function* paginateBodyPassSteps(
         section: location.section,
         ...(plannedTopsPt ? { plannedTopsPt } : {}),
         container: {
-          id: `notes:page:${state.flow.pageIndex}`,
+          id: activeFootnoteBandId(),
           kind: 'footnote',
           bounds: {
             xPt: location.availableBounds.xPt,
@@ -1598,12 +1656,14 @@ function* paginateBodyPassSteps(
             heightPt: location.section.geometry.pageHeight,
           },
         },
-        firstOnPage: !hasFootnoteReferenceOnPage(state.flow.pageIndex),
+        firstOnPage: perColumnFootnoteBands()
+          ? !bandHasFootnotes(activeFootnoteBandId())
+          : !hasFootnoteReferenceOnPage(state.flow.pageIndex),
         continuing: true,
       });
       if (!acquired) continue;
       const capacityPt = Math.max(0, activeBlockEndPt(state)
-        - state.footnoteReservePt - state.flow.deepestColumnBlockPt);
+        - state.footnoteReservePt - committedFootnoteContentEndPt());
       const partition = partitionFootnote(acquired, cursor, capacityPt,
         continuationNoticeFor(location, location.availableBounds.widthPt));
       if (!partition) {
@@ -1647,7 +1707,7 @@ function* paginateBodyPassSteps(
     0,
     activeBlockEndPt(state)
       - state.footnoteReservePt
-      - state.flow.deepestColumnBlockPt,
+      - committedFootnoteContentEndPt(),
   );
   const footnoteReserveInvadesCommittedPageContent = (reservePt: number): boolean => (
     reservePt > additionalFootnoteReserveCapacityPt()
@@ -1885,6 +1945,7 @@ function* paginateBodyPassSteps(
           // only); the real plan may still continue the note within whatever
           // that minimum left.
           wholeNoteFitsOnlyWithoutTrailingAfter: false,
+          columnBand: perColumnFootnoteBands(),
           // Unlike the after-only class this permission needs no capacity,
           // so the legal minimum uses it like the text/break permissions:
           // the later note's first real line, with any notice in the union.
@@ -1960,6 +2021,7 @@ function* paginateBodyPassSteps(
             && !textAfter && !laterEvent && noteContinuationBeforeHardBreak(options.entryIndex),
           wholeNoteFitsOnlyWithoutTrailingAfter,
           pageOpensWithIncomingTail,
+          columnBand: perColumnFootnoteBands(),
         });
         chosen = mayPartition
           ? footnoteAdmissionForIds(event.ids, inlineExtentPt, Math.max(0, Math.min(
@@ -2965,17 +3027,39 @@ function footnoteStack(
   page: LayoutPage,
   notes: readonly NoteLayout[],
 ): Readonly<{ advancePt: number; targetTopPt: number; topsPt: readonly number[] }> {
-  const stack = new NoteStack();
-  notes.forEach((note) => stack.append(note.advancePt));
-  const advancePt = stack.advancePt;
   // ECMA-376 §17.11.21 defaults footnotes to the current page's bottom.
   const blockEndPt = page.sectionRegions.at(-1)?.blockEndPt
     ?? Math.max(
       0,
       page.section.geometry.pageHeight - Math.abs(page.section.geometry.marginBottom),
     );
-  const targetTopPt = blockEndPt - advancePt;
-  const topsPt = notes.map((_, index) => stack.topAt(targetTopPt, index));
+  // Each note band (its container, WORD_PER_COLUMN_FOOTNOTE_BANDS) stacks on
+  // its own from the body bottom; a page band carries every column band.
+  const bands = new Map<string, number[]>();
+  notes.forEach((note, index) => {
+    const members = bands.get(note.flowDomainId);
+    if (members) members.push(index);
+    else bands.set(note.flowDomainId, [index]);
+  });
+  const pageBand = [...bands.keys()].find((band) => !band.includes(':band:'));
+  const pageStack = new NoteStack();
+  (pageBand === undefined ? [] : bands.get(pageBand)!).forEach((index) => (
+    pageStack.append(notes[index]!.advancePt)));
+  const pageTopPt = blockEndPt - pageStack.advancePt;
+  const topsPt = new Array<number>(notes.length);
+  let targetTopPt = pageTopPt;
+  for (const [band, members] of bands) {
+    const isPageBand = band === pageBand;
+    const stack = isPageBand ? pageStack : new NoteStack();
+    if (!isPageBand) members.forEach((index) => stack.append(notes[index]!.advancePt));
+    const bottomPt = isPageBand ? blockEndPt : pageTopPt;
+    const topPt = bottomPt - stack.advancePt;
+    targetTopPt = Math.min(targetTopPt, topPt);
+    members.forEach((index, order) => { topsPt[index] = stack.topAt(topPt, order); });
+  }
+  const advancePt = bands.size === 1 && pageBand !== undefined
+    ? pageStack.advancePt
+    : blockEndPt - targetTopPt;
   return { advancePt, targetTopPt, topsPt };
 }
 
@@ -3233,13 +3317,35 @@ function composePageStories(
           heightPt: header.advancePt,
         }),
       })] : []),
-      ...(notes.length > 0 ? [Object.freeze({
-        id: `notes:page:${page.pageIndex}`,
-        kind: 'footnote' as const,
-        ...(noteRegion ? { sectionRegionId: noteRegion.id } : {}),
-        logicalBounds: noteLogicalBounds,
-        physicalBounds: notePhysicalBounds,
-      })] : []),
+      ...(notes.length > 0 && notes.every((note) => note.flowDomainId === `notes:page:${page.pageIndex}`)
+        ? [Object.freeze({
+          id: `notes:page:${page.pageIndex}`,
+          kind: 'footnote' as const,
+          ...(noteRegion ? { sectionRegionId: noteRegion.id } : {}),
+          logicalBounds: noteLogicalBounds,
+          physicalBounds: notePhysicalBounds,
+        })]
+        // WORD_PER_COLUMN_FOOTNOTE_BANDS: one story domain per note band.
+        : [...new Set(notes.map((note) => note.flowDomainId))].map((bandId) => {
+          const members = notes.filter((note) => note.flowDomainId === bandId);
+          const left = Math.min(...members.map((note) => note.flowBounds.xPt));
+          const top = Math.min(...members.map((note) => note.flowBounds.yPt));
+          const logicalBounds = Object.freeze({
+            xPt: left,
+            yPt: top,
+            widthPt: Math.max(...members.map((note) => note.flowBounds.xPt + note.flowBounds.widthPt)) - left,
+            heightPt: Math.max(...members.map((note) => note.flowBounds.yPt + note.flowBounds.heightPt)) - top,
+          });
+          return Object.freeze({
+            id: bandId,
+            kind: 'footnote' as const,
+            ...(noteRegion ? { sectionRegionId: noteRegion.id } : {}),
+            logicalBounds,
+            physicalBounds: noteRegion
+              ? Object.freeze(transformRect(noteRegion.coordinateSpace.logicalToPhysical, logicalBounds))
+              : logicalBounds,
+          });
+        })),
       ...(footer ? [Object.freeze({
         id: `story:footer:page:${page.pageIndex}`,
         kind: 'footer' as const,
@@ -3342,13 +3448,10 @@ function composeDocumentEndnotes(
   const bodyNodes = page.layers.body.filter((node) => (
     node.ordinaryFlow && domains.get(node.flowDomainId)?.kind === 'body'
   ));
-  const terminalBody = bodyNodes.reduce<PaintNode | null>((latest, node) => (
-    latest === null
-      || node.flowBounds.yPt + node.flowBounds.heightPt
-        > latest.flowBounds.yPt + latest.flowBounds.heightPt
-      ? node
-      : latest
-  ), null);
+  // The text ends with the last node of the flow, which in a later column of
+  // a multi-column region can end above a deeper earlier column
+  // (WORD_PER_COLUMN_FOOTNOTE_BANDS: endnotes follow the text in its column).
+  const terminalBody = bodyNodes.at(-1) ?? null;
   const bodyDomain = terminalBody
     ? domains.get(terminalBody.flowDomainId)
     : [...page.flowDomains].reverse().find((domain) => domain.kind === 'body');
