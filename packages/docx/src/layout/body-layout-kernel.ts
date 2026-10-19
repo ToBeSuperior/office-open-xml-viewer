@@ -123,7 +123,24 @@ export interface AcquiredParagraphBlock {
   /** §17.3.1.11 admits identical adjacent framePr members with their owner. */
   readonly retainedFootnoteReferenceIds?: readonly string[];
   readonly relocationBlockExtentPt?: number;
+  /** Owner of a text-anchored frame group: the facts the paginator needs to
+   * carry the frame to its page start (WORD_TEXT_FRAME_PRECEDING_TEXT_PUSH). */
+  readonly frameCarry?: FrameCarryObservation;
 }
+
+/** One text-anchored frame group as placed in a pass. */
+export type FrameCarryObservation = Readonly<{
+  /** Frame group identity, stable across passes. */
+  key: string;
+  /** The run of consecutive framed paragraphs the group belongs to. */
+  runKey: string;
+  paragraphSource: SourceRef;
+  /** Placed at a carried first-placement position in this pass. */
+  frozen: boolean;
+  bounds: Readonly<{ xPt: number; yPt: number; widthPt: number; heightPt: number }>;
+  exclusionBounds: Readonly<{ xPt: number; yPt: number; widthPt: number; heightPt: number }>;
+  exclusionMode: 'square' | 'topAndBottom';
+}>;
 
 export interface AcquiredTableBlock {
   readonly layout: TableLayout;
@@ -264,6 +281,14 @@ export interface PageAnchorPrescanInput {
         occurrenceId: string;
         paragraphSource: SourceRef;
         carry: CarriedHostAnchor;
+      }>
+    | Readonly<{
+        /** WORD_TEXT_FRAME_PRECEDING_TEXT_PUSH: a text-anchored frame carried
+         * from a previous pass with its first-placement geometry. */
+        kind: 'frame';
+        occurrenceId: string;
+        paragraphSource: SourceRef;
+        carry: FrameCarryObservation;
       }>
   )[];
   readonly location: BodyAcquisitionLocation;
