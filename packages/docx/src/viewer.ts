@@ -322,12 +322,12 @@ export class DocxViewer implements ZoomableViewer {
           // document's own view default applies.
           ...(inheritedRequestedView !== undefined
             ? { showTrackedChanges: inheritedRequestedView }
-            : this._opts.modelSources === undefined
+            : this._opts.legacyDoc === undefined
               ? (this._opts.showTrackedChanges === true ? { showTrackedChanges: true } : {})
               : (!this._showTrackedChangesExplicit
                 ? undefined
                 : { showTrackedChanges: this._opts.showTrackedChanges })),
-          ...(this._opts.modelSources === undefined ? undefined : { modelSources: this._opts.modelSources }),
+          ...(this._opts.legacyDoc === undefined ? undefined : { legacyDoc: this._opts.legacyDoc }),
           ...(this._opts.currentDate === undefined
             ? {}
             : { currentDate: this._opts.currentDate }),
@@ -1022,7 +1022,7 @@ export class DocxViewer implements ZoomableViewer {
     const doc = this._doc;
     // Compare with the document's active view: it may come from the loaded
     // document's own view default rather than from this viewer's options.
-    const current = this._opts.modelSources === undefined
+    const current = this._opts.legacyDoc === undefined
       ? this._opts.showTrackedChanges === true
       : doc
         ? activeDocxLayoutViewOf(doc).showTrackedChanges

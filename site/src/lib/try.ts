@@ -120,13 +120,15 @@ export async function renderFile(
 
   // Only Try Yours opts in, and only the selected binary family is imported.
   // Source modules and reader WASM remain URL assets loaded on a structural claim.
-  const modelSources = ext === 'doc'
-    ? [(await import('@silurus/ooxml-legacy-office/doc')).legacyDocSource()]
-    : ext === 'xls'
-      ? [(await import('@silurus/ooxml-legacy-office/xls')).legacyXlsSource()]
-      : ext === 'ppt'
-        ? [(await import('@silurus/ooxml-legacy-office/ppt')).legacyPptSource()]
-        : [];
+  const legacyDoc = ext === 'doc'
+    ? (await import('@silurus/ooxml-legacy-office/doc')).legacyDoc
+    : undefined;
+  const legacyXls = ext === 'xls'
+    ? (await import('@silurus/ooxml-legacy-office/xls')).legacyXls
+    : undefined;
+  const legacyPpt = ext === 'ppt'
+    ? (await import('@silurus/ooxml-legacy-office/ppt')).legacyPpt
+    : undefined;
   assertCurrentRender(generation);
 
   if (ext === 'xlsx' || ext === 'xls') {
@@ -138,7 +140,7 @@ export async function renderFile(
       useGoogleFonts: true,
       showZoomSlider: true,
       comments: false,
-      modelSources,
+      ...(legacyXls === undefined ? {} : { legacyXls }),
       math,
       ...fullRenderers,
     });
@@ -199,7 +201,7 @@ export async function renderFile(
       pageShadow: false,
       useGoogleFonts: true,
       comments: false,
-      modelSources,
+      ...(legacyPpt === undefined ? {} : { legacyPpt }),
       math,
       // Keep progressive preflight and paint off the UI thread while the user
       // scrolls through slides that are still becoming available.
@@ -265,7 +267,7 @@ export async function renderFile(
     pageShadow: false,
     useGoogleFonts: true,
     comments: false,
-    modelSources,
+    ...(legacyDoc === undefined ? {} : { legacyDoc }),
     math,
     // Keep progressive pagination and painting off the UI thread so scrolling
     // remains responsive while later pages are still being prepared.

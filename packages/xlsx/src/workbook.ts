@@ -23,6 +23,7 @@ import {
   resolveOoxmlContainer,
   toArrayBuffer,
   type LoadOptions as CoreLoadOptions,
+  type ModelSource,
   type MathRenderer,
   type ChartThreeDRenderer,
   type ChartRegionMapRenderer,
@@ -135,6 +136,14 @@ export interface LoadOptions extends CoreLoadOptions {
    * documented fallback in worker mode.
    */
   mode?: 'main' | 'worker';
+  /**
+   * Opt-in model source for workbook input that is not an OOXML package (a
+   * `ModelSource<'xlsx'>`). When its `claim()` accepts the raw bytes, it
+   * opens them in the parser realm through its own module; otherwise the
+   * ordinary OOXML path runs unchanged. A source for another format is a
+   * `TypeError`. Omitting this option imports and runs nothing extra.
+   */
+  legacyXls?: ModelSource<'xlsx'>;
 }
 
 type WorkbookBridge = WorkerBridge<
@@ -356,7 +365,7 @@ export class XlsxWorkbook {
   static async load(source: string | ArrayBuffer, opts: LoadOptions = {}): Promise<XlsxWorkbook> {
     const worksheetPolicy = normalizeXlsxWorksheetPolicy(opts);
     opts = { ...opts, xlsxWorksheetLimits: worksheetPolicy.worksheet };
-    if (__OOXML_MODEL_SOURCES__ && opts.modelSources !== undefined) {
+    if (__OOXML_MODEL_SOURCES__ && opts.legacyXls !== undefined) {
       return (await import('./internal/workbook-model-source.js')).loadXlsxModelSource(source, opts, XlsxWorkbook);
     }
     opts = { ...opts, cjkFallback: resolveCjkFallback(opts.cjkFallback) };

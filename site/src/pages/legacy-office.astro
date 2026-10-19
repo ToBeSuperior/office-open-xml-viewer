@@ -10,10 +10,10 @@ const browserExamples = [
   {
     title: 'DOC → DOCX Viewer',
     code: `import { DocxViewer } from '@silurus/ooxml/docx';
-import { legacyDocSource } from '@silurus/ooxml-legacy-office/doc';
+import { legacyDoc } from '@silurus/ooxml-legacy-office/doc';
 
 const canvas = document.querySelector('#document') as HTMLCanvasElement;
-const viewer = new DocxViewer(canvas, { modelSources: [legacyDocSource()] });
+const viewer = new DocxViewer(canvas, { legacyDoc });
 await viewer.load(await file.arrayBuffer());
 // When the preview is removed:
 viewer.destroy();`,
@@ -21,10 +21,10 @@ viewer.destroy();`,
   {
     title: 'XLS → XLSX Viewer',
     code: `import { XlsxViewer } from '@silurus/ooxml/xlsx';
-import { legacyXlsSource } from '@silurus/ooxml-legacy-office/xls';
+import { legacyXls } from '@silurus/ooxml-legacy-office/xls';
 
 const container = document.querySelector('#workbook') as HTMLElement;
-const viewer = new XlsxViewer(container, { modelSources: [legacyXlsSource()] });
+const viewer = new XlsxViewer(container, { legacyXls });
 await viewer.load(await file.arrayBuffer());
 // When the preview is removed:
 viewer.destroy();`,
@@ -32,10 +32,10 @@ viewer.destroy();`,
   {
     title: 'PPT → PPTX Viewer',
     code: `import { PptxViewer } from '@silurus/ooxml/pptx';
-import { legacyPptSource } from '@silurus/ooxml-legacy-office/ppt';
+import { legacyPpt } from '@silurus/ooxml-legacy-office/ppt';
 
 const canvas = document.querySelector('#presentation') as HTMLCanvasElement;
-const viewer = new PptxViewer(canvas, { modelSources: [legacyPptSource()] });
+const viewer = new PptxViewer(canvas, { legacyPpt });
 await viewer.load(await file.arrayBuffer());
 // When the preview is removed:
 viewer.destroy();`,
@@ -43,11 +43,9 @@ viewer.destroy();`,
 ];
 const nodeExample = `import { readFile } from 'node:fs/promises';
 import { openPptxPresentation } from '@silurus/ooxml/node';
-import { legacyPptSource } from '@silurus/ooxml-legacy-office/ppt';
+import { legacyPpt } from '@silurus/ooxml-legacy-office/ppt';
 
-const session = await openPptxPresentation(await readFile('presentation.ppt'), {
-  modelSources: [legacyPptSource()],
-});
+const session = await openPptxPresentation(await readFile('presentation.ppt'), { legacyPpt });
 try {
   for await (const slide of session.slides()) {
     // Consume each ordinary slide model in your application.
@@ -55,10 +53,13 @@ try {
 } finally {
   await session.close();
 }`;
-const assetExample = `const source = legacyPptSource({
+const assetExample = `import { createLegacyPpt } from '@silurus/ooxml-legacy-office/ppt';
+
+const legacyPpt = createLegacyPpt({
   moduleUrl: new URL('/assets/legacy-ppt-source-module.mjs', location.href).href,
   wasmUrl: new URL('/assets/legacy_ppt_direct_bg.wasm', location.href).href,
-});`;
+});
+const viewer = new PptxViewer(canvas, { legacyPpt });`;
 ---
 
 <Base
@@ -105,8 +106,10 @@ const assetExample = `const source = legacyPptSource({
       <section id="browser">
         <p class="section-label">Browser viewers</p>
         <h2>Enable each format explicitly.</h2>
-        <p>Pass a source through <code>modelSources</code>. A DOC source enables DOC only; XLS and
-          PPT each need their own source. Modern OOXML input continues through the ordinary parser.
+        <p>Import a reader and pass it as its own option, like the other opt-in modules:
+          <code>&#123; legacyDoc &#125;</code>, <code>&#123; legacyXls &#125;</code> or
+          <code>&#123; legacyPpt &#125;</code>. The DOC reader enables DOC only; XLS and PPT each need
+          their own reader. Modern OOXML input continues through the ordinary parser.
           Admission checks inspect the bytes, not the filename.</p>
         {browserExamples.map(({ title, code }) => (
           <><h3>{title}</h3><div class="code-card"><Code code={code} lang="ts" themes={codeThemes} defaultColor={false} /></div></>
@@ -119,7 +122,7 @@ const assetExample = `const source = legacyPptSource({
         <h2>Use the same source in a bounded session.</h2>
         <div class="code-card"><Code code={nodeExample} lang="ts" themes={codeThemes} defaultColor={false} /></div>
         <p><code>openDocxDocument</code>, <code>openXlsxWorkbook</code> and the materialization APIs also
-          accept <code>modelSources</code>. Keep the normal canvas factory options when rendering in Node,
+          accept the same option. Keep the normal canvas factory options when rendering in Node,
           and close sessions in <code>finally</code>. Node sessions retain their <code>signal</code> option.</p>
       </section>
       <section id="support">
@@ -166,13 +169,14 @@ const assetExample = `const source = legacyPptSource({
         <p class="section-label">Loading and deployment</p>
         <h2>Pay for the reader only when used.</h2>
         <p>Each format has its own source entry, self-contained ES source module and dedicated WASM.
-          Creating a source fetches nothing. Its module and WASM are fetched only when the source
-          is used for a claimed file, in the parser Worker or Node. Import the factory dynamically
-          when selecting a legacy file to defer even the small calling entry.</p>
+          Importing a reader fetches nothing. Its module and WASM are fetched only when the reader
+          claims a file, in the parser Worker or Node. Import the entry dynamically when selecting a
+          legacy file to defer even the small calling entry.</p>
         <p>Serve the emitted source modules and <code>legacy_doc_direct_bg.wasm</code>,
           <code>legacy_xls_direct_bg.wasm</code> or <code>legacy_ppt_direct_bg.wasm</code> with the package
-          assets. A custom asset pipeline can pass absolute <code>moduleUrl</code> and <code>wasmUrl</code>
-          options. Allow the source module URL in CSP rules for scripts and Worker imports.</p>
+          assets. A custom asset pipeline can create the reader with <code>createLegacyDoc</code>,
+          <code>createLegacyXls</code> or <code>createLegacyPpt</code> and absolute <code>moduleUrl</code> and
+          <code>wasmUrl</code> options. Allow the source module URL in CSP rules for scripts and Worker imports.</p>
         <div class="code-card"><Code code={assetExample} lang="ts" themes={codeThemes} defaultColor={false} /></div>
         <p><a href="/bundle-size">Bundle and runtime asset costs →</a> · <a href="/try">Try a file locally →</a></p>
       </section>

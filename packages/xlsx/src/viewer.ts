@@ -932,7 +932,7 @@ class XlsxViewerEngine implements ZoomableViewer {
           chartEx: this.opts.chartEx,
           tiff: this.opts.tiff,
           mode: this._mode,
-          ...(this.opts.modelSources === undefined ? undefined : { modelSources: this.opts.modelSources }),
+          ...(this.opts.legacyXls === undefined ? undefined : { legacyXls: this.opts.legacyXls }),
         }, sourceOptions), () => {
           // Claim every async-operation generation before closing the old
           // workbook. Rejections caused by its worker termination are stale

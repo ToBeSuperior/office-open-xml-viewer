@@ -5,7 +5,7 @@ import { buildDocFixture, concat, little16 } from '../test-fixtures.js';
 import { testDocSource } from '../test-sources.js';
 import { materializeDocxDocument, openDocxDocument, skia, skiaFactory } from './node-facade.js';
 
-const load = (bytes: Uint8Array) => materializeDocxDocument(bytes, { modelSources: [testDocSource()] });
+const load = (bytes: Uint8Array) => materializeDocxDocument(bytes, { legacyDoc: testDocSource() });
 
 it.each([false, true])('lets a no-border sentinel clear an earlier bottom border, old=%s', async old => {
   const initial = concat(little16(0x6426), new Uint8Array([8, 1, 2, 0]));
@@ -29,7 +29,7 @@ it.skipIf(!skia).each([false, true])('renders one grouped paragraph rule in the 
   const source = buildDocFixture({ text: 'One\rTwo\r', paragraphProperties: border,
     headers: ['', 'Running header\r', '', '', '', ''], defaultTabTwips: 720,
   });
-  const session = await openDocxDocument(source, { factory: skiaFactory(), currentDate: 0, modelSources: [testDocSource()] });
+  const session = await openDocxDocument(source, { factory: skiaFactory(), currentDate: 0, legacyDoc: testDocSource() });
   try {
     expect(session.pageCount).toBe(1);
     const canvas = await session.renderPage(0, { dpr: 1 }) as unknown as { width: number; height: number; getContext(kind: '2d'): { getImageData(x: number, y: number, w: number, h: number): { data: Uint8ClampedArray } } };

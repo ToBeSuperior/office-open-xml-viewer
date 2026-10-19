@@ -5,7 +5,7 @@ import { buildDocFixture, concat, little16, little32 } from '../test-fixtures.js
 import { testDocSource } from '../test-sources.js';
 import { materializeDocxDocument, openDocxDocument, skia, skiaFactory } from './node-facade.js';
 
-const load = (bytes: Uint8Array) => materializeDocxDocument(bytes, { modelSources: [testDocSource()] });
+const load = (bytes: Uint8Array) => materializeDocxDocument(bytes, { legacyDoc: testDocSource() });
 interface Run { type: string; text?: string; bold?: boolean; imagePath?: string; noteRef?: { kind: string; id: string } }
 interface Block { type: string; runs: Run[] }
 interface Note { id: string; content: Block[] }
@@ -143,7 +143,7 @@ it.skipIf(!skia).each([
   const bytes = buildDocFixture({ text: 'Body\u0002\r', [kind]: [{ cp: 4, text: '\u0002Recovered note\r' }],
     characterProperties: new Uint8Array([0x55, 0x08, 1]), defaultTabTwips: 720,
     ...(short ? { noteSeparators: shortFootnoteSeparators } : {}) });
-  const session = await openDocxDocument(bytes, { factory: skiaFactory(), currentDate: 0, modelSources: [testDocSource()] });
+  const session = await openDocxDocument(bytes, { factory: skiaFactory(), currentDate: 0, legacyDoc: testDocSource() });
   try {
     const runs: { text: string; y: number }[] = [];
     for (let page = 0; page < session.pageCount; page++) await session.renderPage(page, { dpr: 1, onTextRun: r => runs.push({ text: r.text, y: r.y + page * 2000 }) });

@@ -108,6 +108,16 @@ export const ALLOWED_TOKENS = [
     ),
     token: /^(?:WordDocument|PowerPoint Document)$/,
   },
+  // Each format surface names its opt-in model source option the way the
+  // other opt-in modules are passed (`{ legacyDoc }` beside `{ math }`). Only
+  // that exact camel-case key of the surface's own format is admitted; the
+  // option is typed as the format-generic ModelSource, and no other spelling,
+  // value, branch or import of a legacy reader is.
+  { rule: 'legacy-format-name', path: /^packages\/docx\//, token: /^legacyDoc$/ },
+  { rule: 'legacy-format-name', path: /^packages\/xlsx\//, token: /^legacyXls$/ },
+  { rule: 'legacy-format-name', path: /^packages\/pptx\//, token: /^legacyPpt$/ },
+  // The Node facade carries all three format sessions.
+  { rule: 'legacy-format-name', path: /^packages\/node\//, token: /^legacy(?:Doc|Xls|Ppt)$/ },
   // XLSX may cite the Excel binary specifications as Excel-behaviour
   // evidence for SpreadsheetML semantics.
   { rule: 'legacy-binary-spec', path: /^packages\/xlsx\//, token: /^MS-XLSB?$/, commentOnly: true },

@@ -200,7 +200,7 @@ describe('PptxPresentation.destroy() — rejects in-flight worker requests', () 
       _parse(buffer: ArrayBuffer, resourcePolicy: object): Promise<void>;
     }, '_parse').mockResolvedValueOnce(undefined);
 
-    await expect(PptxPresentation.load(new ArrayBuffer(0), { modelSources: [source] }))
+    await expect(PptxPresentation.load(new ArrayBuffer(0), { legacyPpt: source }))
       .rejects.toBe(failure);
     expect(release).toHaveBeenCalledOnce();
     expect(SilentWorker.instances).toHaveLength(1);
@@ -401,7 +401,7 @@ it.each(['ordinary', 'selected-source'] as const)('filters ordinary Window prelo
     release: () => undefined,
   }) };
   const presentation = await PptxPresentation.load(new ArrayBuffer(0), { useGoogleFonts: true,
-    ...(variant === 'selected-source' ? { modelSources: [source] } : {}),
+    ...(variant === 'selected-source' ? { legacyPpt: source } : {}),
   });
   expect(added).toHaveLength(2);
   expect(loads).toEqual([expect.stringContaining('a.woff2')]);

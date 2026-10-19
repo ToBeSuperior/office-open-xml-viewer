@@ -17,7 +17,7 @@ it.skipIf(!skia).each(['custom', 'document-default', 'custom-over-default'] as c
         ? { paragraphProperties: concat(little16(0xc60d), new Uint8Array([5, 0, 1]), little16(tab), new Uint8Array([0])) }
         : { defaultTabTwips: tab }),
     });
-    const session = await openDocxDocument(bytes, { factory: skiaFactory(), currentDate: 0, modelSources: [testDocSource()] });
+    const session = await openDocxDocument(bytes, { factory: skiaFactory(), currentDate: 0, legacyDoc: testDocSource() });
     try {
       expect(session.pageCount).toBe(1);
       const canvas = await session.renderPage(0, { dpr: 1 }) as unknown as Pixels;

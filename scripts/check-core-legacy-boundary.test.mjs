@@ -146,6 +146,19 @@ test('allows the pre-existing generic CFB rejection and unrelated "legacy" wordi
   assert.deepEqual(rules('export function selectModelSource(sources, target, bytes) {}'), []);
 });
 
+test('admits only each surface\'s own opt-in source option key', () => {
+  const at = (path, text) => findViolations([{ path, text }]).map((v) => v.rule);
+  assert.deepEqual(at('packages/docx/src/x.ts', "interface O { legacyDoc?: ModelSource<'docx'>; }"), []);
+  assert.deepEqual(at('packages/xlsx/src/x.ts', 'if (opts.legacyXls !== undefined) {}'), []);
+  assert.deepEqual(at('packages/pptx/src/x.ts', 'load(bytes, { legacyPpt });'), []);
+  assert.deepEqual(at('packages/node/src/x.ts', 'const { legacyDoc, legacyXls, legacyPpt } = options;'), []);
+  // Another format's key, another spelling, or core is still reported.
+  assert.deepEqual(at('packages/docx/src/x.ts', 'load(bytes, { legacyXls });'), ['legacy-format-name']);
+  assert.deepEqual(at('packages/xlsx/src/x.ts', "const kind = 'legacy-xls';"), ['legacy-format-name']);
+  assert.deepEqual(at('packages/pptx/src/x.ts', 'const LegacyPpt = 1;'), ['legacy-format-name']);
+  assert.deepEqual(at('packages/core/src/x.ts', 'interface O { legacyDoc?: unknown; }'), ['legacy-format-name']);
+});
+
 test('decodes escaped static, dynamic, require and re-export module specifiers', () => {
   for (const code of [
     "import x from '@silurus/ooxml-\\u006cegacy-office';",

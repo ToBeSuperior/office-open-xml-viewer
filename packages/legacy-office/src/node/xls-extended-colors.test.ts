@@ -107,7 +107,7 @@ const themed = (index: number, tint = 0) => color([index, 0, 0, 0], 3, tint);
 const malformedTheme = [rec(0x896, new Uint8Array([1]))];
 
 async function styles(bytes: Uint8Array) {
-  return (await materializeXlsxWorkbook(bytes, { modelSources: [testXlsSource()] })).workbookIndex.styles;
+  return (await materializeXlsxWorkbook(bytes, { legacyXls: testXlsSource() })).workbookIndex.styles;
 }
 
 async function resolved(bytes: Uint8Array, index = 1) {

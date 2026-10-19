@@ -7,7 +7,7 @@ import { openXlsxWorkbook } from './node-facade.js';
 import { buildXlsRichFixture } from './xls-rich-fixture.js';
 
 it('keeps separate BIFF run fonts as XLSX rich-text runs', async () => {
-  const workbook = await openXlsxWorkbook(buildXlsRichFixture(), { modelSources: [testXlsSource()] });
+  const workbook = await openXlsxWorkbook(buildXlsRichFixture(), { legacyXls: testXlsSource() });
   try {
     const cells = [];
     for await (const chunk of workbook.worksheetRows(0)) {

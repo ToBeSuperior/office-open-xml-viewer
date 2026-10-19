@@ -2,7 +2,7 @@
 
 Paragraph footnotes continue across physical pages by default in
 `DocxDocument.load`, `DocxViewer`, `DocxScrollViewer`, the Node
-`openDocxDocument` session, and documents loaded through `modelSources` in
+`openDocxDocument` session, and documents loaded through the `legacyDoc` option in
 either environment. This is a library display default chosen to follow
 Word's page allocation in the finite controls described below; it is not a
 normative ECMA-376 algorithm and does not promise identical Word pagination or
@@ -74,7 +74,7 @@ unchanged library policy.
 
 Ordinary and continuation separator stories are independent. Explicit short and
 full marks remain distinct from absent/default facts through the shared model,
-including models supplied through `modelSources`. The rule's kind determines
+including models supplied through the `legacyDoc` option. The rule's kind determines
 its width even when a short mark appears in a continuation story. A bare empty
 reserved story suppresses its rule while preserving the note-band gap. A bare
 `separator` mark uses the existing short-rule policy (one third of text width);

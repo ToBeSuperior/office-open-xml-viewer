@@ -159,9 +159,9 @@ vi.mock('@silurus/ooxml-xlsx', () => ({
   },
 }));
 
-vi.mock('@silurus/ooxml-legacy-office/doc', () => ({ legacyDocSource: mocks.legacyDoc }));
-vi.mock('@silurus/ooxml-legacy-office/xls', () => ({ legacyXlsSource: mocks.legacyXls }));
-vi.mock('@silurus/ooxml-legacy-office/ppt', () => ({ legacyPptSource: mocks.legacyPpt }));
+vi.mock('@silurus/ooxml-legacy-office/doc', () => ({ get legacyDoc() { return mocks.legacyDoc(); } }));
+vi.mock('@silurus/ooxml-legacy-office/xls', () => ({ get legacyXls() { return mocks.legacyXls(); } }));
+vi.mock('@silurus/ooxml-legacy-office/ppt', () => ({ get legacyPpt() { return mocks.legacyPpt(); } }));
 
 vi.mock('../../../src/math', () => ({ math: mocks.math }));
 vi.mock('../../../src/three-d', () => ({ threeD: mocks.threeD }));
@@ -237,13 +237,16 @@ afterEach(() => {
 
 describe('Try Yours ScrollViewer integration', () => {
   it.each([
-    { ext: 'DOC', format: 'docx', instances: mocks.docx, factory: mocks.legacyDoc },
-    { ext: 'xls', format: 'xlsx', instances: mocks.xlsx, factory: mocks.legacyXls },
-    { ext: 'ppt', format: 'pptx', instances: mocks.pptx, factory: mocks.legacyPpt },
-  ])('opens .$ext through only its matching experimental source', async ({ ext, format, instances, factory }) => {
+    { ext: 'DOC', format: 'docx', instances: mocks.docx, factory: mocks.legacyDoc, key: 'legacyDoc' },
+    { ext: 'xls', format: 'xlsx', instances: mocks.xlsx, factory: mocks.legacyXls, key: 'legacyXls' },
+    { ext: 'ppt', format: 'pptx', instances: mocks.pptx, factory: mocks.legacyPpt, key: 'legacyPpt' },
+  ])('opens .$ext through only its matching experimental source', async ({ ext, format, instances, factory, key }) => {
     const result = await renderFile(stage(), file(`legacy.${ext}`));
     expect(result.format).toBe(format);
-    expect(instances[0].opts.modelSources).toEqual([{ target: format }]);
+    expect(instances[0].opts[key]).toEqual({ target: format });
+    for (const other of ['legacyDoc', 'legacyXls', 'legacyPpt'].filter((name) => name !== key)) {
+      expect(instances[0].opts).not.toHaveProperty(other);
+    }
     for (const candidate of [mocks.legacyDoc, mocks.legacyXls, mocks.legacyPpt]) {
       expect(candidate).toHaveBeenCalledTimes(candidate === factory ? 1 : 0);
     }
@@ -252,6 +255,9 @@ describe('Try Yours ScrollViewer integration', () => {
   it('keeps ordinary OOXML loads free of legacy sources', async () => {
     for (const ext of ['docx', 'xlsx', 'pptx']) await renderFile(stage(), file(`modern.${ext}`));
     for (const factory of [mocks.legacyDoc, mocks.legacyXls, mocks.legacyPpt]) expect(factory).not.toHaveBeenCalled();
+    for (const instance of [mocks.docx[0], mocks.xlsx[0], mocks.pptx[0]]) {
+      for (const key of ['legacyDoc', 'legacyXls', 'legacyPpt']) expect(instance.opts).not.toHaveProperty(key);
+    }
   });
 
   it('lets DOCX fit the preview width and mounts every selectable page for native Find', async () => {

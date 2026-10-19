@@ -1251,6 +1251,7 @@ export interface LineBreak {
     characterChildAttributes?: Record<string, Record<string, string>>;
 }
 export type LoadOptions = LoadOptions__emitterCollision1 & {
+    legacyPpt?: ModelSource<'pptx'>;
     mode?: 'main' | 'worker';
     progressiveLayout?: boolean;
     onLayoutProgress?: (progress: Readonly<ProgressiveLayoutProgress>) => void;
@@ -1261,7 +1262,6 @@ interface LoadOptions__emitterCollision1 {
     useGoogleFonts?: boolean;
     cjkFallback?: CjkFallback;
     password?: string;
-    modelSources?: readonly ModelSource[];
     wasmUrl?: string | URL;
     maxZipEntryBytes?: number;
     resourceLimits?: OoxmlResourceLimits;

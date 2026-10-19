@@ -37,7 +37,7 @@ describe('Node direct PPT session', () => {
   it('keeps resource usage absent, serves images lazily, honours lifecycle abort and releases once', async () => {
     const releases = await nativeReleases(async () => {
       const lifecycle = new AbortController();
-      const session = await openPptxPresentation(input(), { modelSources: [testPptSource()], signal: lifecycle.signal });
+      const session = await openPptxPresentation(input(), { legacyPpt: testPptSource(), signal: lifecycle.signal });
       // Exhausting the slide iterator closes the session, so read inside it.
       for await (const slide of session) {
         const paths = slide.elements.map(element => (element.type === 'picture' ? element.imagePath : ''));
@@ -72,7 +72,7 @@ describe('Node direct PPT session', () => {
         return bootstrap.call(this as InstanceType<typeof glue.LegacyPptPresentation>);
       });
       try {
-        await expect(openPptxPresentation(input(), { modelSources: [testPptSource()], signal: lifecycle.signal }))
+        await expect(openPptxPresentation(input(), { legacyPpt: testPptSource(), signal: lifecycle.signal }))
           .rejects.toMatchObject({ name: 'AbortError' });
       } finally { spy.mockRestore(); }
     });

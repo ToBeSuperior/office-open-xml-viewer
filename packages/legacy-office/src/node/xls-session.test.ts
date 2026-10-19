@@ -17,8 +17,8 @@ vi.mock('../../../node/src/wasm-loader.ts', async (importOriginal) => ({
 }));
 
 type Session = Awaited<ReturnType<typeof openXlsxWorkbook>>;
-const open = (bytes: Uint8Array, options: Omit<Parameters<typeof openXlsxWorkbook>[1] & object, 'modelSources'> = {}) =>
-  openXlsxWorkbook(bytes, { ...options, modelSources: [testXlsSource()] });
+const open = (bytes: Uint8Array, options: Omit<Parameters<typeof openXlsxWorkbook>[1] & object, 'legacyXls'> = {}) =>
+  openXlsxWorkbook(bytes, { ...options, legacyXls: testXlsSource() });
 
 async function rows(workbook: Session) {
   const result = [];

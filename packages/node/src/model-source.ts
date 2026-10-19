@@ -15,16 +15,16 @@ export type NodeSessionInput<TArchive> =
   | Readonly<{ kind: 'ooxml'; bytes: Uint8Array }>;
 
 /**
- * Resolve a Node session input. The first configured model source that claims
- * the raw bytes opens them in this realm; otherwise the bytes are resolved as
+ * Resolve a Node session input. The configured model source, when it claims
+ * the raw bytes, opens them in this realm; otherwise the bytes are resolved as
  * an OOXML container (decrypting an Agile-encrypted package with `password`).
- * Without `modelSources` nothing is imported and the OOXML path is unchanged.
+ * Without `source` nothing is imported and the OOXML path is unchanged.
  */
 export async function resolveNodeSessionInput<TArchive>(
   buffer: ArrayBuffer | Uint8Array,
   target: ModelSourceTarget,
   options: Readonly<{
-    modelSources?: readonly ModelSource[];
+    source?: ModelSource;
     password?: string;
     signal?: AbortSignal;
   }>,
@@ -32,9 +32,9 @@ export async function resolveNodeSessionInput<TArchive>(
   normalizeError: (error: unknown) => unknown = error => parseTypedParserError(error) ?? error,
 ): Promise<NodeSessionInput<TArchive>> {
   const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
-  const selected = options.modelSources === undefined
+  const selected = options.source === undefined
     ? undefined
-    : selectModelSource(options.modelSources, target, bytes);
+    : selectModelSource([options.source], target, bytes);
   if (!selected) {
     return { kind: 'ooxml', bytes: await resolveOoxmlContainer(bytes, options.password) };
   }

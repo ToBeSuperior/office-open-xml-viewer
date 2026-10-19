@@ -38,7 +38,7 @@ test.describe('legacy DOC corpus survey', () => {
         try {
           const { DocxDocument } = await import('/src/document.ts');
           const { math } = await import('/tests/visual/math-engine.ts');
-          const { legacyDocSource } = await import(/* @vite-ignore */ module);
+          const { legacyDoc } = await import(/* @vite-ignore */ module);
           // The dev server decodes paths with decodeURI, which keeps reserved
           // escapes such as %2B; encodeURI leaves those characters literal.
           const response = await fetch(`/private/doc/${encodeURI(file)}`);
@@ -47,7 +47,7 @@ test.describe('legacy DOC corpus survey', () => {
           const document = await DocxDocument.load(bytes, {
             useGoogleFonts: false,
             math,
-            modelSources: [legacyDocSource()],
+            legacyDoc,
           });
           try {
             for (let index = 0; index < document.pageCount; index += 1) {

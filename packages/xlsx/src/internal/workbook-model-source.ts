@@ -60,8 +60,8 @@ export async function loadXlsxModelSource(
     } else {
       buffer = input;
     }
-    const selected = selectModelSource(opts.modelSources, 'xlsx', new Uint8Array(buffer));
-    if (!selected) return workbookType.load(buffer, { ...opts, modelSources: undefined });
+    const selected = selectModelSource(opts.legacyXls === undefined ? undefined : [opts.legacyXls], 'xlsx', new Uint8Array(buffer));
+    if (!selected) return workbookType.load(buffer, { ...opts, legacyXls: undefined });
     // The caller already owns this public constructor. Passing it avoids a
     // static source-only back-edge that splits the ordinary workbook graph;
     // source overrides remain confined to this admitted source's subclass.

@@ -27,9 +27,9 @@ describe('Node openers and legacy model sources', () => {
   });
 
   it('leave foreign-family and ambiguous containers to the OOXML rejection', async () => {
-    const doc = { modelSources: [testDocSource()] };
-    const xls = { modelSources: [testXlsSource()] };
-    const ppt = { modelSources: [testPptSource()] };
+    const doc = { legacyDoc: testDocSource() };
+    const xls = { legacyXls: testXlsSource() };
+    const ppt = { legacyPpt: testPptSource() };
     await expect(materializeDocxDocument(cfb('Workbook'), doc)).rejects.toMatchObject(legacyRejection);
     await expect(materializeDocxDocument(cfb('WordDocument', 'Workbook'), doc)).rejects.toMatchObject(legacyRejection);
     await expect(openXlsxWorkbook(cfb('PowerPoint Document'), xls)).rejects.toMatchObject(legacyRejection);
@@ -38,14 +38,14 @@ describe('Node openers and legacy model sources', () => {
     await expect(materializeDocxDocument(cfb('EncryptionInfo', 'EncryptedPackage', 'WordDocument'), doc))
       .rejects.toMatchObject({ code: 'encrypted' });
     // A source for another target is a configuration error, not a fallback.
-    await expect(materializeDocxDocument(cfb('WordDocument'), xls as never)).rejects.toThrow(TypeError);
+    await expect(materializeDocxDocument(cfb('WordDocument'), { legacyDoc: testXlsSource() } as never)).rejects.toThrow(TypeError);
   });
 
   it('route each own family to its direct reader', async () => {
-    const document = await materializeDocxDocument(buildDocFixture(), { modelSources: [testDocSource()] });
+    const document = await materializeDocxDocument(buildDocFixture(), { legacyDoc: testDocSource() });
     expect(JSON.stringify(document.body)).toContain('Hello 日本語');
 
-    const workbook = await materializeXlsxWorkbook(buildXlsFixture(), { modelSources: [testXlsSource()] });
+    const workbook = await materializeXlsxWorkbook(buildXlsFixture(), { legacyXls: testXlsSource() });
     expect(JSON.stringify(workbook.workbookIndex.workbook)).toContain('表計算');
     expect(workbook.worksheets).toHaveLength(1);
     const cells = JSON.stringify([workbook.workbookIndex.sharedStrings, workbook.worksheets[0]]);
@@ -54,7 +54,7 @@ describe('Node openers and legacy model sources', () => {
 
     // The direct PPT reader does not project a slide with outline text but no
     // drawing; reaching its fail-closed rejection proves the routing.
-    await expect(materializePptxPresentation(buildPptFixture(), { modelSources: [testPptSource()] }))
+    await expect(materializePptxPresentation(buildPptFixture(), { legacyPpt: testPptSource() }))
       .rejects.toMatchObject({ code: 'unsupported-content', details: { format: 'ppt', reason: 'source-subset' } });
   });
 
@@ -72,7 +72,7 @@ describe('Node openers and legacy model sources', () => {
   const bodyTypes = (document: { body: unknown[] }) => (document.body as { type: string }[]).map(element => element.type);
 
   it('reject unsupported character formatting confined to a line-break control', async () => {
-    await expect(materializeDocxDocument(confinedToControl('A\u000bB\r'), { modelSources: [testDocSource()] }))
+    await expect(materializeDocxDocument(confinedToControl('A\u000bB\r'), { legacyDoc: testDocSource() }))
       .rejects.toMatchObject({ code: 'unsupported-content', details: { format: 'doc', reason: 'source-subset' } });
   });
 
@@ -81,11 +81,11 @@ describe('Node openers and legacy model sources', () => {
     { kind: 'column', control: '\u000e' },
   ])('reject unsupported character formatting confined to a $kind break', async ({ kind, control }) => {
     const source = testDocSource();
-    await expect(materializeDocxDocument(confinedToControl(`A${control}B\r`), { modelSources: [source] }))
+    await expect(materializeDocxDocument(confinedToControl(`A${control}B\r`), { legacyDoc: source }))
       .rejects.toMatchObject({ code: 'unsupported-content', details: { format: 'doc', reason: 'source-subset' } });
     // The gate rejects this input only: the same source still opens a valid
     // document whose plain break of the same kind is kept in the model.
-    const plain = await materializeDocxDocument(buildDocFixture({ text: `A${control}B\r` }), { modelSources: [source] });
+    const plain = await materializeDocxDocument(buildDocFixture({ text: `A${control}B\r` }), { legacyDoc: source });
     expect(bodyTypes(plain)).toContain(`${kind}Break`);
   });
 
@@ -97,7 +97,7 @@ describe('Node openers and legacy model sources', () => {
   // private placement wire; every other value, and absence, leaves it unset.
   const textFlow = (value: number) => concat(little16(0x5033), little16(value));
   type SectionFacts = { type?: string; textDirection?: string | null; __sectionPlacement?: Record<string, unknown> };
-  const loadDoc = (bytes: Uint8Array) => materializeDocxDocument(bytes, { modelSources: [testDocSource()] });
+  const loadDoc = (bytes: Uint8Array) => materializeDocxDocument(bytes, { legacyDoc: testDocSource() });
   const finalSection = (document: { section: unknown }) => document.section as SectionFacts;
   const endingSection = (document: { body: unknown[] }) => {
     const breaks = (document.body as SectionFacts[]).filter(element => element.type === 'sectionBreak');
@@ -181,7 +181,7 @@ describe('Node openers and legacy model sources', () => {
 
   it('reject an oversize claimed input before opening it', async () => {
     const bytes = buildDocFixture();
-    await expect(materializeDocxDocument(bytes, { modelSources: [testDocSource({ maxInputBytes: bytes.byteLength - 1 })] }))
+    await expect(materializeDocxDocument(bytes, { legacyDoc: testDocSource({ maxInputBytes: bytes.byteLength - 1 }) }))
       .rejects.toThrow(RangeError);
   });
 });

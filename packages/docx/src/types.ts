@@ -1733,7 +1733,7 @@ export type WorkerRequest =
       id: number;
       data: ArrayBuffer;
       resourcePolicy: NormalizedOoxmlResourcePolicy;
-      /** Application-selected model source (LoadOptions.modelSources). */
+      /** Application-selected model source (LoadOptions.legacyDoc). */
       source?: import('@silurus/ooxml-core').ModelSourceModuleDescriptor;
       sourceTransfer?: readonly Transferable[];
       sourceOwnerUrl?: string;

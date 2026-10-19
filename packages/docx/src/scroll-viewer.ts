@@ -329,13 +329,13 @@ export class DocxScrollViewer implements ZoomableViewer {
         // is in progress. An explicit false overrides a model-source default.
         ...(inheritedRequestedView !== undefined
           ? { showTrackedChanges: inheritedRequestedView }
-          : this._opts.modelSources === undefined
+          : this._opts.legacyDoc === undefined
             ? (this._showTrackedChanges ? { showTrackedChanges: true } : {})
             : (this._requestedShowTrackedChanges === undefined
               ? undefined
               : { showTrackedChanges: this._requestedShowTrackedChanges })),
         ...(this._currentDate === undefined ? {} : { currentDate: this._currentDate }),
-        ...(this._opts.modelSources === undefined ? undefined : { modelSources: this._opts.modelSources }),
+        ...(this._opts.legacyDoc === undefined ? undefined : { legacyDoc: this._opts.legacyDoc }),
         ...(this._opts.progressiveLayout ? { progressiveLayout: true } : {}),
         ...(this._opts.sliceLayout === undefined ? {} : { sliceLayout: this._opts.sliceLayout }),
         [docxViewerLoadSignal]: {
@@ -379,7 +379,7 @@ export class DocxScrollViewer implements ZoomableViewer {
         this._showTrackedChanges = this._pendingRequestedView;
         this._requestedShowTrackedChanges = this._pendingRequestedView;
       }
-      if (this._opts.modelSources !== undefined) {
+      if (this._opts.legacyDoc !== undefined) {
         this._showTrackedChanges = activeDocxLayoutViewOf(doc).showTrackedChanges;
       }
       this._layout.bind(doc);
@@ -564,7 +564,7 @@ export class DocxScrollViewer implements ZoomableViewer {
     this._opts = opts;
     this._errorRouter = new CanvasViewerErrorRouter('DocxScrollViewer', opts.onError);
     this._showTrackedChanges = opts.showTrackedChanges === true;
-    if (opts.modelSources !== undefined) this._requestedShowTrackedChanges = opts.showTrackedChanges;
+    if (opts.legacyDoc !== undefined) this._requestedShowTrackedChanges = opts.showTrackedChanges;
     this._currentDate = opts.currentDate;
     // `??` (not `||`): a caller's explicit `false` must disable the shadow, not
     // fall through to the default.
@@ -1081,7 +1081,7 @@ export class DocxScrollViewer implements ZoomableViewer {
     const doc = this._doc;
     // Explicitness is independent of the current value: false before load
     // must win over a model source's true view default.
-    if (this._opts.modelSources !== undefined) this._requestedShowTrackedChanges = value;
+    if (this._opts.legacyDoc !== undefined) this._requestedShowTrackedChanges = value;
     if (this._showTrackedChanges === value) {
       if (doc) await selectDocxLayoutView(doc, {
         showTrackedChanges: value,
@@ -1101,7 +1101,7 @@ export class DocxScrollViewer implements ZoomableViewer {
     if (!selected) return;
     if (this._destroyed || generation !== this._layoutViewGeneration || doc !== this._doc) return;
     this._showTrackedChanges = value;
-    if (this._opts.modelSources !== undefined) this._requestedShowTrackedChanges = value;
+    if (this._opts.legacyDoc !== undefined) this._requestedShowTrackedChanges = value;
     this._find.invalidate();
     // Re-render every mounted slot at the new variant, and relayout: heights,
     // spacer and mount window all follow the new page count, and a shrinking

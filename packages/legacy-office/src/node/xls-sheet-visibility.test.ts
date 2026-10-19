@@ -22,7 +22,7 @@ function fixture(flags: number): Uint8Array {
     record(0x000a), ...bodies));
 }
 
-const open = (flags: number) => materializeXlsxWorkbook(fixture(flags), { modelSources: [testXlsSource()] });
+const open = (flags: number) => materializeXlsxWorkbook(fixture(flags), { legacyXls: testXlsSource() });
 
 it.each([
   [0x00, undefined], [0x01, 'hidden'], [0x02, 'veryHidden'],

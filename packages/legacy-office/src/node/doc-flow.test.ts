@@ -126,14 +126,14 @@ it.skipIf(!skia).each([
   });
   for (const flow of [0, 1]) {
     const bytes = buildDocFixture({ text, sectionProperties: concat(little16(0x5033), little16(flow)) });
-    const model = await materializeDocxDocument(bytes, { modelSources: [testDocSource()] }) as unknown as Model;
+    const model = await materializeDocxDocument(bytes, { legacyDoc: testDocSource() }) as unknown as Model;
     expect(model.section.textDirection ?? null).toBe(flow === 1 ? 'tbRl' : null);
     expect(model.body.map(block => block.type === 'paragraph'
       ? (block.runs ?? []).filter(run => run.type === 'text').map(run => run.text ?? '').join('')
       : block.type)).toEqual(paragraphs);
 
     const recording = recordingSkiaFactory();
-    const session = await openDocxDocument(bytes, { factory: recording.factory, currentDate: 0, modelSources: [testDocSource()] });
+    const session = await openDocxDocument(bytes, { factory: recording.factory, currentDate: 0, legacyDoc: testDocSource() });
     try {
       expect(session.pageCount).toBe(1);
       const runs: Run[] = [];
@@ -278,7 +278,7 @@ it.skipIf(!skia).each([0, 2, 3, 4, 5])('renders native MSOTXFL %i in its normati
   const paragraphOfHan = new Map(paragraphs.flatMap((paragraph, index) => han(paragraph).map(ch => [ch, index] as const)));
   const bytes = buildDocFixture({ text, sectionProperties: concat(DISTINCT_MARGINS, textFlow(flow)) });
 
-  const model = await materializeDocxDocument(bytes, { modelSources: [testDocSource()] }) as unknown as Model & {
+  const model = await materializeDocxDocument(bytes, { legacyDoc: testDocSource() }) as unknown as Model & {
     section: { pageWidth: number; pageHeight: number; marginTop: number; marginRight: number; marginBottom: number; marginLeft: number };
   };
   // Physical page facts stay physical; 3 and 5 share the established
@@ -289,7 +289,7 @@ it.skipIf(!skia).each([0, 2, 3, 4, 5])('renders native MSOTXFL %i in its normati
   expect(model.body.map(block => (block.runs ?? []).filter(run => run.type === 'text').map(run => run.text ?? '').join(''))).toEqual(paragraphs);
 
   const recording = recordingSkiaFactory();
-  const session = await openDocxDocument(bytes, { factory: recording.factory, currentDate: 0, modelSources: [testDocSource()] });
+  const session = await openDocxDocument(bytes, { factory: recording.factory, currentDate: 0, legacyDoc: testDocSource() });
   try {
     expect(session.pageCount).toBe(1);
     const runs: Run[] = [];
@@ -376,7 +376,7 @@ it.skipIf(!skia)('keeps a native MSOTXFL 2 section header upright in the physica
     text: 'Body\r', defaultTabTwips: 720, sectionProperties: textFlow(2),
     headers: ['', 'Head\r', '', '', '', ''],
   });
-  const session = await openDocxDocument(bytes, { factory: skiaFactory(), currentDate: 0, modelSources: [testDocSource()] });
+  const session = await openDocxDocument(bytes, { factory: skiaFactory(), currentDate: 0, legacyDoc: testDocSource() });
   try {
     expect(session.pageCount).toBe(1);
     const runs: Run[] = [];
@@ -402,7 +402,7 @@ it.skipIf(!skia).each<{ flows: (number | null)[]; overlays: (string | undefined)
     text: 'One\fTwo\r', sectionEnds: [4, 8],
     sectionProperties: flows.map(flow => (flow === null ? new Uint8Array() : textFlow(flow))),
   });
-  const session = await openDocxDocument(bytes, { factory: skiaFactory(), currentDate: 0, modelSources: [testDocSource()] });
+  const session = await openDocxDocument(bytes, { factory: skiaFactory(), currentDate: 0, legacyDoc: testDocSource() });
   try {
     expect(session.pageCount).toBe(2);
     for (const [page, overlay] of overlays.entries()) {
@@ -452,7 +452,7 @@ it.skipIf(!skia).each([{ flows: [2, 3] }, { flows: [3, 2] }])(
       ],
     });
     const recording = recordingSkiaFactory();
-    const session = await openDocxDocument(bytes, { factory: recording.factory, currentDate: 0, modelSources: [testDocSource()] });
+    const session = await openDocxDocument(bytes, { factory: recording.factory, currentDate: 0, legacyDoc: testDocSource() });
     try {
       expect(session.pageCount).toBe(2);
       for (const [page, flow] of flows.entries()) {
@@ -536,7 +536,7 @@ it.skipIf(!skia)('wraps native MSOTXFL 2 text around its own page-relative pictu
       { end: text.length, properties: new Uint8Array() },
     ],
   });
-  const session = await openDocxDocument(bytes, { factory: skiaFactory(), currentDate: 0, modelSources: [testDocSource()] });
+  const session = await openDocxDocument(bytes, { factory: skiaFactory(), currentDate: 0, legacyDoc: testDocSource() });
   try {
     expect(session.pageCount).toBe(2);
     const runs: Run[] = [];
@@ -630,7 +630,7 @@ it.skipIf(!skia).each([0, 1, 3, 2])('keeps an inline picture upright in MSOTXFL 
     sectionProperties: concat(DISTINCT_MARGINS, textFlow(flow)),
     characterProperties: PICTURE_CHARACTER,
   });
-  const session = await openDocxDocument(bytes, { factory: skiaFactory(), currentDate: 0, modelSources: [testDocSource()] });
+  const session = await openDocxDocument(bytes, { factory: skiaFactory(), currentDate: 0, legacyDoc: testDocSource() });
   try {
     expect(session.pageCount).toBe(1);
     const canvas = await session.renderPage(0, { dpr: 1 }) as unknown as Pixels;
@@ -662,7 +662,7 @@ it.skipIf(!skia).each([0, 3, 2])('keeps an inline picture upright inside a body 
       { end: text.length, properties: new Uint8Array() },
     ],
   });
-  const session = await openDocxDocument(bytes, { factory: skiaFactory(), currentDate: 0, modelSources: [testDocSource()] });
+  const session = await openDocxDocument(bytes, { factory: skiaFactory(), currentDate: 0, legacyDoc: testDocSource() });
   try {
     expect(session.pageCount).toBe(1);
     const canvas = await session.renderPage(0, { dpr: 1 }) as unknown as Pixels;

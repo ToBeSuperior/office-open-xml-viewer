@@ -107,10 +107,10 @@ export async function loadDocxModelSource(
     }
     checkAbort();
     // An application-supplied model source claims its input from the raw bytes
-    // before OOXML container resolution; without `modelSources` nothing here
+    // before OOXML container resolution; without `legacyDoc` nothing here
     // runs and the OOXML path below is unchanged.
-    const selected = selectModelSource(opts.modelSources, 'docx', new Uint8Array(buffer));
-    if (!selected) return DocxDocument.load(buffer, { ...opts, modelSources: undefined });
+    const selected = selectModelSource(opts.legacyDoc === undefined ? undefined : [opts.legacyDoc], 'docx', new Uint8Array(buffer));
+    if (!selected) return DocxDocument.load(buffer, { ...opts, legacyDoc: undefined });
     const sourceLoad = beginModelSourceLoad(selected, 'docx');
     try {
     // Resolve the container on the main thread before spinning up the worker.

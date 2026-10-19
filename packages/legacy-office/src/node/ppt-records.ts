@@ -38,7 +38,7 @@ export const drawing = (...shapes: Uint8Array[]): Uint8Array => record(15, 1036,
 export const slideAtom = (master: number, flags: number): Uint8Array =>
   record(2, 1007, concat(new Uint8Array(12), little32(master), little32(0), little16(flags), little16(0)));
 
-export const pptOptions = () => ({ modelSources: [testPptSource()] });
+export const pptOptions = () => ({ legacyPpt: testPptSource() });
 
 export const materialize = (bytes: Uint8Array) => materializePptxPresentation(bytes, pptOptions());
 

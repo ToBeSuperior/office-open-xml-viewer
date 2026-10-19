@@ -88,7 +88,7 @@ describe('openDocxDocument footnote continuation default', () => {
       branch === 'authored DOCX' ? authoredDocx() : new Uint8Array([1, 2, 3, 4]),
       {
         factory, currentDate: 0,
-        ...(branch === 'authored DOCX' ? {} : { modelSources: [materializedSource] }),
+        ...(branch === 'authored DOCX' ? {} : { legacyDoc: materializedSource }),
         ...(option === undefined ? {} : { allowFootnoteContinuation: option }),
       },
     );

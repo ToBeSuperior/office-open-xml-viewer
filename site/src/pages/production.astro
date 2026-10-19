@@ -165,8 +165,8 @@ if (bitmap) {
         <h3>Experimental legacy Office add-on</h3>
         <p>
           Legacy .doc, .xls and .ppt reading is a separate, experimental opt-in package,
-          <code>@silurus/ooxml-legacy-office</code>. Pass per-format sources through
-          <code>modelSources</code>; unsupported content rejects instead of producing a partial
+          <code>@silurus/ooxml-legacy-office</code>. Pass each format's reader as its own option,
+          such as <code>&#123; legacyDoc &#125;</code>; unsupported content rejects instead of producing a partial
           document. The viewer and add-on versions must match exactly.
           <a href="/legacy-office">Install and enable legacy sources →</a>
         </p>

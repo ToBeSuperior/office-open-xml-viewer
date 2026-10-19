@@ -17,7 +17,7 @@ const resolveModule = createTypeScriptResolver();
 
 // The only entry-to-source transitions are these opt-in dispatch functions.
 // Keep this list exact: a new caller must explain why it can run only after
-// modelSources (or a worker source descriptor) is present.
+// a format's opt-in source option (or a worker source descriptor) is present.
 export const SOURCE_DISPATCH = new Map([
   ['packages/core/src/source/model-source.ts', ['openModelSourceModule']],
   ['packages/docx/src/document.ts', ['load']],

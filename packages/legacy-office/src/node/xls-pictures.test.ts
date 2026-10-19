@@ -18,7 +18,7 @@ type Width = number | (() => number);
 async function sheet(bytes: Uint8Array, width?: Width) {
   const factory = width === undefined ? undefined : digitWidthFactory(width);
   const workbook = await materializeXlsxWorkbook(bytes, {
-    modelSources: [testXlsSource()], ...(factory ? { factory } : {}),
+    legacyXls: testXlsSource(), ...(factory ? { factory } : {}),
   });
   const [worksheet] = workbook.worksheets;
   // Pictures never displace cells.

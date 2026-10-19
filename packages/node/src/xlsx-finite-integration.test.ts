@@ -157,7 +157,7 @@ describe('application minimal ModelSource without the worksheet-limit setter', (
     const low = fakeSource();
     await expect(materializeXlsxWorksheet(small, 0, {
       xlsxWorksheetLimits: { maxRows: 1 },
-      modelSources: [low.source],
+      legacyXls: low.source,
     })).rejects.toMatchObject({
       code: 'ooxml-resource-limit',
       details: expect.objectContaining({
@@ -170,7 +170,7 @@ describe('application minimal ModelSource without the worksheet-limit setter', (
     const high = fakeSource();
     const worksheet = await materializeXlsxWorksheet(small, 0, {
       xlsxWorksheetLimits: { maxRows: 3 },
-      modelSources: [high.source],
+      legacyXls: high.source,
     });
     expect(worksheet.rows).toHaveLength(3);
     expect(high.source.claim).toHaveBeenCalled();
@@ -180,7 +180,7 @@ describe('application minimal ModelSource without the worksheet-limit setter', (
 
   it('rejects malformed limits before any claim or load', async () => {
     const fake = fakeSource();
-    const options: MaterializeOptions = { xlsxWorksheetLimits: { maxRows: 0 }, modelSources: [fake.source] };
+    const options: MaterializeOptions = { xlsxWorksheetLimits: { maxRows: 0 }, legacyXls: fake.source };
     await expect(materializeXlsxWorksheet(small, 0, options)).rejects.toBeInstanceOf(RangeError);
     expect(fake.source.claim).not.toHaveBeenCalled();
     expect(fake.release).not.toHaveBeenCalled();

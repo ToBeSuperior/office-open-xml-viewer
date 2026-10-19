@@ -163,7 +163,7 @@ export { autoResize, type AutoResizeOptions } from '@silurus/ooxml-core';
 // onHyperlinkClick`, `DocxTextRunInfo.hyperlink`, and the 5th arg of
 // `buildDocxTextLayer`, plus the default "open in a new tab, sanitised" helper.
 export { type HyperlinkTarget, openExternalHyperlink } from '@silurus/ooxml-core';
-// Application-supplied model sources (LoadOptions.modelSources): the
+// Application-supplied model sources (LoadOptions.legacyDoc): the
 // format-generic contract for opening input that is not an OOXML package.
 export type {
   ModelSource,

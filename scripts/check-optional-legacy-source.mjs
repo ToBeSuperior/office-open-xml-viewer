@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // Verify one legacy Office model source entry of the published dist:
 //
-//  - `<f>.mjs` exports its ModelSource factory and reaches neither the
-//    reader runtime nor the WASM glue (creating a source fetches nothing);
+//  - `<f>.mjs` exports its default ModelSource constant and its factory and
+//    reaches neither the reader runtime nor the WASM glue (importing the entry
+//    or creating a source fetches nothing);
 //  - it references its WASM asset and its source module asset;
 //  - the source module asset is one self-contained ES module (no import of any
 //    sibling chunk or package) that exports `openModelSource`;
@@ -14,9 +15,9 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const FORMATS = {
-  doc: { target: 'docx', factory: 'legacyDocSource', nativeClass: 'LegacyDocDocument' },
-  xls: { target: 'xlsx', factory: 'legacyXlsSource', nativeClass: 'LegacyXlsWorkbook' },
-  ppt: { target: 'pptx', factory: 'legacyPptSource', nativeClass: 'LegacyPptPresentation' },
+  doc: { target: 'docx', constant: 'legacyDoc', factory: 'createLegacyDoc', nativeClass: 'LegacyDocDocument' },
+  xls: { target: 'xlsx', constant: 'legacyXls', factory: 'createLegacyXls', nativeClass: 'LegacyXlsWorkbook' },
+  ppt: { target: 'pptx', constant: 'legacyPpt', factory: 'createLegacyPpt', nativeClass: 'LegacyPptPresentation' },
 };
 
 const family = process.argv[2];
@@ -74,7 +75,7 @@ if (moduleAssets.length !== 1) {
 const moduleAsset = moduleAssets[0];
 const moduleName = basename(moduleAsset);
 
-// 1. Entry: factory only.
+// 1. Entry: constant and factory only.
 const closure = await dependencyClosure(join(distDir, entry));
 for (const marker of runtimeMarkers) assertAbsent(closure, marker, entry);
 assertAbsent(closure, format.nativeClass, entry);
@@ -106,6 +107,15 @@ if (
 const defaults = factoryModule[format.factory]().beginLoad().module;
 if (!defaults.moduleUrl.endsWith(`/${moduleName}`) || !defaults.config.wasmUrl.endsWith(`/${wasmAsset}`)) {
   throw new Error(`${entry} default URLs do not name its emitted assets`);
+}
+const constant = factoryModule[format.constant];
+if (
+  typeof constant !== 'object' || constant === null || !Object.isFrozen(constant)
+  || constant.target !== format.target
+  || constant.claim(new Uint8Array([0x50, 0x4b, 0x03, 0x04])) !== false
+  || JSON.stringify(constant.beginLoad().module) !== JSON.stringify(defaults)
+) {
+  throw new Error(`${entry} does not export ${format.constant} as the default model source`);
 }
 
 // 2. Source module: self-contained, exports openModelSource.
