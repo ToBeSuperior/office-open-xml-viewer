@@ -8,10 +8,11 @@ import type {
 } from '../types/chart.js';
 import { ownValue } from '../internal/own-key.js';
 import { hex6ToRgb } from '../image/duotone.js';
-import { chartTitleBand, resolveManualLayoutRect } from './layout.js';
+import { chartTitleBand, resolveManualLayoutRect, titleExtraLinesPx } from './layout.js';
 import { paintLegendFrame } from './legend-frame.js';
 import { paintPlotAreaFrame } from './plot-area-frame.js';
 import { formatChartValWithCode } from './chart-number-format.js';
+import { authoredLineCount, axisLabelLineHeightPx, fillAuthoredText, measureAuthoredTextWidth } from './chart-text-lines.js';
 import {
   NATURAL_EARTH_110M,
   type RegionMapFeature,
@@ -253,7 +254,7 @@ function drawTitle(
   ctx.fillStyle = chart.titleFontColor ? `#${chart.titleFontColor}` : '#333333';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
-  ctx.fillText(chart.title ?? '', rect.x + rect.w / 2, rect.y + topPad);
+  fillAuthoredText(ctx, chart.title ?? '', rect.x + rect.w / 2, rect.y + topPad, fontPx);
 }
 
 function drawLegend(
@@ -272,11 +273,12 @@ function drawLegend(
   ctx.fillStyle = chart.legendFontColor ? `#${chart.legendFontColor}` : '#595959';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
-  if (name) ctx.fillText(name, x + w / 2, y);
+  // Authored breaks in the series name stack lines and lower the scale bar.
+  if (name) fillAuthoredText(ctx, name, x + w / 2, y, fontPx + 2);
   const barW = Math.min(w * .58, 240);
   const barH = Math.max(6, Math.min(12, h * .25));
   const bx = x + (w - barW) / 2;
-  const by = y + (name ? fontPx + 2 : 0);
+  const by = y + (name ? fontPx + 2 + (authoredLineCount(name) - 1) * (fontPx + 2) : 0);
   const gradient = ctx.createLinearGradient(bx, 0, bx + barW, 0);
   gradient.addColorStop(0, scale.minColor);
   if (scale.midColor) gradient.addColorStop(.5, scale.midColor);
@@ -287,9 +289,28 @@ function drawLegend(
   ctx.textBaseline = 'top';
   ctx.textAlign = 'left';
   const formatCode = chart.series[0]?.valFormatCode ?? null;
-  ctx.fillText(formatChartValWithCode(scale.min, formatCode, chart.date1904), bx, by + barH + 2);
+  fillAuthoredText(ctx, formatChartValWithCode(scale.min, formatCode, chart.date1904), bx, by + barH + 2, fontPx + 2);
   ctx.textAlign = 'right';
-  ctx.fillText(formatChartValWithCode(scale.max, formatCode, chart.date1904), bx + barW, by + barH + 2);
+  fillAuthoredText(ctx, formatChartValWithCode(scale.max, formatCode, chart.date1904), bx + barW, by + barH + 2, fontPx + 2);
+}
+
+/** Legend height for authored breaks in the series name (stacked above the
+ *  scale bar) or in the scale min/max values (stacked below it), sized from
+ *  the legend's final geometry: name block, the bar at its largest (12 px)
+ *  height, the 2 px gap and the value block. Without breaks the automatic
+ *  height is returned unchanged. */
+function regionMapLegendHeight(chart: ChartModel, scale: ColorScale, ptToPx: number, baseH: number): number {
+  const name = chart.series[0]?.name ?? '';
+  const fontPx = Math.max(8, (chart.legendFontSizeHpt ?? 900) / 100 * ptToPx);
+  const formatCode = chart.series[0]?.valFormatCode ?? null;
+  const nameLines = name ? authoredLineCount(name) : 0;
+  const valueLines = Math.max(
+    authoredLineCount(formatChartValWithCode(scale.min, formatCode, chart.date1904)),
+    authoredLineCount(formatChartValWithCode(scale.max, formatCode, chart.date1904)),
+  );
+  if (nameLines <= 1 && valueLines <= 1) return baseH;
+  const contentH = nameLines * (fontPx + 2) + 12 + 2 + (valueLines - 1) * (fontPx + 2) + fontPx;
+  return Math.max(baseH, contentH);
 }
 
 function drawUnavailableMessage(
@@ -348,9 +369,16 @@ export function renderRegionMapChart(
     map.colors,
     chart.chartexAccents?.[0],
   );
-  const title = chartTitleBand(chart, rect.h, ptToPx, .02, .015);
+  const baseTitle = chartTitleBand(chart, rect.h, ptToPx, .02, .015);
+  // The map title paints its text (rich runs included) as authored lines one
+  // font size apart; the shared band only reserves them for plain titles.
+  const title = chart.titleRichRuns?.length
+    ? { ...baseTitle, bandH: baseTitle.bandH + titleExtraLinesPx(chart.title, baseTitle.fontPx) }
+    : baseTitle;
   drawTitle(ctx, chart, rect, title.fontPx, title.topPad);
-  const legendH = chart.showLegend ? Math.max(32, rect.h * .16) : 0;
+  const legendH = chart.showLegend
+    ? regionMapLegendHeight(chart, colorScale, ptToPx, Math.max(32, rect.h * .16))
+    : 0;
   const defaultLegendRect = chart.showLegend ? {
     x: rect.x,
     y: rect.y + title.bandH,
@@ -431,7 +459,8 @@ export function renderRegionMapChart(
   }
 
   if (map.regionLabelLayout && map.regionLabelLayout !== 'none') {
-    ctx.font = `${Math.max(7, (chart.dataLabelFontSizeHpt ?? 800) / 100 * ptToPx)}px ${JSON.stringify(chart.dataLabelFontFace || chart.themeMinorFontLatin || 'sans-serif')}`;
+    const regionLabelFontPx = Math.max(7, (chart.dataLabelFontSizeHpt ?? 800) / 100 * ptToPx);
+    ctx.font = `${regionLabelFontPx}px ${JSON.stringify(chart.dataLabelFontFace || chart.themeMinorFontLatin || 'sans-serif')}`;
     ctx.fillStyle = chart.dataLabelFontColor ? `#${chart.dataLabelFontColor}` : '#404040';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -440,16 +469,23 @@ export function renderRegionMapChart(
       const bounds = feature ? featureBounds.get(feature) : undefined;
       if (!feature || !bounds || !row.label) continue;
       const point = canvasPoint(feature.l);
-      const fits = ctx.measureText(row.label).width <= Math.max(0, bounds.maxX - bounds.minX - 4);
-      if (map.regionLabelLayout === 'showAll' || fits) ctx.fillText(row.label, point.x, point.y);
+      const fits = measureAuthoredTextWidth(ctx, row.label) <= Math.max(0, bounds.maxX - bounds.minX - 4);
+      if (map.regionLabelLayout === 'showAll' || fits) {
+        fillAuthoredText(ctx, row.label, point.x, point.y, axisLabelLineHeightPx(regionLabelFontPx));
+      }
     }
   }
   if (map.geography?.attribution) {
-    ctx.font = `${Math.max(7, 7 * ptToPx)}px sans-serif`;
+    const attributionFontPx = Math.max(7, 7 * ptToPx);
+    ctx.font = `${attributionFontPx}px sans-serif`;
     ctx.fillStyle = '#777777';
     ctx.textAlign = 'right';
     ctx.textBaseline = 'bottom';
-    ctx.fillText(map.geography.attribution, rect.x + rect.w - 4, rect.y + rect.h - 2);
+    // Bottom baseline: extra authored lines grow upward from the corner.
+    fillAuthoredText(
+      ctx, map.geography.attribution, rect.x + rect.w - 4, rect.y + rect.h - 2,
+      axisLabelLineHeightPx(attributionFontPx),
+    );
   }
   return true;
 }

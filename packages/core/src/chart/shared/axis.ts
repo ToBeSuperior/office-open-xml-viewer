@@ -2,9 +2,10 @@
 import type { ChartDisplayUnits, ChartLabelBox, ChartManualLayout, ChartModel, ChartRect, SecondaryValueAxis } from '../../types/chart';
 import { isCrossBetween, resolveGridline } from '../axis-style.js';
 import { formatChartVal, formatChartValWithCode } from '../chart-number-format.js';
-import { axisTitleMargin, axisTitleRotationRad, chartTextFontSizePx, resolveManualLayoutRect } from '../layout.js';
+import { axisTitleBreakThicknessPx, axisTitleMargin, axisTitleRotationRad, chartTextFontSizePx, resolveManualLayoutRect, titleExtraLinesPx } from '../layout.js';
 import type { ChartAxisTitleSide } from '../layout.js';
 import { elideToWidth } from '../text-elide.js';
+import { authoredExtraLinesHeight, authoredTextLines, axisLabelLineHeightPx, fillAuthoredText, measureAuthoredTextWidth } from '../chart-text-lines.js';
 import type { ChartExStyle } from './chartex-style.js';
 import { paintChartLabelBox } from '../label-box.js';
 import { rawLinkedChartStyleRole } from '../effective-style.js';
@@ -453,9 +454,12 @@ export function drawChartDisplayUnitLabels(
     const rotation = label.rotation != null
       ? (label.rotation / 60_000) * Math.PI / 180
       : vertical ? -Math.PI / 2 : 0;
-    const textWidth = ctx.measureText(text).width;
-    const rotatedW = Math.abs(Math.cos(rotation)) * textWidth + Math.abs(Math.sin(rotation)) * fontPx;
-    const rotatedH = Math.abs(Math.sin(rotation)) * textWidth + Math.abs(Math.cos(rotation)) * fontPx;
+    // Authored breaks stack lines; the box covers the whole line block.
+    const textWidth = measureAuthoredTextWidth(ctx, text);
+    const lineHeight = axisLabelLineHeightPx(fontPx);
+    const textHeight = fontPx + authoredExtraLinesHeight([text], lineHeight);
+    const rotatedW = Math.abs(Math.cos(rotation)) * textWidth + Math.abs(Math.sin(rotation)) * textHeight;
+    const rotatedH = Math.abs(Math.sin(rotation)) * textWidth + Math.abs(Math.cos(rotation)) * textHeight;
     const automatic = {
       x: fallbackX - rotatedW / 2,
       y: fallbackY - rotatedH / 2,
@@ -489,7 +493,7 @@ export function drawChartDisplayUnitLabels(
     ctx.fillStyle = fontColor ? `#${fontColor}` : '#595959';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(text, 0, 0);
+    fillAuthoredText(ctx, text, 0, 0, lineHeight);
     ctx.restore();
   }
 }
@@ -560,14 +564,28 @@ export function axisLabelPx(sizeHpt: number | null | undefined, h: number, ptToP
 
 
 /** Wrap text against the active canvas font without discarding characters.
- * Words are kept intact when possible; a single over-wide token is split at
- * measured character boundaries. Used by chart families whose category-label
- * band is an input to plot layout. */
+ * Authored line breaks (e.g. a category cell "FY2024\n1Q") always start a new
+ * line, as PowerPoint and Excel draw them; within each line, words are kept
+ * intact when possible and a single over-wide token is split at measured
+ * character boundaries. Leading and trailing breaks are trimmed like other
+ * outer whitespace. Used by chart families whose category-label band is an
+ * input to plot layout. */
 export function wrapMeasuredText(
   ctx: CanvasRenderingContext2D,
   text: string,
   maxWidth: number,
   singleTokenOverhangPx = 0,
+): string[] {
+  const paragraphs = text.trim().split(/\r\n|\r|\n/);
+  if (paragraphs.length === 1) return wrapMeasuredLine(ctx, paragraphs[0], maxWidth, singleTokenOverhangPx);
+  return paragraphs.flatMap(paragraph => wrapMeasuredLine(ctx, paragraph, maxWidth, singleTokenOverhangPx));
+}
+
+function wrapMeasuredLine(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  maxWidth: number,
+  singleTokenOverhangPx: number,
 ): string[] {
   const words = text.trim().split(/\s+/).filter(Boolean);
   if (words.length === 0) return [''];
@@ -666,9 +684,15 @@ export function catLabelRotationRad(chart: ChartModel): number {
  *  text trails up-left from the tick, matching PowerPoint's angled axis labels. */
 export function drawRotatedCatLabel(
   ctx: CanvasRenderingContext2D, text: string, x: number, y: number, rotRad: number,
+  // Authored line breaks start new lines this far apart. Unrotated lines grow
+  // with the caller's baseline; rotated lines stack perpendicular to the text
+  // direction, centred as a block on the pivot.
+  lineHeightPx: number,
+  // Optional per-line elision budget.
+  maxWidthPx?: number,
 ): void {
   if (rotRad === 0) {
-    ctx.fillText(text, x, y);
+    fillAuthoredText(ctx, text, x, y, lineHeightPx, maxWidthPx);
     return;
   }
   ctx.save();
@@ -676,7 +700,7 @@ export function drawRotatedCatLabel(
   ctx.rotate(rotRad);
   ctx.textAlign = 'right';
   ctx.textBaseline = 'middle';
-  ctx.fillText(text, 0, 0);
+  fillAuthoredText(ctx, text, 0, 0, lineHeightPx, maxWidthPx);
   ctx.restore();
 }
 
@@ -711,20 +735,29 @@ export function drawAxisTitle(
   // Automatic titles stay bounded to the axis run. An authored title layout
   // is authoritative and keeps its complete text rather than being elided by
   // the automatic plot-width estimate.
-  const label = manualLayout ? text : elideToWidth(ctx, text, maxPx);
+  // Authored breaks: one line per authored line (each elided on its own),
+  // one font size apart, stacked perpendicular to the text and centred on the
+  // anchor. Text without breaks is elided and drawn whole, as before.
+  const authoredLines = authoredTextLines(text);
+  const label = manualLayout
+    ? text
+    : authoredLines.length === 1
+      ? elideToWidth(ctx, text, maxPx)
+      : authoredLines.map(line => elideToWidth(ctx, line, maxPx)).join('\n');
+  const textHeight = fontSizePx + titleExtraLinesPx(label, fontSizePx);
   const rotation = axisTitleRotationRad(side, authoredRotation, authoredVerticalMode);
   let resolvedAnchorX = anchorX;
   let resolvedAnchorY = anchorY;
   if (manualLayout && chartRect) {
-    const textWidth = ctx.measureText(label).width;
+    const textWidth = measureAuthoredTextWidth(ctx, label);
     // CT_Title manual-layout x/y position the title's axis-aligned box after
     // DrawingML rotation. A vertical title therefore has a box approximately
     // one font line wide and one text run tall; using the unrotated dimensions
     // shifts it into the tick-label/plot bands by half the text length.
     const cos = Math.abs(Math.cos(rotation));
     const sin = Math.abs(Math.sin(rotation));
-    const fittedWidth = textWidth * cos + fontSizePx * sin;
-    const fittedHeight = textWidth * sin + fontSizePx * cos;
+    const fittedWidth = textWidth * cos + textHeight * sin;
+    const fittedHeight = textWidth * sin + textHeight * cos;
     const automatic = {
       x: anchorX - fittedWidth / 2,
       y: anchorY - fittedHeight / 2,
@@ -746,15 +779,15 @@ export function drawAxisTitle(
   }
   ctx.translate(resolvedAnchorX, resolvedAnchorY);
   if (rotation !== 0) ctx.rotate(rotation);
-  const textWidth = ctx.measureText(label).width;
+  const textWidth = measureAuthoredTextWidth(ctx, label);
   paintChartLabelBox(ctx, box, {
     x: -textWidth / 2,
-    y: -fontSizePx / 2,
+    y: -textHeight / 2,
     w: textWidth,
-    h: fontSizePx,
+    h: textHeight,
   }, ptToPx);
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.fillText(label, 0, 0);
+  fillAuthoredText(ctx, label, 0, 0, fontSizePx);
   ctx.restore();
 }
 
@@ -804,10 +837,15 @@ export function drawAxisTitles(
       rawLinkedChartStyleRole(chart, 'axisTitle'),
       true,
     );
+    // A multi-line block's centre moves outward by half its extra thickness,
+    // which `chartAxisTitleBands` reserved.
+    const extra = axisTitleBreakThicknessPx(
+      text, fontSizePx, side, authoredRotation, authoredVerticalMode,
+    ) / 2;
     if (side === 'left') {
       drawAxisTitle(
         ctx, text,
-        x + legLeftW + axisTitleMargin(w) + fontSizePx / 2,
+        x + legLeftW + axisTitleMargin(w) + fontSizePx / 2 + extra,
         py0 + ph / 2,
         side, fontSizePx, bold, italic, color, ph, fontFamily, authoredRotation,
         authoredVerticalMode, manualLayout, { x, y, w, h }, box,
@@ -818,7 +856,7 @@ export function drawAxisTitles(
     drawAxisTitle(
       ctx, text,
       px0 + pw / 2,
-      y + h - legBottomH - axisTitleMargin(h) - fontSizePx / 2,
+      y + h - legBottomH - axisTitleMargin(h) - fontSizePx / 2 - extra,
       side, fontSizePx, bold, italic, color, pw, fontFamily, authoredRotation,
       authoredVerticalMode, manualLayout, { x, y, w, h }, box,
       fontSizePx / 10,

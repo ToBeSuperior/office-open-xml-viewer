@@ -414,7 +414,7 @@ pub(super) fn extract_series_trendlines_with_paint_policy(
                             })
                     })
             })
-            .filter(|text| !text.is_empty());
+            .filter(|text| chart_text_has_content(text));
         let label_rich_runs =
             label.and_then(|node| parse_data_label_rich_runs(node, resolver, None));
         let label_manual_layout = label
