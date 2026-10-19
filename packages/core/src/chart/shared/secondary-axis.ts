@@ -3,7 +3,7 @@ import type { ChartModel, ChartRect, ChartSeries, SecondaryValueAxis } from '../
 import { planDateCategoryAxis } from '../date-axis.js';
 import { isCrossBetween, resolveAxisLine } from '../axis-style.js';
 import { planNumericValueAxis } from '../axis-scale.js';
-import { axisTitleFontPx, categoryTickLabelGapPx, chartTextFontSizePx } from '../layout.js';
+import { axisTitleBreakThicknessPx, axisTitleFontPx, categoryTickLabelGapPx, chartTextFontSizePx } from '../layout.js';
 import { rawLinkedChartStyleRole } from '../effective-style.js';
 import { categoryLabelAnchorFraction, categoryLabelOffsetPx } from '../category-spacing.js';
 import { authoredExtraLinesHeight, axisLabelLineHeightPx, fillAuthoredText } from '../chart-text-lines.js';
@@ -285,11 +285,16 @@ function drawSecondaryAxisTitle(
   const color = sec.titleFontColor
     ? `#${sec.titleFontColor}`
     : (sec.fontColor ? `#${sec.fontColor}` : '#555');
+  // A multi-line block's centre moves outward by half its extra thickness
+  // (reserved by `secondaryAxisTitleBandW`).
+  const extra = axisTitleBreakThicknessPx(
+    sec.title, fontSizePx, side, sec.titleRotation, sec.titleVerticalMode,
+  ) / 2;
   drawAxisTitle(
     ctx,
     sec.title,
-    side === 'left' ? px0 - secLabelBandW - fontSizePx * 0.6
-      : px0 + pw + secLabelBandW + fontSizePx * 0.6,
+    side === 'left' ? px0 - secLabelBandW - fontSizePx * 0.6 - extra
+      : px0 + pw + secLabelBandW + fontSizePx * 0.6 + extra,
     py0 + ph / 2,
     side,
     fontSizePx,
@@ -400,7 +405,10 @@ export function drawSecondaryCategoryAxis(
             categoryTickLabelGapPx(fontPx),
             axis.labelOffsetPercent,
           ))
-        - titleFontPx / 2 - 4,
+        - titleFontPx / 2 - 4
+        - axisTitleBreakThicknessPx(
+          axis.title, titleFontPx, 'horizontal', axis.titleRotation, axis.titleVerticalMode,
+        ) / 2,
       'horizontal',
       titleFontPx,
       axis.titleFontBold ?? true,
@@ -441,4 +449,14 @@ export function secondaryCategoryLabelExtraH(
     labels.push(formatCategoryLabel(categories[index], axis.formatCode, chart.date1904));
   }
   return authoredExtraLinesHeight(labels, axisLabelLineHeightPx(fontPx));
+}
+
+
+/** Gutter width of a secondary value-axis title: one line plus the shared
+ *  gap, and the extra thickness of authored title lines (0 without breaks). */
+export function secondaryAxisTitleBandW(sec: SecondaryValueAxis, ptToPx: number): number {
+  const fontPx = axisTitleFontPx(sec.titleFontSizeHpt, ptToPx);
+  return fontPx + 8 + axisTitleBreakThicknessPx(
+    sec.title, fontPx, 'right', sec.titleRotation, sec.titleVerticalMode,
+  );
 }

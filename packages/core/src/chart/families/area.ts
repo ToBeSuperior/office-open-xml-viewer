@@ -51,7 +51,7 @@ import { chartHasDataTable, chartDataTableBaseHeight, chartDataTableHeaderWidth,
 import { createDataLabelLegendKeyResolver, measuredLegendReserve, drawLegendForLayout } from '../shared/legend.js';
 import { drawAxisTick, strokeAxisSegment, strokeValueGridlineH, valGridStroke, valMinorGridStroke, drawCatMajorGridlines, catGridStroke, catGridlineFractions, catAxisReversed, drawValMajorGridlines, formatPrimaryValueAxisTick, formatAxisTickWithUnits, planValueAxis, axisLabelPx } from '../shared/axis.js';
 import { drawSeriesTrendlines } from '../shared/trendline.js';
-import { chartDateAxisPlan, forEachErrorBarEndpoint, computeSecondaryAxis, drawSecondaryValueGridlines, drawSecondaryValueAxis } from '../shared/secondary-axis.js';
+import { chartDateAxisPlan, forEachErrorBarEndpoint, computeSecondaryAxis, drawSecondaryValueGridlines, drawSecondaryValueAxis, secondaryAxisTitleBandW } from '../shared/secondary-axis.js';
 import { measuredCartesianTitleBand, drawChartTitleForLayout } from '../shared/title.js';
 import { dataLabelWithinAxisMaximum, drawCategoryDataLabels } from '../shared/data-labels.js';
 import { chartCategories } from '../category-spacing.js';
@@ -250,7 +250,7 @@ export function renderAreaChart(
     ctx.font = prevFont;
   }
   const secTitleBandW = sec && sec.title
-    ? axisTitleFontPx(sec.titleFontSizeHpt, ptToPx) + 8
+    ? secondaryAxisTitleBandW(sec, ptToPx)
     : 0;
 
   // Resolve the primary extent before frame placement so an authored

@@ -209,7 +209,8 @@ export function drawChartDataTable(
       lines.forEach((line, index) => drawBodyLine(line, centerX, firstY + index * layout.lineHeight));
       return;
     }
-    drawBodyLine(text, centerX, centerY);
+    // Outer breaks are trimmed (e.g. a `0"\n"` format yields "10\n").
+    drawBodyLine(lines[0], centerX, centerY);
   };
   const drawBodyLine = (text: string, centerX: number, centerY: number): void => {
     // Desktop Excel scopes a direct dTable/spPr fill to the generated body

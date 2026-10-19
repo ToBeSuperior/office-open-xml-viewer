@@ -33,6 +33,7 @@ import {
   axisTitleMargin,
   axisTitleRotationRad,
   axisTitleVerticalInsetPx,
+  axisTitleBreakThicknessPx,
   cartesianTitleBand,
   chartLegendBands,
   chartLegendReserve,
@@ -41,10 +42,11 @@ import {
   computeChartFrame,
   packLegendRows,
   resolveManualLayoutRect,
+  titleExtraLinesPx,
   type ChartAxisTitleSide,
 } from './layout.js';
 import { elideToWidth } from './text-elide.js';
-import { authoredLineCount, authoredTextLines, axisLabelLineHeightPx, fillAuthoredText, measureAuthoredTextWidth } from './chart-text-lines.js';
+import { authoredExtraLinesHeight, authoredLineCount, authoredTextLines, axisLabelLineHeightPx, fillAuthoredText, measureAuthoredTextWidth } from './chart-text-lines.js';
 import { resolveThemeFontRef } from './shared/fonts.js';
 import { fitDataLabelLines, resolveDataLabelPlacement } from './data-label-layout.js';
 import { paintRichDataLabelBlock, resolveRichDataLabelBlock } from './rich-data-label.js';
@@ -1642,18 +1644,23 @@ function titleAndPlot(
   orientation: 'vertical' | 'horizontal' | 'radial',
   shapeRotationDeg: number,
 ): { plot: ChartRect; legend: ChartRect | null; legendMeasure: ThreeDLegendMeasure } {
-  const band = cartesianTitleBand(chart, rect.h, ptToPx);
+  const baseBand = cartesianTitleBand(chart, rect.h, ptToPx);
+  // This painter draws the title text (rich runs included) as authored lines
+  // one font size apart; the shared band only reserves them for plain titles.
+  const band = chart.titleRichRuns?.length
+    ? { ...baseBand, bandH: baseBand.bandH + titleExtraLinesPx(chart.title, baseBand.fontPx) }
+    : baseBand;
   if (chart.title) {
     ctx.font = `${chart.titleFontBold === false ? '' : 'bold '}${band.fontPx}px ${elementFontFamily(chart, chart.titleFontFace)}`;
     ctx.fillStyle = chart.titleFontColor ? `#${chart.titleFontColor}` : '#111111';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
-    const measuredTitleWidth = ctx.measureText(chart.title).width;
+    const measuredTitleWidth = measureAuthoredTextWidth(ctx, chart.title);
     const automatic = {
       x: rect.x + (rect.w - measuredTitleWidth) / 2,
       y: rect.y + band.topPad,
       w: measuredTitleWidth,
-      h: Math.max(1, band.fontPx),
+      h: Math.max(1, band.fontPx) + titleExtraLinesPx(chart.title, band.fontPx),
     };
     const authored = chart.titleManualLayout
       ? resolveManualLayoutRect(
@@ -1662,10 +1669,12 @@ function titleAndPlot(
         automatic,
       )
       : null;
-    ctx.fillText(
+    fillAuthoredText(
+      ctx,
       chart.title,
       authored ? authored.x + authored.w / 2 : rect.x + rect.w / 2,
       authored?.y ?? automatic.y,
+      band.fontPx,
     );
   }
   const legendOverrides = threeDLegendOverrideMap(chart);
@@ -1704,11 +1713,19 @@ function titleAndPlot(
   const leftTitleBand = orientation === 'horizontal'
     ? chart.catAxisTitle
       ? axisBands.catFontPx + catAxisTitleInset + axisTitleMargin(rect.w) + 4
+        + axisTitleBreakThicknessPx(
+          chart.catAxisTitle, axisBands.catFontPx, 'left',
+          chart.catAxisTitleRotation, chart.catAxisTitleVerticalMode,
+        )
       : 0
     : orientation === 'vertical' ? axisBands.valBandW : 0;
   const bottomTitleBand = orientation === 'horizontal'
     ? chart.valAxisTitle
       ? axisBands.valFontPx + valAxisTitleInset + axisTitleMargin(rect.h) + 4
+        + axisTitleBreakThicknessPx(
+          chart.valAxisTitle, axisBands.valFontPx, 'horizontal',
+          chart.valAxisTitleRotation, chart.valAxisTitleVerticalMode,
+        )
       : 0
     : orientation === 'vertical' ? axisBands.catBandH : 0;
   const frame = computeChartFrame(chart, rect.x, rect.y, rect.w, rect.h, ptToPx, {
@@ -1779,18 +1796,21 @@ function drawThreeDAxisTitle(
   ctx.save();
   ctx.font = `${italic ? 'italic ' : ''}${bold ? 'bold ' : ''}${fontSizePx}px ${fontCssFamily}`;
   ctx.fillStyle = color ? `#${color}` : '#555';
-  const label = manualLayout ? text : elideToWidth(ctx, text, maxPx);
+  // Authored breaks: one line per authored line, one font size apart, stacked
+  // perpendicular to the text and centred on the anchor.
+  const label = manualLayout ? text : authoredTitleText(ctx, text, maxPx);
   const rotation = axisTitleRotationRad(side, authoredRotation, authoredVerticalMode);
   let center = anchor;
   if (manualLayout) {
-    const textWidth = ctx.measureText(label).width;
+    const textWidth = measureAuthoredTextWidth(ctx, label);
+    const textHeight = fontSizePx + titleExtraLinesPx(label, fontSizePx);
     const cos = Math.abs(Math.cos(rotation));
     const sin = Math.abs(Math.sin(rotation));
     const automatic = {
-      x: anchor.x - (textWidth * cos + fontSizePx * sin) / 2,
-      y: anchor.y - (textWidth * sin + fontSizePx * cos) / 2,
-      w: textWidth * cos + fontSizePx * sin,
-      h: textWidth * sin + fontSizePx * cos,
+      x: anchor.x - (textWidth * cos + textHeight * sin) / 2,
+      y: anchor.y - (textWidth * sin + textHeight * cos) / 2,
+      w: textWidth * cos + textHeight * sin,
+      h: textWidth * sin + textHeight * cos,
     };
     const resolved = resolveManualLayoutRect(
       { ...manualLayout, w: undefined, h: undefined }, chartRect, automatic,
@@ -1801,8 +1821,17 @@ function drawThreeDAxisTitle(
   if (rotation) ctx.rotate(rotation);
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText(label, 0, 0);
+  fillAuthoredText(ctx, label, 0, 0, fontSizePx);
   ctx.restore();
+}
+
+/** Axis-title text elided per authored line (text without breaks is elided
+ *  whole, exactly as before). */
+function authoredTitleText(ctx: CanvasRenderingContext2D, text: string, maxPx: number): string {
+  const lines = authoredTextLines(text);
+  return lines.length === 1
+    ? elideToWidth(ctx, text, maxPx)
+    : lines.map(line => elideToWidth(ctx, line, maxPx)).join('\n');
 }
 
 /** Paint 3-D cartesian axis titles through the same authored font/orientation
@@ -1819,11 +1848,15 @@ function drawThreeDAxisTitles(
   if (chart.valAxisTitle) {
     const fontPx = axisTitleFontPx(chart.valAxisTitleFontSizeHpt, ptToPx);
     const side: ChartAxisTitleSide = horizontal ? 'horizontal' : 'left';
+    // A multi-line block's centre moves outward by half its extra thickness.
+    const extra = axisTitleBreakThicknessPx(
+      chart.valAxisTitle, fontPx, side, chart.valAxisTitleRotation, chart.valAxisTitleVerticalMode,
+    ) / 2;
     drawThreeDAxisTitle(
       ctx, chart.valAxisTitle, chartRect,
       horizontal
-        ? { x: plot.x + plot.w / 2, y: plot.y + plot.h + axisTitleMargin(chartRect.h) + fontPx / 2 }
-        : { x: plot.x - axisTitleMargin(chartRect.w) - fontPx / 2, y: plot.y + plot.h / 2 },
+        ? { x: plot.x + plot.w / 2, y: plot.y + plot.h + axisTitleMargin(chartRect.h) + fontPx / 2 + extra }
+        : { x: plot.x - axisTitleMargin(chartRect.w) - fontPx / 2 - extra, y: plot.y + plot.h / 2 },
       side, fontPx, chartFontFamily(chart, chart.valAxisTitleFontFace, 'major'), chart.valAxisTitleFontColor,
       chart.valAxisTitleFontBold ?? true, chart.valAxisTitleFontItalic ?? false,
       chart.valAxisTitleRotation, chart.valAxisTitleVerticalMode,
@@ -1833,11 +1866,14 @@ function drawThreeDAxisTitles(
   if (chart.catAxisTitle) {
     const fontPx = axisTitleFontPx(chart.catAxisTitleFontSizeHpt, ptToPx);
     const side: ChartAxisTitleSide = horizontal ? 'left' : 'horizontal';
+    const extra = axisTitleBreakThicknessPx(
+      chart.catAxisTitle, fontPx, side, chart.catAxisTitleRotation, chart.catAxisTitleVerticalMode,
+    ) / 2;
     drawThreeDAxisTitle(
       ctx, chart.catAxisTitle, chartRect,
       horizontal
-        ? { x: plot.x - axisTitleMargin(chartRect.w) - fontPx / 2, y: plot.y + plot.h / 2 }
-        : { x: plot.x + plot.w / 2, y: plot.y + plot.h + axisTitleMargin(chartRect.h) + fontPx / 2 },
+        ? { x: plot.x - axisTitleMargin(chartRect.w) - fontPx / 2 - extra, y: plot.y + plot.h / 2 }
+        : { x: plot.x + plot.w / 2, y: plot.y + plot.h + axisTitleMargin(chartRect.h) + fontPx / 2 + extra },
       side, fontPx, chartFontFamily(chart, chart.catAxisTitleFontFace, 'major'), chart.catAxisTitleFontColor,
       chart.catAxisTitleFontBold ?? true, chart.catAxisTitleFontItalic ?? false,
       chart.catAxisTitleRotation, chart.catAxisTitleVerticalMode,
@@ -1965,13 +2001,21 @@ function drawThreeDSeriesAxis(
 
   if (spec.title) {
     const titleFontPx = axisTitleFontPx(spec.titleFontSizeHpt, ptToPx);
+    // Clear the series labels' extra authored lines, and move a multi-line
+    // title block outward by half its extra lines.
+    const outward = fontPx + titleFontPx + 12
+      + authoredExtraLinesHeight(
+        chart.series.map((series, index) => series.name || `Series ${index + 1}`),
+        axisLabelLineHeightPx(fontPx),
+      )
+      + titleExtraLinesPx(spec.title, titleFontPx) / 2;
     drawThreeDAxisTitle(
       ctx,
       spec.title,
       chartRect,
       {
-        x: midpoint.x + normal.x * (fontPx + titleFontPx + 12),
-        y: midpoint.y + normal.y * (fontPx + titleFontPx + 12),
+        x: midpoint.x + normal.x * outward,
+        y: midpoint.y + normal.y * outward,
       },
       'horizontal',
       titleFontPx,

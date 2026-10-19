@@ -2,10 +2,10 @@
 import type { ChartDisplayUnits, ChartLabelBox, ChartManualLayout, ChartModel, ChartRect, SecondaryValueAxis } from '../../types/chart';
 import { isCrossBetween, resolveGridline } from '../axis-style.js';
 import { formatChartVal, formatChartValWithCode } from '../chart-number-format.js';
-import { axisTitleMargin, axisTitleRotationRad, chartTextFontSizePx, resolveManualLayoutRect } from '../layout.js';
+import { axisTitleBreakThicknessPx, axisTitleMargin, axisTitleRotationRad, chartTextFontSizePx, resolveManualLayoutRect, titleExtraLinesPx } from '../layout.js';
 import type { ChartAxisTitleSide } from '../layout.js';
 import { elideToWidth } from '../text-elide.js';
-import { authoredExtraLinesHeight, axisLabelLineHeightPx, fillAuthoredText, measureAuthoredTextWidth } from '../chart-text-lines.js';
+import { authoredExtraLinesHeight, authoredTextLines, axisLabelLineHeightPx, fillAuthoredText, measureAuthoredTextWidth } from '../chart-text-lines.js';
 import type { ChartExStyle } from './chartex-style.js';
 import { paintChartLabelBox } from '../label-box.js';
 import { rawLinkedChartStyleRole } from '../effective-style.js';
@@ -735,20 +735,29 @@ export function drawAxisTitle(
   // Automatic titles stay bounded to the axis run. An authored title layout
   // is authoritative and keeps its complete text rather than being elided by
   // the automatic plot-width estimate.
-  const label = manualLayout ? text : elideToWidth(ctx, text, maxPx);
+  // Authored breaks: one line per authored line (each elided on its own),
+  // one font size apart, stacked perpendicular to the text and centred on the
+  // anchor. Text without breaks is elided and drawn whole, as before.
+  const authoredLines = authoredTextLines(text);
+  const label = manualLayout
+    ? text
+    : authoredLines.length === 1
+      ? elideToWidth(ctx, text, maxPx)
+      : authoredLines.map(line => elideToWidth(ctx, line, maxPx)).join('\n');
+  const textHeight = fontSizePx + titleExtraLinesPx(label, fontSizePx);
   const rotation = axisTitleRotationRad(side, authoredRotation, authoredVerticalMode);
   let resolvedAnchorX = anchorX;
   let resolvedAnchorY = anchorY;
   if (manualLayout && chartRect) {
-    const textWidth = ctx.measureText(label).width;
+    const textWidth = measureAuthoredTextWidth(ctx, label);
     // CT_Title manual-layout x/y position the title's axis-aligned box after
     // DrawingML rotation. A vertical title therefore has a box approximately
     // one font line wide and one text run tall; using the unrotated dimensions
     // shifts it into the tick-label/plot bands by half the text length.
     const cos = Math.abs(Math.cos(rotation));
     const sin = Math.abs(Math.sin(rotation));
-    const fittedWidth = textWidth * cos + fontSizePx * sin;
-    const fittedHeight = textWidth * sin + fontSizePx * cos;
+    const fittedWidth = textWidth * cos + textHeight * sin;
+    const fittedHeight = textWidth * sin + textHeight * cos;
     const automatic = {
       x: anchorX - fittedWidth / 2,
       y: anchorY - fittedHeight / 2,
@@ -770,15 +779,15 @@ export function drawAxisTitle(
   }
   ctx.translate(resolvedAnchorX, resolvedAnchorY);
   if (rotation !== 0) ctx.rotate(rotation);
-  const textWidth = ctx.measureText(label).width;
+  const textWidth = measureAuthoredTextWidth(ctx, label);
   paintChartLabelBox(ctx, box, {
     x: -textWidth / 2,
-    y: -fontSizePx / 2,
+    y: -textHeight / 2,
     w: textWidth,
-    h: fontSizePx,
+    h: textHeight,
   }, ptToPx);
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.fillText(label, 0, 0);
+  fillAuthoredText(ctx, label, 0, 0, fontSizePx);
   ctx.restore();
 }
 
@@ -828,10 +837,15 @@ export function drawAxisTitles(
       rawLinkedChartStyleRole(chart, 'axisTitle'),
       true,
     );
+    // A multi-line block's centre moves outward by half its extra thickness,
+    // which `chartAxisTitleBands` reserved.
+    const extra = axisTitleBreakThicknessPx(
+      text, fontSizePx, side, authoredRotation, authoredVerticalMode,
+    ) / 2;
     if (side === 'left') {
       drawAxisTitle(
         ctx, text,
-        x + legLeftW + axisTitleMargin(w) + fontSizePx / 2,
+        x + legLeftW + axisTitleMargin(w) + fontSizePx / 2 + extra,
         py0 + ph / 2,
         side, fontSizePx, bold, italic, color, ph, fontFamily, authoredRotation,
         authoredVerticalMode, manualLayout, { x, y, w, h }, box,
@@ -842,7 +856,7 @@ export function drawAxisTitles(
     drawAxisTitle(
       ctx, text,
       px0 + pw / 2,
-      y + h - legBottomH - axisTitleMargin(h) - fontSizePx / 2,
+      y + h - legBottomH - axisTitleMargin(h) - fontSizePx / 2 - extra,
       side, fontSizePx, bold, italic, color, pw, fontFamily, authoredRotation,
       authoredVerticalMode, manualLayout, { x, y, w, h }, box,
       fontSizePx / 10,

@@ -4,6 +4,7 @@ import { renderChart } from './renderer.js';
 import { renderChartExChart } from './chart-ex-renderer.js';
 import { renderSimpleThreeDChart } from './three-d-renderer.js';
 import { renderRegionMapChart } from './region-map-renderer.js';
+import { cartesianTitleBand } from './layout.js';
 import { drawSecondaryCategoryAxis, secondaryCategoryLabelExtraH } from './shared/secondary-axis.js';
 
 // Authored line breaks in chart label text must start new lines in every
@@ -447,5 +448,100 @@ describe('authored-break reservations stay on the painted side and inside the ch
       },
     }));
     expect(rec.rects.filter(r => r.w < 0 || r.h < 0)).toEqual([]);
+  });
+});
+
+describe('authored breaks in titles, data-table values and short region maps', () => {
+  it('region-map legend fits a three-line name above the map on a short chart', () => {
+    const rec = recordingContext();
+    renderRegionMapChart(rec.ctx, {
+      chartType: 'regionMap',
+      categories: ['Canada'],
+      series: [{ name: 'A\nB\nC', values: [420, 850] }],
+      showLegend: true,
+      plotAreaBg: 'FFFFFF',
+      chartexRegionMap: {
+        rows: [{ label: 'Canada', value: 420 }, { label: 'United States', value: 850 }],
+        geography: { projectionType: 'robinson', cachePresent: false },
+      },
+    } as ChartModel, { x: 0, y: 0, w: 640, h: 200 }, 1);
+    const legendBottom = label(rec, '850').y + 9;
+    const mapTop = Math.min(...rec.rects.filter(r => r.w > 640 * 0.9).map(r => r.y));
+    expect(legendBottom).toBeLessThanOrEqual(mapTop + 1e-9);
+  });
+
+  it('data-table values drop outer breaks from the format result', () => {
+    const rec = render(model({
+      dataTable: { showHorizontalBorder: true, showVerticalBorder: true, showOutline: true, showKeys: false },
+      series: [series({ valFormatCode: '0"\n"' })],
+    }));
+    expectNoJoinedText(rec);
+    expect(rec.labels.some(entry => entry.text === '10')).toBe(true);
+  });
+
+  it('axis titles stack their lines and widen their gutters', () => {
+    const titled = (cat: string, val: string) => render(model({ catAxisTitle: cat, valAxisTitle: val }));
+    const broken = titled('Top\nBottom', 'Left\nRight');
+    const plain = titled('Top', 'Left');
+    expectNoJoinedText(broken);
+    // 10pt fallback title font, lines one font size apart.
+    expect(label(broken, 'Bottom').y - label(broken, 'Top').y).toBeCloseTo(10, 6);
+    expect(label(plain, 'Alpha').y - label(broken, 'Alpha').y).toBeCloseTo(10, 6);
+    expect(label(broken, '0').x - label(plain, '0').x).toBeCloseTo(10, 6);
+    expect(label(broken, 'Bottom').y + 5).toBeLessThanOrEqual(RECT.h);
+  });
+
+  it('secondary category-axis titles stack their lines', () => {
+    const rec = recordingContext();
+    const axis = { hidden: false, tickLabelPos: 'nextTo', lineHidden: true, majorTickMark: 'none', fontSizeHpt: 1000, title: 'Top\nBottom' } as unknown as SecondaryValueAxis;
+    drawSecondaryCategoryAxis(rec.ctx, model({}), axis, ['Beta'], RECT, 0, 100, 200, 1);
+    expectNoJoinedText(rec);
+    expect(label(rec, 'Bottom').y - label(rec, 'Top').y).toBeCloseTo(10, 6);
+    expect(label(rec, 'Bottom').y + 5).toBeLessThanOrEqual(label(rec, 'Beta').y - 10);
+  });
+
+  it('plain chart titles stack their lines and lower the plot by the extra lines', () => {
+    const broken = render(model({ title: 'Top\nBottom' }));
+    const plain = render(model({ title: 'Top' }));
+    expectNoJoinedText(broken);
+    const pitch = label(broken, 'Bottom').y - label(broken, 'Top').y;
+    expect(pitch).toBeGreaterThan(0);
+    expect(label(broken, '20').y - label(plain, '20').y).toBeCloseTo(pitch, 6);
+  });
+
+  it('rich-run titles keep their own measured band', () => {
+    const rich = (text: string) => cartesianTitleBand(model({ title: text, titleRichRuns: [{ text }] }), 360, 1);
+    expect(rich('Top\nBottom')).toEqual(rich('Top'));
+  });
+
+  it('3-D chart and axis titles stack their lines', () => {
+    const rec = render(model({
+      chartType: 'clusteredBar',
+      title: 'Top\nBottom',
+      catAxisTitle: 'Cat\nTwo',
+      threeD: { rotationX: 15, rotationY: 20, perspective: 30 },
+      plotGroups: [{ kind: 'bar3D', seriesStart: 0, seriesCount: 1, categoryAxis: 'primary', valueAxis: 'primary', seriesAxis: 'none', varyColors: false, barDirection: 'col', grouping: 'clustered' }],
+    }));
+    expectNoJoinedText(rec);
+    expect(label(rec, 'Bottom').y).toBeGreaterThan(label(rec, 'Top').y);
+    expect(label(rec, 'Two').y - label(rec, 'Cat').y).toBeCloseTo(10, 6);
+  });
+
+  it('region-map titles and attribution draw each line', () => {
+    const rec = recordingContext();
+    renderRegionMapChart(rec.ctx, {
+      chartType: 'regionMap',
+      title: 'Top\nBottom',
+      categories: ['Canada'],
+      series: [{ name: 'Sales', values: [420] }],
+      showLegend: false,
+      chartexRegionMap: {
+        rows: [{ label: 'Canada', value: 420 }],
+        geography: { projectionType: 'robinson', cachePresent: false, attribution: 'Source A\nSource B' },
+      },
+    } as ChartModel, RECT, 1);
+    expectNoJoinedText(rec);
+    expect(label(rec, 'Bottom').y).toBeGreaterThan(label(rec, 'Top').y);
+    expect(label(rec, 'Source B').y).toBeGreaterThan(label(rec, 'Source A').y);
   });
 });

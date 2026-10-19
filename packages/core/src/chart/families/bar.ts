@@ -32,6 +32,7 @@ import {
   axisTitleMargin,
   valueTickLabelGapPx,
   resolveManualLayoutRect,
+  axisTitleBreakThicknessPx,
 } from '../layout.js';
 import { planNumericValueAxis, finiteDataExtent } from '../axis-scale.js';
 import { axisLineWidthPx, resolveAxisLine, isCrossBetween } from '../axis-style.js';
@@ -76,7 +77,7 @@ import { createDataLabelLegendKeyResolver, measuredLegendReserve, drawLegendForL
 import type { DataLabelLegendKey, MeasuredLegendLayout } from '../shared/legend.js';
 import { drawAxisTick, strokeAxisSegment, axisTickLengthPx, strokeValueGridlineH, valGridStroke, valMinorGridStroke, drawCatMajorGridlines, catGridStroke, catGridlineFractions, catAxisReversed, drawValMajorGridlines, formatPrimaryValueAxisTick, formatAxisTickWithUnits, planValueAxis, axisLabelPx, wrapMeasuredText, catLabelsVisible, catLabelRotationRad, drawRotatedCatLabel } from '../shared/axis.js';
 import { drawSeriesTrendlines, trendlineLegendSeries } from '../shared/trendline.js';
-import { chartDateAxisPlan, forEachErrorBarEndpoint, computeSecondaryAxis, drawSecondaryValueGridlines, drawSecondaryValueAxis, drawSecondaryCategoryAxis, secondaryCategoryLabelExtraH } from '../shared/secondary-axis.js';
+import { chartDateAxisPlan, forEachErrorBarEndpoint, computeSecondaryAxis, drawSecondaryValueGridlines, drawSecondaryValueAxis, drawSecondaryCategoryAxis, secondaryCategoryLabelExtraH, secondaryAxisTitleBandW } from '../shared/secondary-axis.js';
 import { measuredCartesianTitleBand, drawChartTitleForLayout } from '../shared/title.js';
 import { dataLabelWithinAxisMaximum, customRichDataLabelOptions, drawBoundedDataLabelText } from '../shared/data-labels.js';
 import { chartCategories } from '../category-spacing.js';
@@ -382,10 +383,20 @@ export function renderBarChart(
   // Horizontal bars swap semantic axes: category title belongs in the left
   // band, while the horizontal value-axis title belongs in the bottom band.
   const catTitleH = isH
-    ? (chart.valAxisTitle ? valTitlePx + axisTitleMargin(h) + 4 : 0)
+    ? (chart.valAxisTitle
+      ? valTitlePx + axisTitleMargin(h) + 4 + axisTitleBreakThicknessPx(
+        chart.valAxisTitle, valTitlePx, 'horizontal',
+        chart.valAxisTitleRotation, chart.valAxisTitleVerticalMode,
+      )
+      : 0)
     : axBands.catBandH;
   const valTitleW = isH
-    ? (chart.catAxisTitle ? catTitlePx + axisTitleMargin(w) + 4 : 0)
+    ? (chart.catAxisTitle
+      ? catTitlePx + axisTitleMargin(w) + 4 + axisTitleBreakThicknessPx(
+        chart.catAxisTitle, catTitlePx, 'left',
+        chart.catAxisTitleRotation, chart.catAxisTitleVerticalMode,
+      )
+      : 0)
     : axBands.valBandW;
   // Value-axis scales are computed up-front (before `pad`) so the side gutters
   // can be sized to the actual tick-label widths instead of a fixed fraction of
@@ -412,7 +423,10 @@ export function renderBarChart(
       ) + 2
     : 0;
   const secondaryCatTitleBandH = secondaryCat?.title
-    ? axisTitleFontPx(secondaryCat.titleFontSizeHpt, ptToPx) + 6
+    ? axisTitleFontPx(secondaryCat.titleFontSizeHpt, ptToPx) + 6 + axisTitleBreakThicknessPx(
+      secondaryCat.title, axisTitleFontPx(secondaryCat.titleFontSizeHpt, ptToPx), 'horizontal',
+      secondaryCat.titleRotation, secondaryCat.titleVerticalMode,
+    )
     : 0;
   let padT = titleH + legTopH + valAxLabelFontPx / 2 + 2
     + secondaryCatLabelBandH + secondaryCatTitleBandH;
@@ -761,7 +775,7 @@ export function renderBarChart(
   const horizontalValueLabelExtraH = isH ? primaryValueLabelExtraH : 0;
   padT += valueLabelTopExtraH;
   const secTitleBandW = sec && sec.title
-    ? axisTitleFontPx(sec.titleFontSizeHpt, ptToPx) + 8
+    ? secondaryAxisTitleBandW(sec, ptToPx)
     : 0;
 
   // Fixed gutter fractions: library policy, see ChartPad in layout.ts.
