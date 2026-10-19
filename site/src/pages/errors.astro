@@ -35,6 +35,7 @@ export function previewErrorMessage(error: unknown): string {
       case 'invalid-password': return 'The password is incorrect.';
       case 'unsupported-encryption': return 'This encryption method is not supported.';
       case 'unsupported-image-effect': return 'A picture has malformed effect data or its pixel surface is unavailable.';
+      case 'invalid-numbering': return 'This Word document has list numbering that Word itself cannot open.';
       case 'unsupported-content': return 'This file uses content outside the enabled reader’s supported subset. Convert it to DOCX, XLSX or PPTX.';
       case 'legacy-binary-format': return 'This .doc, .xls or .ppt file has no matching legacy source. Enable @silurus/ooxml-legacy-office or convert it to .docx, .xlsx or .pptx.';
       case 'not-ooxml': return 'This is not a supported Office Open XML file.';
@@ -167,6 +168,7 @@ try {
         <div><code>unsupported-encryption</code><span>The file uses an encryption scheme the library cannot decrypt.</span><strong>Request an unencrypted or supported copy.</strong></div>
         <div><code>legacy-binary-format</code><span>The input is <code>.doc</code>, <code>.xls</code> or <code>.ppt</code> and no matching legacy source claimed it.</span><strong>Enable <code>@silurus/ooxml-legacy-office</code> for that format or request conversion to DOCX, XLSX or PPTX.</strong></div>
         <div><code>unsupported-image-effect</code><span>A picture has malformed DrawingML effect data, or its pixel-effect surface is unavailable. Authored picture effects are applied in document order.</span><strong>Check the picture data and the available Canvas image-processing support.</strong></div>
+        <div><code>invalid-numbering</code><span>A DOCX paragraph uses an invalid numbering level, or a level definition is out of range, so Word cannot open the document normally.</span><strong>Repair the numbering in Word or request a corrected file.</strong></div>
         <div><code>unsupported-content</code><span>A configured model source rejected input outside its supported subset.</span><strong>Offer conversion to a supported format.</strong></div>
         <div><code>not-ooxml</code><span>The bytes are not a recognized OOXML package: not a readable ZIP (including empty input), a ZIP without <code>[Content_Types].xml</code>, or a package without the main document part.</span><strong>Reject the file as unsupported or invalid.</strong></div>
       </div>
