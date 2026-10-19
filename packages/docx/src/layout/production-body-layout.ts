@@ -1530,6 +1530,7 @@ function measureBodyParagraphEntry(
             relocationBlockExtentPt: Math.max(0, box.y + box.h - request.location.cursorPt.yPt),
           }
         : {}),
+      ...(pushesPrecedingText ? { textFrameMember: true as const } : {}),
       ...(paragraph === frameGroup.owner && pushesPrecedingText
         ? {
             frameCarry: Object.freeze({

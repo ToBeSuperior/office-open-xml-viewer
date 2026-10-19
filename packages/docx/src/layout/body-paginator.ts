@@ -2313,8 +2313,8 @@ function* paginateBodyPassSteps(
             yield* commitTransition(advanceColumnOrPage(state.flow, 'overflow'), entryIndex);
             continue;
           }
+          if (acquired.textFrameMember) acceptedTextFrame = true;
           if (acquired.frameCarry) {
-            acceptedTextFrame = true;
             const frameDomainId = acquisitionLocation(state).flowDomainId;
             if (pendingFrameRun?.runKey !== acquired.frameCarry.runKey) {
               pendingFrameRun = Object.freeze({

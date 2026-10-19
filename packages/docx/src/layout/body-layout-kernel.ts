@@ -126,6 +126,9 @@ export interface AcquiredParagraphBlock {
   /** Owner of a text-anchored frame group: the facts the paginator needs to
    * carry the frame to its page start (WORD_TEXT_FRAME_PRECEDING_TEXT_PUSH). */
   readonly frameCarry?: FrameCarryObservation;
+  /** Any member of a text-anchored frame group: takes no flow space, so the
+   * next in-flow paragraph's spacing ignores it. */
+  readonly textFrameMember?: true;
 }
 
 /** One text-anchored frame group as placed in a pass. */

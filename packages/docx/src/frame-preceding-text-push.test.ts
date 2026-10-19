@@ -131,6 +131,17 @@ describe('text-anchored frames and the content before them', () => {
     expect(page).toEqual({ P: 20, F1: 40, A: 45 });
   });
 
+  it('collapses the anchor spacing past every member of a multi-paragraph frame', () => {
+    const member = { ...frame(40, 0, { wrap: 'around', xAlign: 'right' }) };
+    const [page] = topsByText([
+      para('P'),
+      para('F1', member),
+      para('F2', { ...member, spaceAfter: 30 }),
+      para('A', { spaceBefore: 5 }),
+    ]);
+    expect(page).toEqual({ P: 20, F1: 40, F2: 60, A: 45 });
+  });
+
   it('moves the frames to the page their anchor paragraph starts on', () => {
     // Content band 20..120. Four lines fill 20..100; F1 at 100 fits, but its
     // anchor cannot start below the exclusion (110 + 10 vSpace), so the frame
