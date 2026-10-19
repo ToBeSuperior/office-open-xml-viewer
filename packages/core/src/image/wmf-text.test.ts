@@ -78,7 +78,8 @@ interface Op { op: string; args: unknown[]; font: string; fill: string; directio
  *  em. Families listed as installed draw distinct glyph geometry. */
 function context(installed: readonly string[] = []) {
   const ops: Op[] = [];
-  const state = { font: '10px serif', fillStyle: '#000000', direction: 'inherit' };
+  const state = { font: '10px serif', fillStyle: '#000000', direction: 'inherit', fontKerning: 'auto' };
+  const counts = { measureText: 0 };
   const px = () => Number(/([\d.]+)px/.exec(state.font)?.[1] ?? 10);
   const log = (op: string) => (...args: unknown[]) => {
     ops.push({ op, args, font: state.font, fill: String(state.fillStyle), direction: state.direction });
@@ -90,12 +91,17 @@ function context(installed: readonly string[] = []) {
     set fillStyle(value: string) { state.fillStyle = value; },
     get direction() { return state.direction; },
     set direction(value: string) { state.direction = value; },
-    textAlign: 'start', textBaseline: 'alphabetic', fontKerning: 'auto',
+    get fontKerning() { return state.fontKerning; },
+    set fontKerning(value: string) { state.fontKerning = value; },
+    textAlign: 'start', textBaseline: 'alphabetic',
     measureText(text: string) {
+      counts.measureText += 1;
       const size = px();
+      // The pair "AV" kerns by 0.25 em unless kerning is disabled.
+      const kerning = state.fontKerning === 'none' ? 0 : (text.match(/AV/g)?.length ?? 0) * size * 0.25;
       const covered = installed.some((family) => state.font.includes(`"${family}"`));
       return {
-        width: [...text].length * size * 0.5,
+        width: [...text].length * size * 0.5 - kerning,
         fontBoundingBoxAscent: size * 0.9,
         fontBoundingBoxDescent: size * 0.3,
         actualBoundingBoxAscent: size * (covered ? 0.7 : 0.6),
@@ -108,7 +114,7 @@ function context(installed: readonly string[] = []) {
   }
   const ctx = target as unknown as CanvasRenderingContext2D;
   const texts = () => ops.filter((op) => op.op === 'fillText');
-  return { ctx, ops, texts };
+  return { ctx, ops, texts, counts };
 }
 
 function play(file: Uint8Array, installed: readonly string[] = []) {
@@ -214,6 +220,33 @@ describe('WMF text: Font object and DC state records', () => {
     expect(run.texts().map((op) => op.args)).toEqual([['A', 0, 50], [' ', 12, 50], ['B', 28, 50]]);
   });
 
+  it('shares BreakExtra over break characters in integer logical units, remainder first', () => {
+    const run = play(picture(font(),
+      record(0x020a, [...u16(3), ...u16(8)]), // 8 units over 3 breaks: 3, 3, 2
+      extText(0, 50, ascii('A B C D')),
+    ));
+    expect(run.texts().map((op) => op.args[1])).toEqual([0, 10, 23, 33, 46, 56, 68]);
+  });
+
+  it('measures and paints with kerning disabled, as GDI text output does', () => {
+    // Right-aligned "AV": the unkerned width is 20px, so it starts at 20.
+    const run = play(picture(font(), textAlign(0x1a), extText(40, 50, ascii('AV'))));
+    expect(run.texts().map((op) => op.args)).toEqual([['AV', 20, 50]]);
+  });
+
+  it('measures each distinct character once and skips unused widths', () => {
+    const long = Array.from({ length: 32767 }, (_, index) => 0x41 + (index % 3));
+    const extra = play(picture(font(), record(0x0108, u16(1)), extText(0, 50, long)));
+    expect(extra.texts()).toHaveLength(32767);
+    expect(extra.counts.measureText).toBeLessThan(10);
+    const plain = play(picture(font(), extText(0, 50, long)));
+    expect(plain.texts()).toHaveLength(1);
+    expect(plain.counts.measureText).toBeLessThan(5);
+    const dx = play(picture(font(), textAlign(0x1a), extText(0, 50, long, { dx: long.map(() => 3) })));
+    expect(dx.texts()).toHaveLength(32767);
+    expect(dx.counts.measureText).toBeLessThan(5);
+  });
+
   it('applies the text color, and paints the cell in OPAQUE background mode', () => {
     const run = play(join(header(), windowExt(), font(), select(0), textAlign(0x18),
       record(0x0209, u32(0x0000ff)), record(0x0201, u32(0x00ff00)), bkMode(2),
@@ -272,9 +305,11 @@ describe('WMF text: META_EXTTEXTOUT options and Dx', () => {
     expect(run.texts()[0].font).toContain('"Noto Sans JP"');
   });
 
-  it('applies interleaved vertical advances with ETO_PDY', () => {
-    const run = play(picture(font(), extText(0, 50, ascii('AB'), { options: 0x2000, dx: [10, -5, 10, 0] })));
+  it('applies interleaved vertical advances with ETO_PDY to glyphs and background cells', () => {
+    const run = play(join(header(), windowExt(), record(0x0201, u32(0x00ff00)), bkMode(2), font(), select(0), textAlign(0x18),
+      extText(0, 50, ascii('AB'), { options: 0x2000, dx: [10, -5, 12, 0] }), eof()));
     expect(run.texts().map((op) => op.args)).toEqual([['A', 0, 50], ['B', 10, 45]]);
+    expect(run.ops.filter((op) => op.op === 'fillRect').map((op) => op.args)).toEqual([[0, 32, 10, 24], [10, 27, 12, 24]]);
   });
 
   it('fills the ETO_OPAQUE rectangle with the background color and clips to ETO_CLIPPED', () => {
@@ -335,18 +370,20 @@ describe('WMF text: CharacterSet decoding', () => {
     [204, [0xc4, 0xe0], 'Да'], // RUSSIAN_CHARSET, code page 1251
     [238, [0xb9, 0xe8], 'ąč'], // EASTEUROPE_CHARSET, code page 1250
     [177, [0xe0], 'א'], // HEBREW_CHARSET, code page 1255
-    [77, [0x8a], 'ä'], // MAC_CHARSET, code page 10000
+    [255, [0x80, 0xe1, 0xb0, 0xff], 'Çß░\u00a0'], // OEM_CHARSET, code page 437
+    [130, [0x88, 0x61], '가'], // JOHAB_CHARSET 1361: composed Hangul
+    [130, [0x88, 0x41, 0x84, 0x61, 0x84, 0x42], 'ㄱㅏㄱ'], // lone initial, medial, final
+    [130, [0xd9, 0x31, 0xe0, 0x31, 0x5c], '\u3000伽₩'], // KS X 1001 symbol and hanja rows, WON SIGN
     [134, [0xc4, 0xe3], '你'], // GB2312_CHARSET, code page 936
-    [1, ascii('Ab'), 'Ab'], // DEFAULT_CHARSET: ASCII is common to every code page
   ] as const)('decodes CharacterSet %i through its code page', (charset, bytes, text) => {
     const run = play(picture(font({ charset }), extText(0, 50, [...bytes])));
     expect(run.texts()[0].args[0]).toBe(text);
   });
 
   it.each([
-    [1, [0xe9], 'locale-dependent character set'],
-    [255, [0x80], 'locale-dependent character set'],
-    [130, [0x88, 0x61], 'character set decoder unavailable'],
+    [1, [0x41], 'undefined character set'], // DEFAULT_CHARSET is not in the MS-WMF table
+    [77, [0x41], 'undefined character set'], // nor is MAC_CHARSET
+    [130, [0xd4, 0x41], 'byte undefined in code page'],
     [161, [0xd2], 'byte undefined in code page'],
     [128, [0x82], 'truncated double-byte character'],
     [3, [0x41], 'undefined character set'],

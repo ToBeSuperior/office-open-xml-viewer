@@ -83,14 +83,13 @@ const TA_RTLREADING = 0x0100;
 // BackgroundMode (MS-WMF 2.1.1.4).
 const OPAQUE = 0x0002;
 
-// CharacterSet (MS-WMF 2.1.1.5) → Windows code page decoders (WHATWG labels).
-const ANSI_CHARSET = 0;
-const DEFAULT_CHARSET = 1;
-const SYMBOL_CHARSET = 2;
-const JOHAB_CHARSET = 130;
-const OEM_CHARSET = 255;
+// MS-WMF 2.3.3.5 String decoding table: CharSet → code page. Charsets
+// absent from it (DEFAULT_CHARSET, MAC_CHARSET, …) decode undefined.
+const ANSI_CHARSET = 0; // 1252
+const SYMBOL_CHARSET = 2; // 42 (CP_SYMBOL: byte b → U+F000 + b)
+const JOHAB_CHARSET = 130; // 1361
+const OEM_CHARSET = 255; // 437
 const SINGLE_BYTE_CODE_PAGES: Readonly<Record<number, string>> = {
-  77: 'macintosh', // MAC_CHARSET, code page 10000
   161: 'windows-1253', // GREEK_CHARSET
   162: 'windows-1254', // TURKISH_CHARSET
   163: 'windows-1258', // VIETNAMESE_CHARSET
@@ -129,6 +128,61 @@ function decoderFor(label: string): TextDecoder | null {
     decoders.set(label, decoder);
   }
   return decoders.get(label) ?? null;
+}
+
+// Code page 437 bytes 0x80–0xFF (Unicode, Inc. MAPPINGS/VENDORS/MICSFT/PC/CP437.TXT).
+const CP437_HIGH =
+  'ÇüéâäàåçêëèïîìÄÅ' + 'ÉæÆôöòûùÿÖÜ¢£¥₧ƒ' + 'áíóúñÑªº¿⌐¬½¼¡«»' + '░▒▓│┤╡╢╖╕╣║╗╝╜╛┐'
+  + '└┴┬├─┼╞╟╚╔╩╦╠═╬╧' + '╨╤╥╙╘╒╓╫╪┘┌█▄▌▐▀' + 'αßΓπΣσµτΦΘΩδ∞φε∩' + '≡±≥≤⌠⌡÷≈°∙·√ⁿ²■\u00a0';
+
+// Code page 1361 (Johab, KS X 1001:1992 annex 3). Hangul is a 15-bit
+// composition of initial/medial/final indices; symbols and hanja are the
+// KS X 1001 repertoire rearranged two rows per lead byte.
+const JOHAB_INITIAL = [-1, -1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18];
+const JOHAB_MEDIAL = [-1, -1, -1, 0, 1, 2, 3, 4, -1, -1, 5, 6, 7, 8, 9, 10, -1, -1, 11, 12, 13, 14, 15, 16, -1, -1, 17, 18, 19, 20];
+const JOHAB_FINAL = [-1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, -1, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27];
+// Hangul Compatibility Jamo for a lone initial, medial or final.
+const COMPAT_INITIAL = [0x3131, 0x3132, 0x3134, 0x3137, 0x3138, 0x3139, 0x3141, 0x3142, 0x3143, 0x3145, 0x3146, 0x3147, 0x3148, 0x3149, 0x314a, 0x314b, 0x314c, 0x314d, 0x314e];
+const COMPAT_FINAL = [0, 0x3131, 0x3132, 0x3133, 0x3134, 0x3135, 0x3136, 0x3137, 0x3139, 0x313a, 0x313b, 0x313c, 0x313d, 0x313e, 0x313f, 0x3140, 0x3141, 0x3142, 0x3144, 0x3145, 0x3146, 0x3147, 0x3148, 0x314a, 0x314b, 0x314c, 0x314d, 0x314e];
+
+function decodeJohab(bytes: Uint8Array): Decoded {
+  const units: TextUnit[] = [];
+  const ksx = decoderFor('euc-kr');
+  for (let index = 0; index < bytes.length;) {
+    const lead = bytes[index];
+    if (lead < 0x80) {
+      // Code page 1361 maps 0x5C to WON SIGN.
+      units.push({ text: lead === 0x5c ? '\u20a9' : String.fromCharCode(lead), start: index, count: 1, face: 'authored' });
+      index += 1;
+      continue;
+    }
+    if (index + 1 >= bytes.length) return { problem: 'truncated double-byte character' };
+    const trail = bytes[index + 1];
+    let text: string | null = null;
+    if (lead >= 0x84 && lead <= 0xd3 && ((trail >= 0x41 && trail <= 0x7e) || trail >= 0x81) && trail !== 0xff) {
+      const code = (lead << 8) | trail;
+      const i = JOHAB_INITIAL[(code >> 10) & 0x1f] ?? -1;
+      const m = JOHAB_MEDIAL[(code >> 5) & 0x1f] ?? -1;
+      const f = JOHAB_FINAL[code & 0x1f] ?? -1;
+      const iFill = ((code >> 10) & 0x1f) === 1;
+      const mFill = ((code >> 5) & 0x1f) === 2;
+      if (i >= 0 && m >= 0 && f >= 0) text = String.fromCharCode(0xac00 + (i * 21 + m) * 28 + f);
+      else if (iFill && mFill && f === 0) text = '\u3164';
+      else if (i >= 0 && mFill && f === 0) text = String.fromCharCode(COMPAT_INITIAL[i]);
+      else if (iFill && m >= 0 && f === 0) text = String.fromCharCode(0x314f + m);
+      else if (iFill && mFill && f > 0) text = String.fromCharCode(COMPAT_FINAL[f]);
+    } else if (((lead >= 0xd9 && lead <= 0xde) || (lead >= 0xe0 && lead <= 0xf9))
+      && ((trail >= 0x31 && trail <= 0x7e) || (trail >= 0x91 && trail <= 0xfe))) {
+      const high = trail >= 0xa1;
+      const row = (lead <= 0xde ? (lead - 0xd9) * 2 + 0x21 : (lead - 0xe0) * 2 + 0x4a) + (high ? 1 : 0);
+      const column = high ? trail - 0x80 : trail <= 0x7e ? trail - 0x10 : trail - 0x22;
+      try { text = ksx?.decode(new Uint8Array([row | 0x80, column | 0x80])) ?? null; } catch { text = null; }
+    }
+    if (text === null) return { problem: 'byte undefined in code page' };
+    units.push({ text, start: index, count: 2, face: 'authored' });
+    index += 2;
+  }
+  return { units };
 }
 
 /** One drawn character: its Unicode text, the String bytes it came from (Dx
@@ -178,19 +232,19 @@ function decodeBytes(
     }));
     return { units };
   }
-  if (charset === DEFAULT_CHARSET || charset === OEM_CHARSET) {
-    // Every Windows ANSI and OEM code page shares ASCII; other bytes depend on
-    // the playback system's locale.
-    if (bytes.some((byte) => byte >= 0x80)) return { problem: 'locale-dependent character set' };
-    bytes.forEach((byte, index) => units.push({ text: String.fromCharCode(byte), start: index, count: 1, face: 'authored' }));
+  if (charset === OEM_CHARSET) {
+    bytes.forEach((byte, index) => units.push({
+      text: String.fromCharCode(byte < 0x80 ? byte : CP437_HIGH.charCodeAt(byte - 0x80)),
+      start: index, count: 1, face: 'authored',
+    }));
     return { units };
   }
+  if (charset === JOHAB_CHARSET) return decodeJohab(bytes);
   const single = SINGLE_BYTE_CODE_PAGES[charset];
   const double = DOUBLE_BYTE_CODE_PAGES[charset];
-  const decoder = single ? decoderFor(single) : double ? decoderFor(double.label) : null;
-  if (!decoder) {
-    return { problem: charset === JOHAB_CHARSET || single || double ? 'character set decoder unavailable' : 'undefined character set' };
-  }
+  if (!single && !double) return { problem: 'undefined character set' };
+  const decoder = decoderFor(single ?? double!.label);
+  if (!decoder) return { problem: 'character set decoder unavailable' };
   for (let index = 0; index < bytes.length;) {
     const count = double && double.lead(bytes[index]) ? 2 : 1;
     if (index + count > bytes.length) return { problem: 'truncated double-byte character' };
@@ -388,6 +442,8 @@ export function drawWmfText(s: WmfTextState, out: WmfTextOutput): { drew: boolea
   if ((s.textAlign & TA_UPDATECP) && !s.currentPositionKnown) return { problem: 'current position undefined' };
 
   const { ctx } = s;
+  // GDI TextOut/ExtTextOut apply no pair kerning; measure and paint alike.
+  if ('fontKerning' in ctx) ctx.fontKerning = 'none';
   const weight = font.weight === 0 ? 400 : Math.min(1000, Math.max(1, font.weight));
   const style = font.italic ? 'italic ' : '';
   const generic = genericFamily(font);
@@ -421,34 +477,28 @@ export function drawWmfText(s: WmfTextState, out: WmfTextOutput): { drew: boolea
   const across = Math.hypot(sin * sx, cos * sy) * Math.sign(sy);
 
   // Advances along the baseline (device px) and perpendicular offsets.
+  // SetTextCharacterExtra / SetTextJustification work in integer logical
+  // units: CharExtra is added to every character; BreakExtra is divided
+  // among the BreakCount break characters, each receiving the integer
+  // quotient and the first (BreakExtra mod BreakCount) of them one more unit.
   const pdy = (out.options & ETO_PDY) !== 0;
-  const extraPx = s.charExtra * along;
-  const breakPx = s.breakCount > 0 ? (s.breakExtra / s.breakCount) * along : 0;
-  const spaced = out.dx !== null || extraPx !== 0 || breakPx !== 0;
-  const advances: number[] = [];
-  const rises: number[] = [];
-  const measure = (unit: TextUnit) => {
-    ctx.font = fontFor(unit);
-    return ctx.measureText(unit.text).width * hScale;
+  const breakQuotient = s.breakCount > 0 ? Math.trunc(s.breakExtra / s.breakCount) : 0;
+  let breakRemainder = s.breakCount > 0 ? s.breakExtra - breakQuotient * s.breakCount : 0;
+  const justified = s.breakCount > 0 && s.breakExtra !== 0;
+  const spaced = out.dx !== null || s.charExtra !== 0 || justified;
+  // Widths are measured lazily and once per distinct (font, text): a long
+  // string costs at most one measurement per distinct character or run.
+  const widths = new Map<string, number>();
+  const measure = (text: string, unitFont: string) => {
+    const key = `${unitFont}\u0000${text}`;
+    let width = widths.get(key);
+    if (width === undefined) {
+      ctx.font = unitFont;
+      width = ctx.measureText(text).width * hScale;
+      widths.set(key, width);
+    }
+    return width;
   };
-  for (const unit of units) {
-    let advance = 0;
-    let rise = 0;
-    if (out.dx) {
-      for (let b = unit.start; b < unit.start + unit.count; b++) {
-        advance += out.dx[pdy ? b * 2 : b] * along;
-        if (pdy) rise += out.dx[b * 2 + 1] * across;
-      }
-    } else {
-      advance = measure(unit);
-    }
-    if (spaced) {
-      advance += extraPx;
-      if (unit.count === 1 && out.bytes[unit.start] === 0x20) advance += breakPx;
-    }
-    advances.push(advance);
-    rises.push(rise);
-  }
 
   // Draw groups: one Canvas call per run of same-face units when the natural
   // advances apply, else one call per character at its own pen position.
@@ -456,40 +506,54 @@ export function drawWmfText(s: WmfTextState, out: WmfTextOutput): { drew: boolea
   const groups: Group[] = [];
   let pen = 0;
   let rise = 0;
-  units.forEach((unit, index) => {
+  for (const unit of units) {
     const unitFont = fontFor(unit);
-    const last = groups.at(-1);
-    if (!spaced && last && last.font === unitFont) {
-      last.text += unit.text;
-      last.advance += advances[index];
+    if (!spaced) {
+      const last = groups.at(-1);
+      if (last && last.font === unitFont) last.text += unit.text;
+      else groups.push({ text: unit.text, font: unitFont, pen: 0, rise: 0, advance: 0 });
+      continue;
+    }
+    let logical = s.charExtra;
+    if (justified && unit.count === 1 && out.bytes[unit.start] === 0x20) {
+      logical += breakQuotient;
+      if (breakRemainder > 0) { logical += 1; breakRemainder -= 1; }
+    }
+    let advance = logical * along;
+    let unitRise = 0;
+    if (out.dx) {
+      for (let b = unit.start; b < unit.start + unit.count; b++) {
+        advance += out.dx[pdy ? b * 2 : b] * along;
+        if (pdy) unitRise += out.dx[b * 2 + 1] * across;
+      }
     } else {
-      groups.push({ text: unit.text, font: unitFont, pen, rise, advance: advances[index] });
+      advance += measure(unit.text, unitFont);
     }
-    pen += advances[index];
-    rise += rises[index];
-  });
-  if (!spaced) {
+    groups.push({ text: unit.text, font: unitFont, pen, rise, advance });
+    pen += advance;
+    rise += unitRise;
+  }
+  const rtl = (s.textAlign & TA_RTLREADING) !== 0 || (out.options & ETO_RTLREADING) !== 0;
+  const useCpFlag = (s.textAlign & TA_UPDATECP) !== 0;
+  const needTotal = horizontal !== 0 || rtl || useCpFlag || s.bkMode === OPAQUE || font.underline || font.strikeout;
+  if (!spaced && (needTotal || groups.length > 1)) {
     // Shape each same-face run as a whole (complex scripts, no kerning).
-    let groupPen = 0;
     for (const group of groups) {
-      ctx.font = group.font;
-      group.pen = groupPen;
-      group.advance = ctx.measureText(group.text).width * hScale;
-      groupPen += group.advance;
+      group.pen = pen;
+      group.advance = measure(group.text, group.font);
+      pen += group.advance;
     }
-    pen = groupPen;
   }
   const total = pen;
   const totalRise = rise;
 
-  const useCp = (s.textAlign & TA_UPDATECP) !== 0;
+  const useCp = useCpFlag;
   const refX = useCp ? s.currentX : out.x;
   const refY = useCp ? s.currentY : out.y;
   const originX = s.vpX + (refX - s.orgX) * sx;
   const originY = s.vpY + (refY - s.orgY) * sy;
   const x0 = horizontal === TA_RIGHT ? -total : horizontal === TA_CENTER ? -total / 2 : 0;
   const baseline = vertical === TA_BASELINE ? 0 : vertical === TA_BOTTOM ? -descentPx : ascentPx;
-  const rtl = (s.textAlign & TA_RTLREADING) !== 0 || (out.options & ETO_RTLREADING) !== 0;
   const decoration = (font.underline || font.strikeout)
     ? referenceFontDecoration(font.face, weight, font.italic ? 'italic' : 'normal')
     : null;
@@ -521,19 +585,22 @@ export function drawWmfText(s: WmfTextState, out: WmfTextOutput): { drew: boolea
       ox = 0;
       oy = 0;
     }
-    if (s.bkMode === OPAQUE && total > 0) {
+    // Each character cell (or same-face run) sits at its own advance and,
+    // with ETO_PDY, its own vertical offset.
+    const cellX = (group: Group) => ox + x0 + (rtl ? total - group.pen - group.advance : group.pen);
+    if (s.bkMode === OPAQUE) {
       ctx.fillStyle = s.bkColor;
-      ctx.fillRect(ox + x0, oy + baseline - ascentPx, total, ascentPx + descentPx);
+      for (const group of groups) {
+        if (group.advance > 0) ctx.fillRect(cellX(group), oy + baseline + group.rise - ascentPx, group.advance, ascentPx + descentPx);
+      }
     }
     ctx.fillStyle = s.textColor;
     ctx.textAlign = 'left';
     ctx.textBaseline = 'alphabetic';
     ctx.direction = rtl ? 'rtl' : 'ltr';
-    // GDI TextOut/ExtTextOut apply no pair kerning.
-    if ('fontKerning' in ctx) ctx.fontKerning = 'none';
     for (const group of groups) {
       if (!group.text) continue;
-      const gx = ox + x0 + (rtl ? total - group.pen - group.advance : group.pen);
+      const gx = cellX(group);
       const gy = oy + baseline + group.rise;
       ctx.font = group.font;
       if (hScale === 1) {
@@ -546,16 +613,27 @@ export function drawWmfText(s: WmfTextState, out: WmfTextOutput): { drew: boolea
         ctx.restore();
       }
     }
-    if (total > 0) {
+    if (font.underline || font.strikeout) {
+      ctx.fillStyle = s.textColor;
       const thickness = decoration ? decoration.underlineThicknessEm * emPx : Math.max(1, emPx * DECORATION_LINE_WIDTH_EM);
-      if (font.underline) {
-        const top = decoration ? decoration.underlineTopEm * emPx : Math.max(2, thickness);
-        ctx.fillRect(ox + x0, oy + baseline + top, total, thickness);
-      }
-      if (font.strikeout) {
-        const strike = decoration ? decoration.strikeThicknessEm * emPx : thickness;
-        const top = decoration ? decoration.strikeTopEm * emPx : -STRIKE_RISE_EM * emPx - strike / 2;
-        ctx.fillRect(ox + x0, oy + baseline + top, total, strike);
+      const strike = decoration ? decoration.strikeThicknessEm * emPx : thickness;
+      const underlineTop = decoration ? decoration.underlineTopEm * emPx : Math.max(2, thickness);
+      const strikeTop = decoration ? decoration.strikeTopEm * emPx : -STRIKE_RISE_EM * emPx - strike / 2;
+      // One rule per baseline height: adjacent cells sharing a rise merge.
+      let start = 0;
+      while (start < groups.length) {
+        let end = start + 1;
+        while (end < groups.length && groups[end].rise === groups[start].rise) end++;
+        const first = groups[start];
+        const last = groups[end - 1];
+        const from = rtl ? total - last.pen - last.advance : first.pen;
+        const width = last.pen + last.advance - first.pen;
+        if (width > 0) {
+          const y = oy + baseline + first.rise;
+          if (font.underline) ctx.fillRect(ox + x0 + from, y + underlineTop, width, thickness);
+          if (font.strikeout) ctx.fillRect(ox + x0 + from, y + strikeTop, width, strike);
+        }
+        start = end;
       }
     }
   } finally {

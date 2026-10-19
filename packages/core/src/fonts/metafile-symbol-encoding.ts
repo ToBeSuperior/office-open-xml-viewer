@@ -11,11 +11,13 @@
 // 0xA4) the Greek/primary entry is used. The Adobe Corporate-Use targets
 // (U+F6D9..U+F6DB, U+F8E5..U+F8FE: bracket/integral/brace pieces, extenders,
 // serif/sans copyright marks) are not standard characters and stay font-coded.
-// Phi is the one deliberate exchange: the table predates Unicode 3.0, which
+// Phi is the one deliberate exchange. The table predates Unicode 3.0, which
 // swapped the representative glyphs of U+03C6 (now the open, looped phi) and
-// U+03D5 (now the stroked phi). Symbol's 0x6A "phi1" is the looped form and
-// 0x66 "phi" the stroked one, so they map to U+03C6 and U+03D5 respectively
-// (Unicode 3.0 §7.2 / NamesList note on U+03D5).
+// U+03D5 (now the stroked phi). Office evidence: a Windows Word PDF of a
+// MathType equation drawing Symbol 0x6A ("phi1") shows the open, looped phi,
+// and Times New Roman (the Windows serif fallback) draws U+03C6 looped and
+// U+03D5 stroked. Mapping 0x6A to U+03D5 would therefore paint the other
+// glyph, so 0x6A maps to U+03C6 and its stroked counterpart 0x66 to U+03D5.
 const ADOBE_SYMBOL_UNICODE: Readonly<Record<number, number>> = {
   0x20: 0x0020, 0x21: 0x0021, 0x22: 0x2200, 0x23: 0x0023, 0x24: 0x2203, 0x25: 0x0025,
   0x26: 0x0026, 0x27: 0x220b, 0x28: 0x0028, 0x29: 0x0029, 0x2a: 0x2217, 0x2b: 0x002b,
