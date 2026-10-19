@@ -714,7 +714,11 @@ export function drawWmfText(s: WmfTextState, out: WmfTextOutput): { drew: boolea
   const refY = useCp ? s.currentY : out.y;
   const originX = s.vpX + (refX - s.orgX) * sx;
   const originY = s.vpY + (refY - s.orgY) * sy;
-  const x0 = horizontal === TA_RIGHT ? -total : horizontal === TA_CENTER ? -total / 2 : 0;
+  // TA_RIGHT / TA_CENTER shift the start by the whole (or half the) advance
+  // vector: along the baseline and, with ETO_PDY, across it.
+  const shift = horizontal === TA_RIGHT ? -1 : horizontal === TA_CENTER ? -0.5 : 0;
+  const x0 = shift * total;
+  const y0 = shift * totalRise;
   const baseline = vertical === TA_BASELINE ? 0 : vertical === TA_BOTTOM ? -descentPx : ascentPx;
   const decoration = (font.underline || font.strikeout)
     ? referenceFontDecoration(font.face, weight, font.italic ? 'italic' : 'normal')
@@ -747,7 +751,7 @@ export function drawWmfText(s: WmfTextState, out: WmfTextOutput): { drew: boolea
     if (s.bkMode === OPAQUE) {
       ctx.fillStyle = s.bkColor;
       for (const group of groups) {
-        if (group.advance > 0) ctx.fillRect(cellX(group), oy + baseline + group.rise - ascentPx, group.advance, ascentPx + descentPx);
+        if (group.advance > 0) ctx.fillRect(cellX(group), oy + y0 + baseline + group.rise - ascentPx, group.advance, ascentPx + descentPx);
       }
     }
     ctx.fillStyle = s.textColor;
@@ -761,7 +765,7 @@ export function drawWmfText(s: WmfTextState, out: WmfTextOutput): { drew: boolea
       // mirroring inside the run to Canvas.
       ctx.direction = groups.length === 1 ? (rtl ? 'rtl' : 'ltr')
         : [...group.text].length === 1 ? 'ltr' : (group.level & 1 ? 'rtl' : 'ltr');
-      const gy = oy + baseline + group.rise;
+      const gy = oy + y0 + baseline + group.rise;
       ctx.font = group.font;
       // Zero-width joiners give a separately drawn cursive cell the
       // contextual form it has in the whole string, without moving it.
@@ -793,7 +797,7 @@ export function drawWmfText(s: WmfTextState, out: WmfTextOutput): { drew: boolea
         const from = first.x;
         const width = last.x + last.advance - first.x;
         if (width > 0) {
-          const y = oy + baseline + first.rise;
+          const y = oy + y0 + baseline + first.rise;
           if (font.underline) ctx.fillRect(ox + x0 + from, y + underlineTop, width, thickness);
           if (font.strikeout) ctx.fillRect(ox + x0 + from, y + strikeTop, width, strike);
         }
@@ -808,8 +812,8 @@ export function drawWmfText(s: WmfTextState, out: WmfTextOutput): { drew: boolea
     // TA_LEFT moves the current position past the string; TA_RIGHT moves it to
     // the string's start; TA_CENTER leaves it unchanged.
     const signed = horizontal === TA_RIGHT ? -total : total;
+    const rise = horizontal === TA_RIGHT ? -totalRise : totalRise;
     // Local (along, across) → device through the same rotation as the glyphs.
-    const rise = horizontal === TA_RIGHT ? 0 : totalRise;
     const dxDev = signed * Math.cos(phi) - rise * Math.sin(phi);
     const dyDev = signed * Math.sin(phi) + rise * Math.cos(phi);
     s.currentX = refX + dxDev / sx;

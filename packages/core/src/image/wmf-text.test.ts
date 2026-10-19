@@ -325,6 +325,27 @@ describe('WMF text: Font object and DC state records', () => {
     expect(origins[1][1]).toBeCloseTo(10 * sy - 20 * handedness);
   });
 
+  it('aligns and advances by the whole ETO_PDY advance vector', () => {
+    // "AB" with Dx/Dy pairs (10, -5), (10, -3): advance vector (20, -8).
+    const pdy = (x: number, y: number) => extText(x, y, ascii('AB'), { options: 0x2000, dx: [10, -5, 10, -3] });
+    const right = play(picture(font(), textAlign(0x1a), pdy(40, 50)));
+    expect(right.texts().map((op) => op.args)).toEqual([['A', 20, 58], ['B', 30, 53]]);
+    const centre = play(picture(font(), textAlign(0x1e), pdy(40, 50)));
+    expect(centre.texts().map((op) => op.args)).toEqual([['A', 30, 54], ['B', 40, 49]]);
+    // TA_RIGHT | TA_UPDATECP moves the current position to the start (20, 58).
+    const cp = play(picture(font(), moveTo(40, 50), textAlign(0x1b), pdy(0, 0), textAlign(0x19), textOut(0, 0, ascii('C'))));
+    expect(cp.texts().map((op) => op.args)).toEqual([['A', 20, 58], ['B', 30, 53], ['C', 20, 58]]);
+    // Rotated 90° counterclockwise: the same local shift, and the current
+    // position moves by the rotated start vector (+8, +20).
+    const rotated = play(picture(font({ escapement: 900 }), moveTo(40, 50), textAlign(0x1b), pdy(0, 0),
+      textAlign(0x19), textOut(0, 0, ascii('C'))));
+    expect(rotated.texts().map((op) => op.args)).toEqual([['A', -20, 8], ['B', -10, 3], ['C', 0, 0]]);
+    const origins = rotated.ops.filter((op) => op.op === 'translate').map((op) => op.args as number[]);
+    expect(origins[0]).toEqual([40, 50]);
+    expect(origins[1][0]).toBeCloseTo(48);
+    expect(origins[1][1]).toBeCloseTo(70);
+  });
+
   it('scales glyphs horizontally to a non-zero Width against the catalogued xAvgCharWidth', () => {
     // Times New Roman normal: xAvgCharWidth 821 / 2048 em.
     const run = play(picture(font({ face: 'Times New Roman', height: -2048, width: 1642 }), extText(0, 50, ascii('A'))));
