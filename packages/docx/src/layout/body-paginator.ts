@@ -1427,10 +1427,10 @@ function* paginateBodyPassSteps(
       ? `${pageBand}:band:${activeRegion(state).id}:${state.flow.columnIndex}`
       : pageBand;
   };
-  const pageHasColumnFootnoteBands = (pageIndex: number): boolean => {
-    const prefix = `${pageFootnoteBandId(pageIndex)}:band:`;
-    return [...footnoteReserveByBand.keys()].some((band) => band.startsWith(prefix));
-  };
+  // Column band reserves by page, so a flow-domain change reads only its page.
+  const columnBandReservesByPage = new Map<number, Map<string, number>>();
+  const pageHasColumnFootnoteBands = (pageIndex: number): boolean =>
+    columnBandReservesByPage.has(pageIndex);
   /** The reserve of the active flow domain: the page band plus its own
    * column band, or for a page-wide domain below column bands, the deepest. */
   const footnoteReserveForActiveBand = (): number => {
@@ -1438,8 +1438,8 @@ function* paginateBodyPassSteps(
     const wide = footnoteReserveByBand.get(pageBand) ?? 0;
     if (perColumnFootnoteBands()) return wide + (footnoteReserveByBand.get(activeFootnoteBandId()) ?? 0);
     let deepest = 0;
-    for (const [band, reservePt] of footnoteReserveByBand) {
-      if (band.startsWith(`${pageBand}:band:`)) deepest = Math.max(deepest, reservePt);
+    for (const reservePt of columnBandReservesByPage.get(state.flow.pageIndex)?.values() ?? []) {
+      deepest = Math.max(deepest, reservePt);
     }
     return wide + deepest;
   };
@@ -1626,6 +1626,11 @@ function* paginateBodyPassSteps(
       pageReservePt += note.advancePt;
     }
     footnoteReserveByBand.set(band, bandReservePt);
+    if (band !== pageFootnoteBandId(state.flow.pageIndex)) {
+      let pageBands = columnBandReservesByPage.get(state.flow.pageIndex);
+      if (!pageBands) columnBandReservesByPage.set(state.flow.pageIndex, pageBands = new Map());
+      pageBands.set(band, bandReservePt);
+    }
     // The page's retained note advances in commit order (the page invariant).
     footnoteReserveByPage.set(state.flow.pageIndex, pageReservePt);
     continuations.forEach(({ id, cursor }) => pendingFootnoteContinuations.set(id, cursor));
