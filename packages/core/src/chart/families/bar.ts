@@ -906,8 +906,11 @@ export function renderBarChart(
   const catLabelRotation = catLabelRotationRad(chart);
   const wrappedColumnCategories: string[][] = [];
   // Height the inner category labels need beyond one line (measured wraps
-  // and authored breaks); it lowers the outer multi-level rows as well.
+  // and authored breaks) — reserved below the plot — and the part of it that
+  // comes from authored breaks alone, which lowers the outer multi-level rows.
+  // Width-wrapped text without breaks keeps its historical outer-row offset.
   let innerCategoryExtraH = 0;
+  let innerAuthoredExtraH = 0;
   if (!hasDataTable && !isH && !dateAxisPlan && !chart.catAxisHidden && catLabelsVisible(chart) && catLabelRotation === 0) {
     const slotW = pw / n;
     const wrapFontPx = chart.catAxisFontSizeHpt != null
@@ -936,6 +939,10 @@ export function renderBarChart(
     ctx.restore();
     const maxLines = Math.max(1, ...wrappedColumnCategories.map(lines => lines.length));
     if (maxLines > 1) innerCategoryExtraH = (maxLines - 1) * (wrapFontPx + 2);
+    innerAuthoredExtraH = authoredExtraLinesHeight(
+      cats.map(category => formatCategoryLabel(category, chart.catAxisFormatCode, chart.date1904)),
+      axisLabelLineHeightPx(wrapFontPx),
+    );
   } else if (!hasDataTable && !isH && !chart.catAxisHidden && catLabelsVisible(chart)) {
     // Date-axis and rotated column labels are not width-wrapped, but their
     // authored breaks still stack lines (perpendicular to rotated text).
@@ -952,6 +959,7 @@ export function renderBarChart(
       axisLabelLineHeightPx(labelFontPx),
       catLabelRotation,
     );
+    innerAuthoredExtraH = innerCategoryExtraH;
   }
   const manualInner = chart.plotAreaManualLayout?.layoutTarget === 'inner' &&
     chart.plotAreaManualLayout.w != null && chart.plotAreaManualLayout.h != null;
@@ -2072,10 +2080,10 @@ export function renderBarChart(
         }
         outerBoundaryIndices.add(n);
       }
-      // Rows below the inner labels start after the inner level's actual
-      // extent (wrapped or authored extra lines) and after every shallower
-      // outer level's authored extra lines.
-      const innerLabelExtraH = innerCategoryExtraH;
+      // Rows below the inner labels start after the inner level's authored
+      // extra lines and after every shallower outer level's authored extra
+      // lines (width wraps keep the historical single-line offset).
+      const innerLabelExtraH = innerAuthoredExtraH;
       const levelExtraH = categoryLevels.map((_level, levelIndex) => levelIndex === 0
         ? innerLabelExtraH
         : outerCategoryLevelExtraH(levelIndex, drawnCatTickFontPx));

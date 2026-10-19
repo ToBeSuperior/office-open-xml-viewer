@@ -894,6 +894,15 @@ pub(super) fn collect_dlbl_range_cache(ser_node: Node) -> std::collections::Hash
 /// plain text. `<a:fld type="CELLRANGE">` placeholders are substituted from
 /// `cellrange_cache`. Other field types and runs are concatenated; newlines
 /// come from paragraph breaks.
+/// Whether flattened chart text has content beyond authored line breaks.
+/// A title, label or text made only of `<a:br>`/paragraph breaks is absent,
+/// exactly like empty text, so presence gates (fallback titles, reserved
+/// bands) do not treat bare newlines as text.
+pub(super) fn chart_text_has_content(text: &str) -> bool {
+    text.chars()
+        .any(|character| character != '\n' && character != '\r')
+}
+
 pub(super) fn flatten_rich_text(rich_root: Node, cellrange_cache: Option<&str>) -> String {
     let mut out = String::new();
     let mut first_para = true;
@@ -1261,7 +1270,7 @@ pub(super) fn parse_axis_display_units(
         });
         let explicit_text = child(label, "tx")
             .map(|tx| flatten_rich_text(tx, None))
-            .filter(|text| !text.is_empty());
+            .filter(|text| chart_text_has_content(text));
         let text_paint = chart_text_paint([run_props], resolver);
         ChartDisplayUnitsLabel {
             text: explicit_text,

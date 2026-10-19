@@ -311,7 +311,11 @@ pub(super) fn parse_chart_title_rich_runs(
             }
         }
     }
-    (!runs.is_empty()).then_some(runs)
+    // Break-only runs (e.g. `<a:p><a:br/></a:p>`) are no title text, like
+    // empty text, so a synthesized fallback title is not hidden.
+    runs.iter()
+        .any(|run| chart_text_has_content(&run.text))
+        .then_some(runs)
 }
 
 /// Detect the source-shape boundary observed for Office's automatic light
@@ -435,7 +439,14 @@ pub(super) fn parse_chart_user_shapes(
                     ChartTextParagraph { runs, align }
                 })
                 .collect::<Vec<_>>();
-            if paragraphs.iter().all(|paragraph| paragraph.runs.is_empty()) {
+            // A box whose runs are only line breaks has no text, like a box
+            // with no runs.
+            if paragraphs.iter().all(|paragraph| {
+                paragraph
+                    .runs
+                    .iter()
+                    .all(|run| !run.text.is_empty() && !chart_text_has_content(&run.text))
+            }) {
                 return None;
             }
 

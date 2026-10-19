@@ -285,7 +285,7 @@ pub(super) fn extract_chart_title_text(node: Node) -> Option<String> {
             _ => {}
         }
     }
-    if text.chars().all(|character| character == '\n') {
+    if !chart_text_has_content(&text) {
         None
     } else {
         Some(text)
@@ -1072,7 +1072,7 @@ pub(super) fn chartex_text(container: Node) -> Option<String> {
         .find(|node| node.is_element() && node.tag_name().name() == "rich")
     {
         let text = flatten_rich_text(rich, None);
-        if !text.is_empty() {
+        if chart_text_has_content(&text) {
             return Some(text);
         }
     }

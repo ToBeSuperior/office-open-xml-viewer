@@ -1630,4 +1630,57 @@ Subtitle</a:t></a:r></a:p>
         );
         assert_eq!(runs[1].font_size_hpt, Some(1400));
     }
+
+    #[test]
+    fn break_only_titles_and_texts_are_absent() {
+        // A classic title made only of breaks is no title: the single-series
+        // fallback still applies and no rich runs reach the renderer.
+        let classic = format!(
+            r#"<c:chartSpace xmlns:c="{C_NS}" xmlns:a="{A_NS}"><c:chart>
+                <c:title><c:tx><c:rich><a:bodyPr/><a:p><a:br/></a:p><a:p/></c:rich></c:tx></c:title>
+                <c:plotArea><c:lineChart>
+                  <c:ser><c:idx val="0"/><c:tx><c:strRef><c:strCache><c:pt idx="0"><c:v>OnlySeries</c:v></c:pt></c:strCache></c:strRef></c:tx>
+                    <c:val><c:numRef><c:numCache><c:pt idx="0"><c:v>1</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser>
+                </c:lineChart></c:plotArea>
+              </c:chart></c:chartSpace>"#
+        );
+        let document = chart_space_of(&classic);
+        let model = parse_chart_part(
+            document.root_element(),
+            &ChartParseContext {
+                color_resolver: Some(&FixtureResolver),
+                ..Default::default()
+            },
+        )
+        .expect("chart");
+        assert_eq!(model.title.as_deref(), Some("OnlySeries"));
+        assert!(model.title_rich_runs.is_none());
+
+        // ChartEx chart and axis titles made only of breaks are absent.
+        let chartex = format!(
+            r#"<cx:chartSpace xmlns:cx="{CX_NS}" xmlns:a="{A_NS}">
+              <cx:chart><cx:title><cx:tx><cx:rich><a:bodyPr/><a:p><a:br/></a:p><a:p/></cx:rich></cx:tx></cx:title>
+              <cx:plotArea>
+                <cx:plotAreaRegion><cx:series layoutId="waterfall"/></cx:plotAreaRegion>
+                <cx:axis id="0"><cx:catScaling/><cx:title><cx:tx><cx:rich>
+                  <a:bodyPr/><a:p><a:br/></a:p></cx:rich></cx:tx></cx:title></cx:axis>
+              </cx:plotArea></cx:chart>
+            </cx:chartSpace>"#
+        );
+        let document = chart_space_of(&chartex);
+        let model = parse_chartex_part(
+            document.root_element(),
+            &ChartParseContext {
+                color_resolver: Some(&FixtureResolver),
+                ..Default::default()
+            },
+        )
+        .expect("ChartEx parse");
+        assert!(model.title.is_none());
+        assert!(model.cat_axis_title.is_none());
+
+        assert!(!chart_text_has_content("\n\r\n"));
+        assert!(!chart_text_has_content(""));
+        assert!(chart_text_has_content(" "));
+    }
 }

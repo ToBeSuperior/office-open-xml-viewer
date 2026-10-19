@@ -595,3 +595,23 @@ describe('authored breaks in chart text boxes and parsed <a:br> runs', () => {
     expect(b.y - a.y).toBeCloseTo(plainPitch, 6);
   });
 });
+
+describe('multi-level outer rows follow authored breaks only', () => {
+  it('width-wrapped inner labels without breaks keep the single-line outer-row offset', () => {
+    const long = 'aaaa bbbb cccc dddd eeee ffff gggg hhhh iiii jjjj kkkk llll mmmm';
+    const rec = render(model({
+      categories: [long, 'Beta'],
+      categoryLevels: [[long, 'Beta'], ['Group', '']],
+      plotAreaManualLayout: {
+        layoutTarget: 'inner', xMode: 'edge', yMode: 'edge', x: 0.1, y: 0.05, w: 0.85, h: 0.85,
+      },
+    }));
+    const inner = rec.labels.filter(entry => long.startsWith(entry.text) || long.includes(entry.text))
+      .filter(entry => entry.baseline === 'top' && entry.text !== 'Beta' && entry.text !== 'Group');
+    expect(inner.length).toBeGreaterThan(1); // the inner label really wraps
+    const firstInner = Math.min(...inner.map(entry => entry.y));
+    // rowHeight = 10 px font + 4: the historical offset, unaffected by wraps.
+    expect(label(rec, 'Group').y - firstInner).toBeCloseTo(14, 6);
+    expect(label(rec, 'Group').y + 10).toBeLessThanOrEqual(RECT.h);
+  });
+});
