@@ -300,6 +300,31 @@ describe('WMF text: Font object and DC state records', () => {
     expect(run.texts()[0].args).toEqual(['A', 0, 0]);
   });
 
+  it.each([
+    [100, 100], [100, -100], [-100, 100], [-100, -100],
+  ])('rotates Escapement by the mapping handedness and advances TA_UPDATECP along it (extents %i, %i)', (ex, ey) => {
+    // Device 100x100: sx = 100/ex, sy = 100/ey (each ±1). Escapement 900 is
+    // counterclockwise on the device when sx·sy > 0, clockwise otherwise.
+    const sx = 100 / ex;
+    const sy = 100 / ey;
+    const handedness = Math.sign(sx * sy);
+    const file = join(header(), record(0x020b, [...u16(0), ...u16(0)]), record(0x020c, [...u16(ey), ...u16(ex)]), bkMode(1),
+      font({ escapement: 900 }), select(0), textAlign(0x19), moveTo(10, 10),
+      textOut(0, 0, ascii('AB')), textOut(0, 0, ascii('C')), eof());
+    const run = play(file);
+    expect(run.unsupported).toEqual([]);
+    const rotations = run.ops.filter((op) => op.op === 'rotate').map((op) => op.args[0] as number);
+    expect(rotations).toHaveLength(2);
+    for (const angle of rotations) expect(angle).toBeCloseTo(-handedness * Math.PI / 2);
+    const origins = run.ops.filter((op) => op.op === 'translate').map((op) => op.args as number[]);
+    // First output at the current position; "AB" (20px) advances it 20px
+    // along the rotated baseline, i.e. up the device (−y) when counterclockwise.
+    expect(origins[0][0]).toBeCloseTo(10 * sx);
+    expect(origins[0][1]).toBeCloseTo(10 * sy);
+    expect(origins[1][0]).toBeCloseTo(10 * sx);
+    expect(origins[1][1]).toBeCloseTo(10 * sy - 20 * handedness);
+  });
+
   it('scales glyphs horizontally to a non-zero Width against the catalogued xAvgCharWidth', () => {
     // Times New Roman normal: xAvgCharWidth 821 / 2048 em.
     const run = play(picture(font({ face: 'Times New Roman', height: -2048, width: 1642 }), extText(0, 50, ascii('A'))));

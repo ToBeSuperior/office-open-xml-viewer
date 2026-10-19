@@ -553,11 +553,19 @@ export function drawWmfText(s: WmfTextState, out: WmfTextOutput): { drew: boolea
   const fontFor = (unit: TextUnit) =>
     css(unit.face === 'symbol' ? symbol : unit.face === 'substitute' ? substitute : authored)(emPx);
 
-  // Baseline direction: escapement in tenths of a degree, counterclockwise on
-  // the device. Logical lengths along / across it scale with the mapping.
+  // Baseline direction: escapement in tenths of a degree (sense below).
+  // Logical lengths along / across it scale with the mapping.
   const theta = (font.escapement / 10) * (Math.PI / 180);
   const cos = Math.cos(theta);
   const sin = Math.sin(theta);
+  // TrueType rotation follows the orientation of the logical coordinate
+  // system (MS-WMF 2.1.2.1 ClipPrecision, CLIP_LH_ANGLES; LOGFONT
+  // lfEscapement): counterclockwise on the device when the logical axes have
+  // the device's handedness (sx·sy > 0), clockwise when one axis is mirrored.
+  // Glyphs are never mirrored in GM_COMPATIBLE, so only the sense changes.
+  // `phi` is the Canvas rotation (y down) of the baseline.
+  const handedness = Math.sign(sx * sy) || 1;
+  const phi = theta === 0 ? 0 : -theta * handedness;
   const along = Math.hypot(cos * sx, sin * sy);
   const across = Math.hypot(sin * sx, cos * sy) * Math.sign(sy);
 
@@ -727,9 +735,9 @@ export function drawWmfText(s: WmfTextState, out: WmfTextOutput): { drew: boolea
     // Local frame: x along the baseline, y down, origin at the reference point.
     let ox = originX;
     let oy = originY;
-    if (theta !== 0) {
+    if (phi !== 0) {
       ctx.translate(originX, originY);
-      ctx.rotate(-theta);
+      ctx.rotate(phi);
       ox = 0;
       oy = 0;
     }
@@ -800,8 +808,10 @@ export function drawWmfText(s: WmfTextState, out: WmfTextOutput): { drew: boolea
     // TA_LEFT moves the current position past the string; TA_RIGHT moves it to
     // the string's start; TA_CENTER leaves it unchanged.
     const signed = horizontal === TA_RIGHT ? -total : total;
-    const dxDev = signed * cos + (horizontal === TA_RIGHT ? 0 : totalRise * sin);
-    const dyDev = -signed * sin + (horizontal === TA_RIGHT ? 0 : totalRise * cos);
+    // Local (along, across) → device through the same rotation as the glyphs.
+    const rise = horizontal === TA_RIGHT ? 0 : totalRise;
+    const dxDev = signed * Math.cos(phi) - rise * Math.sin(phi);
+    const dyDev = signed * Math.sin(phi) + rise * Math.cos(phi);
     s.currentX = refX + dxDev / sx;
     s.currentY = refY + dyDev / sy;
   }
