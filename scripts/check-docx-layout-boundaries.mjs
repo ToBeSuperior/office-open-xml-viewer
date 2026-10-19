@@ -2174,6 +2174,10 @@ function assertBodyKernelServiceOwner(root) {
   }
 }
 
+// `legacyDoc` is the public opt-in key for the optional binary DOC reader
+// (an input format, like `math` or `chartEx`), not a layout migration switch.
+const INPUT_FORMAT_OPTION_IDENTIFIERS = new Set(['legacyDoc']);
+
 const MIGRATION_IDENTIFIER = /(?:legacy|(?:use|enable|prefer|require)[a-z0-9]*(?:old|previous|alternate)[a-z0-9]*(?:engine|layout|path|algorithm)|(?:reuse|paint)enabled|requireslegacy|dryrun)/i;
 
 function matchingIdentifierCounts(root, predicate) {
@@ -2802,7 +2806,10 @@ function currentLegacyInventory(root) {
   return {
     version: 3,
     legacySymbolCounts: identifierCounts(root),
-    migrationIdentifierCounts: matchingIdentifierCounts(root, (name) => MIGRATION_IDENTIFIER.test(name)),
+    migrationIdentifierCounts: matchingIdentifierCounts(
+      root,
+      (name) => MIGRATION_IDENTIFIER.test(name) && !INPUT_FORMAT_OPTION_IDENTIFIERS.has(name),
+    ),
     rendererImportEdges: rendererImportEdges(root),
   };
 }
