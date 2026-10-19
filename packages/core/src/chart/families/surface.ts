@@ -62,6 +62,7 @@ import { strokeAxisSegment, axisTickLengthPx, valMinorGridStroke, catMinorGridSt
 import { measuredCartesianTitleBand, drawChartTitleForLayout } from '../shared/title.js';
 import { chartCategories } from '../category-spacing.js';
 import { MAX_CANVAS_MARKER_GRADIENT_STOPS, MAX_CANVAS_MARKER_PAINT_COMPONENTS } from '../shared/paint-limits.js';
+import { axisLabelLineHeightPx, fillAuthoredText } from '../chart-text-lines.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Surface / contour chart (ECMA-376 §21.2.2.204)
@@ -1391,10 +1392,12 @@ export function renderSurfaceChart(
     );
     const point = projection.project(front.x + anchor.fraction * front.w, floorY, nearDepth);
     ctx.textAlign = anchor.textAlign;
-    ctx.fillText(
+    fillAuthoredText(
+      ctx,
       categories[column] ?? '',
       point.x,
       point.y + categoryLabelOffsetPx(8, chart.catAxisLabelOffsetPercent),
+      axisLabelLineHeightPx(catFontPx),
     );
   }
 
@@ -1454,7 +1457,7 @@ export function renderSurfaceChart(
     ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
     for (let row = 0; row < rowCount; row++) {
       const point = projection.project(seriesAxisX, floorY, toDepth(row));
-      ctx.fillText(rows[row].name, point.x + 8, point.y);
+      fillAuthoredText(ctx, rows[row].name, point.x + 8, point.y, axisLabelLineHeightPx(seriesFontPx));
     }
   }
 
@@ -1484,10 +1487,12 @@ export function renderSurfaceChart(
       ctx.textBaseline = 'middle';
       for (const value of surfaceMajorLines) {
         const point = projection.project(valueAxisX, toValueY(value), nearDepth);
-        ctx.fillText(
+        fillAuthoredText(
+          ctx,
           formatChartValWithCode(value, chart.valAxisFormatCode, chart.date1904),
           point.x + (left ? -6 : 6),
           point.y,
+          axisLabelLineHeightPx(valFontPx),
         );
       }
     }

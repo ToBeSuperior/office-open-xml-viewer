@@ -33,6 +33,7 @@ import {
   axisTitleMargin,
   axisTitleRotationRad,
   axisTitleVerticalInsetPx,
+  axisTitleBreakThicknessPx,
   cartesianTitleBand,
   chartLegendBands,
   chartLegendReserve,
@@ -41,9 +42,11 @@ import {
   computeChartFrame,
   packLegendRows,
   resolveManualLayoutRect,
+  titleExtraLinesPx,
   type ChartAxisTitleSide,
 } from './layout.js';
 import { elideToWidth } from './text-elide.js';
+import { authoredExtraLinesHeight, authoredLineCount, authoredTextLines, axisLabelLineHeightPx, fillAuthoredText, measureAuthoredTextWidth } from './chart-text-lines.js';
 import { resolveThemeFontRef } from './shared/fonts.js';
 import { fitDataLabelLines, resolveDataLabelPlacement } from './data-label-layout.js';
 import { paintRichDataLabelBlock, resolveRichDataLabelBlock } from './rich-data-label.js';
@@ -1267,6 +1270,18 @@ function authoredCategoryRotation(chart: ChartModel): number | null {
   return raw / 60_000 * Math.PI / 180;
 }
 
+/** Line pitch of a 3-D legend entry's lines (the side legend's wrap pitch). */
+function threeDLegendLinePitch(fontPx: number): number {
+  return Math.max(fontPx * 1.2, 10);
+}
+
+/** Extra top/bottom legend row height for the tallest authored line block;
+ *  exactly 0 when no label contains a break. */
+function threeDLegendExtraRowHeight(labels: readonly string[], fontPx: number): number {
+  const lines = Math.max(1, ...labels.map(authoredLineCount));
+  return lines > 1 ? (lines - 1) * threeDLegendLinePitch(fontPx) : 0;
+}
+
 function drawAngledCategoryLabel(
   ctx: CanvasRenderingContext2D,
   label: string,
@@ -1275,14 +1290,19 @@ function drawAngledCategoryLabel(
   horizontal: boolean,
   outwardY = 1,
   offset = 6,
+  // Authored line breaks start new lines this far apart (outward from the
+  // axis when flat, perpendicular to rotated text and centred as a block).
+  lineHeightPx = 0,
 ): void {
   if (horizontal || rotation === 0) {
     ctx.textAlign = horizontal ? 'right' : 'center';
     ctx.textBaseline = horizontal ? 'middle' : outwardY < 0 ? 'bottom' : 'top';
-    ctx.fillText(
+    fillAuthoredText(
+      ctx,
       label,
       point.x + (horizontal ? -offset : 0),
       point.y + (horizontal ? 0 : outwardY * offset),
+      lineHeightPx,
     );
     return;
   }
@@ -1291,7 +1311,7 @@ function drawAngledCategoryLabel(
   ctx.rotate(rotation);
   ctx.textAlign = outwardY < 0 ? 'left' : 'right';
   ctx.textBaseline = 'middle';
-  ctx.fillText(label, 0, 0);
+  fillAuthoredText(ctx, label, 0, 0, lineHeightPx);
   ctx.restore();
 }
 
@@ -1624,18 +1644,23 @@ function titleAndPlot(
   orientation: 'vertical' | 'horizontal' | 'radial',
   shapeRotationDeg: number,
 ): { plot: ChartRect; legend: ChartRect | null; legendMeasure: ThreeDLegendMeasure } {
-  const band = cartesianTitleBand(chart, rect.h, ptToPx);
+  const baseBand = cartesianTitleBand(chart, rect.h, ptToPx);
+  // This painter draws the title text (rich runs included) as authored lines
+  // one font size apart; the shared band only reserves them for plain titles.
+  const band = chart.titleRichRuns?.length
+    ? { ...baseBand, bandH: baseBand.bandH + titleExtraLinesPx(chart.title, baseBand.fontPx) }
+    : baseBand;
   if (chart.title) {
     ctx.font = `${chart.titleFontBold === false ? '' : 'bold '}${band.fontPx}px ${elementFontFamily(chart, chart.titleFontFace)}`;
     ctx.fillStyle = chart.titleFontColor ? `#${chart.titleFontColor}` : '#111111';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
-    const measuredTitleWidth = ctx.measureText(chart.title).width;
+    const measuredTitleWidth = measureAuthoredTextWidth(ctx, chart.title);
     const automatic = {
       x: rect.x + (rect.w - measuredTitleWidth) / 2,
       y: rect.y + band.topPad,
       w: measuredTitleWidth,
-      h: Math.max(1, band.fontPx),
+      h: Math.max(1, band.fontPx) + titleExtraLinesPx(chart.title, band.fontPx),
     };
     const authored = chart.titleManualLayout
       ? resolveManualLayoutRect(
@@ -1644,10 +1669,12 @@ function titleAndPlot(
         automatic,
       )
       : null;
-    ctx.fillText(
+    fillAuthoredText(
+      ctx,
       chart.title,
       authored ? authored.x + authored.w / 2 : rect.x + rect.w / 2,
       authored?.y ?? automatic.y,
+      band.fontPx,
     );
   }
   const legendOverrides = threeDLegendOverrideMap(chart);
@@ -1664,11 +1691,12 @@ function titleAndPlot(
   const legendFontPx = Math.max(0, ...legendStyles.map(style => style.fontPx));
   const itemWidths = legendLabels.map((entry, index) => {
       ctx.font = legendStyles[index].font;
-      return 7 * ptToPx + 4 + ctx.measureText(entry.label).width;
+      return 7 * ptToPx + 4 + measureAuthoredTextWidth(ctx, entry.label);
     });
   const legendReserve = chartLegendReserve(chart, rect.w, rect.h, {
     itemWidths,
-    rowHeight: Math.max(legendFontPx * 1.45, 12),
+    rowHeight: Math.max(legendFontPx * 1.45, 12)
+      + threeDLegendExtraRowHeight(legendLabels.map(entry => entry.label), legendFontPx),
     itemGap: 12,
     horizontalPadding: 8,
     verticalPadding: 4,
@@ -1685,11 +1713,19 @@ function titleAndPlot(
   const leftTitleBand = orientation === 'horizontal'
     ? chart.catAxisTitle
       ? axisBands.catFontPx + catAxisTitleInset + axisTitleMargin(rect.w) + 4
+        + axisTitleBreakThicknessPx(
+          chart.catAxisTitle, axisBands.catFontPx, 'left',
+          chart.catAxisTitleRotation, chart.catAxisTitleVerticalMode,
+        )
       : 0
     : orientation === 'vertical' ? axisBands.valBandW : 0;
   const bottomTitleBand = orientation === 'horizontal'
     ? chart.valAxisTitle
       ? axisBands.valFontPx + valAxisTitleInset + axisTitleMargin(rect.h) + 4
+        + axisTitleBreakThicknessPx(
+          chart.valAxisTitle, axisBands.valFontPx, 'horizontal',
+          chart.valAxisTitleRotation, chart.valAxisTitleVerticalMode,
+        )
       : 0
     : orientation === 'vertical' ? axisBands.catBandH : 0;
   const frame = computeChartFrame(chart, rect.x, rect.y, rect.w, rect.h, ptToPx, {
@@ -1760,18 +1796,21 @@ function drawThreeDAxisTitle(
   ctx.save();
   ctx.font = `${italic ? 'italic ' : ''}${bold ? 'bold ' : ''}${fontSizePx}px ${fontCssFamily}`;
   ctx.fillStyle = color ? `#${color}` : '#555';
-  const label = manualLayout ? text : elideToWidth(ctx, text, maxPx);
+  // Authored breaks: one line per authored line, one font size apart, stacked
+  // perpendicular to the text and centred on the anchor.
+  const label = manualLayout ? text : authoredTitleText(ctx, text, maxPx);
   const rotation = axisTitleRotationRad(side, authoredRotation, authoredVerticalMode);
   let center = anchor;
   if (manualLayout) {
-    const textWidth = ctx.measureText(label).width;
+    const textWidth = measureAuthoredTextWidth(ctx, label);
+    const textHeight = fontSizePx + titleExtraLinesPx(label, fontSizePx);
     const cos = Math.abs(Math.cos(rotation));
     const sin = Math.abs(Math.sin(rotation));
     const automatic = {
-      x: anchor.x - (textWidth * cos + fontSizePx * sin) / 2,
-      y: anchor.y - (textWidth * sin + fontSizePx * cos) / 2,
-      w: textWidth * cos + fontSizePx * sin,
-      h: textWidth * sin + fontSizePx * cos,
+      x: anchor.x - (textWidth * cos + textHeight * sin) / 2,
+      y: anchor.y - (textWidth * sin + textHeight * cos) / 2,
+      w: textWidth * cos + textHeight * sin,
+      h: textWidth * sin + textHeight * cos,
     };
     const resolved = resolveManualLayoutRect(
       { ...manualLayout, w: undefined, h: undefined }, chartRect, automatic,
@@ -1782,8 +1821,17 @@ function drawThreeDAxisTitle(
   if (rotation) ctx.rotate(rotation);
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText(label, 0, 0);
+  fillAuthoredText(ctx, label, 0, 0, fontSizePx);
   ctx.restore();
+}
+
+/** Axis-title text elided per authored line (text without breaks is elided
+ *  whole, exactly as before). */
+function authoredTitleText(ctx: CanvasRenderingContext2D, text: string, maxPx: number): string {
+  const lines = authoredTextLines(text);
+  return lines.length === 1
+    ? elideToWidth(ctx, text, maxPx)
+    : lines.map(line => elideToWidth(ctx, line, maxPx)).join('\n');
 }
 
 /** Paint 3-D cartesian axis titles through the same authored font/orientation
@@ -1800,11 +1848,15 @@ function drawThreeDAxisTitles(
   if (chart.valAxisTitle) {
     const fontPx = axisTitleFontPx(chart.valAxisTitleFontSizeHpt, ptToPx);
     const side: ChartAxisTitleSide = horizontal ? 'horizontal' : 'left';
+    // A multi-line block's centre moves outward by half its extra thickness.
+    const extra = axisTitleBreakThicknessPx(
+      chart.valAxisTitle, fontPx, side, chart.valAxisTitleRotation, chart.valAxisTitleVerticalMode,
+    ) / 2;
     drawThreeDAxisTitle(
       ctx, chart.valAxisTitle, chartRect,
       horizontal
-        ? { x: plot.x + plot.w / 2, y: plot.y + plot.h + axisTitleMargin(chartRect.h) + fontPx / 2 }
-        : { x: plot.x - axisTitleMargin(chartRect.w) - fontPx / 2, y: plot.y + plot.h / 2 },
+        ? { x: plot.x + plot.w / 2, y: plot.y + plot.h + axisTitleMargin(chartRect.h) + fontPx / 2 + extra }
+        : { x: plot.x - axisTitleMargin(chartRect.w) - fontPx / 2 - extra, y: plot.y + plot.h / 2 },
       side, fontPx, chartFontFamily(chart, chart.valAxisTitleFontFace, 'major'), chart.valAxisTitleFontColor,
       chart.valAxisTitleFontBold ?? true, chart.valAxisTitleFontItalic ?? false,
       chart.valAxisTitleRotation, chart.valAxisTitleVerticalMode,
@@ -1814,11 +1866,14 @@ function drawThreeDAxisTitles(
   if (chart.catAxisTitle) {
     const fontPx = axisTitleFontPx(chart.catAxisTitleFontSizeHpt, ptToPx);
     const side: ChartAxisTitleSide = horizontal ? 'left' : 'horizontal';
+    const extra = axisTitleBreakThicknessPx(
+      chart.catAxisTitle, fontPx, side, chart.catAxisTitleRotation, chart.catAxisTitleVerticalMode,
+    ) / 2;
     drawThreeDAxisTitle(
       ctx, chart.catAxisTitle, chartRect,
       horizontal
-        ? { x: plot.x - axisTitleMargin(chartRect.w) - fontPx / 2, y: plot.y + plot.h / 2 }
-        : { x: plot.x + plot.w / 2, y: plot.y + plot.h + axisTitleMargin(chartRect.h) + fontPx / 2 },
+        ? { x: plot.x - axisTitleMargin(chartRect.w) - fontPx / 2 - extra, y: plot.y + plot.h / 2 }
+        : { x: plot.x + plot.w / 2, y: plot.y + plot.h + axisTitleMargin(chartRect.h) + fontPx / 2 + extra },
       side, fontPx, chartFontFamily(chart, chart.catAxisTitleFontFace, 'major'), chart.catAxisTitleFontColor,
       chart.catAxisTitleFontBold ?? true, chart.catAxisTitleFontItalic ?? false,
       chart.catAxisTitleRotation, chart.catAxisTitleVerticalMode,
@@ -1933,10 +1988,12 @@ function drawThreeDSeriesAxis(
       ctx.stroke();
     }
     if (spec.tickLabelPos !== 'none' && seriesIndex % labelSkip === 0) {
-      ctx.fillText(
+      fillAuthoredText(
+        ctx,
         chart.series[seriesIndex].name || `Series ${seriesIndex + 1}`,
         point.x + normal.x * (6 * ptToPx + 3),
         point.y + normal.y * (6 * ptToPx + 3),
+        axisLabelLineHeightPx(fontPx),
       );
     }
   }
@@ -1944,13 +2001,21 @@ function drawThreeDSeriesAxis(
 
   if (spec.title) {
     const titleFontPx = axisTitleFontPx(spec.titleFontSizeHpt, ptToPx);
+    // Clear the series labels' extra authored lines, and move a multi-line
+    // title block outward by half its extra lines.
+    const outward = fontPx + titleFontPx + 12
+      + authoredExtraLinesHeight(
+        chart.series.map((series, index) => series.name || `Series ${index + 1}`),
+        axisLabelLineHeightPx(fontPx),
+      )
+      + titleExtraLinesPx(spec.title, titleFontPx) / 2;
     drawThreeDAxisTitle(
       ctx,
       spec.title,
       chartRect,
       {
-        x: midpoint.x + normal.x * (fontPx + titleFontPx + 12),
-        y: midpoint.y + normal.y * (fontPx + titleFontPx + 12),
+        x: midpoint.x + normal.x * outward,
+        y: midpoint.y + normal.y * outward,
       },
       'horizontal',
       titleFontPx,
@@ -2280,8 +2345,11 @@ function simpleLegend(
       );
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
-  const row = Math.max(Math.max(0, ...entryStyles.map(style => style.fontPx)) * 1.45, 12);
-  const key = Math.min(7 * ptToPx, row * 0.7);
+  const legendFontPx = Math.max(0, ...entryStyles.map(style => style.fontPx));
+  const singleLineRow = Math.max(legendFontPx * 1.45, 12);
+  const key = Math.min(7 * ptToPx, singleLineRow * 0.7);
+  // A top/bottom row grows by the tallest entry's extra authored lines.
+  const row = singleLineRow + threeDLegendExtraRowHeight(entries.map(entry => entry.label), legendFontPx);
   const horizontal = chart.legendPos === 't' || chart.legendPos === 'b'
     || (chart.legendManualLayout != null && bounds.w >= bounds.h);
   if (horizontal) {
@@ -2289,7 +2357,7 @@ function simpleLegend(
       ? measured.itemWidths
       : entries.map((entry, index) => {
           ctx.font = entryStyles[index].font;
-          return key + 4 + ctx.measureText(entry.label).width;
+          return key + 4 + measureAuthoredTextWidth(ctx, entry.label);
         });
     const rows = packLegendRows(itemWidths, Math.max(1, bounds.w - 8), 12);
     const visibleRows = rows.slice(
@@ -2319,7 +2387,10 @@ function simpleLegend(
           itemX, rowY, key, ptToPx, shapeRotationDeg, categoryDriven,
         );
         ctx.fillStyle = textStyle.color;
-        ctx.fillText(elideToWidth(ctx, entry.label, available), itemX + key + 4, rowY);
+        fillAuthoredText(
+          ctx, entry.label, itemX + key + 4, rowY,
+          threeDLegendLinePitch(textStyle.fontPx), available,
+        );
         itemX += widths[position] + 12;
       }
       rowY += row;
@@ -2334,15 +2405,21 @@ function simpleLegend(
     const textX = bounds.x + 8 + key;
     const availableTextWidth = Math.max(0, bounds.x + bounds.w - 4 - textX);
     const lineHeight = Math.max(textStyle.fontPx * 1.2, 10);
-    const lines = fitDataLabelLines(
-      entry.label,
+    // Each authored line gets its own one-line (category) or two-line
+    // (series) wrap budget, so a long line cannot consume a later line's.
+    const authoredLines = authoredTextLines(entry.label);
+    const fitLine = (text: string): string[] => fitDataLabelLines(
+      text,
       availableTextWidth,
       lineHeight * (categoryDriven ? 1 : 2),
       lineHeight,
       value => ctx.measureText(value).width,
     );
+    const lines = authoredLines.length === 1
+      ? fitLine(entry.label)
+      : authoredLines.flatMap(fitLine);
     if (lines.length === 0) continue;
-    const itemHeight = Math.max(row, lines.length * lineHeight + 2);
+    const itemHeight = Math.max(singleLineRow, lines.length * lineHeight + 2);
     if (rowTop + itemHeight > bounds.y + bounds.h + 1e-6) break;
     const cy = rowTop + itemHeight / 2;
     const lineKey = !categoryDriven && chart.chartType.toLowerCase().includes('line');
@@ -4381,7 +4458,7 @@ function renderCartesian(
       const point = horizontal
         ? projection.project(front.x + axis.fraction(value) * front.w, axisY, axisDepth)
         : projection.project(axisX, front.y + front.h - axis.fraction(value) * front.h, axisDepth);
-      ctx.fillText(formatChartValWithCode(
+      fillAuthoredText(ctx, formatChartValWithCode(
         percent
           ? value / 100
           : displayUnitDivisor != null
@@ -4391,7 +4468,8 @@ function renderCartesian(
             : value,
         percent ? chart.valAxisFormatCode ?? '0%' : chart.valAxisFormatCode,
         chart.date1904,
-      ), point.x + labelNormal.x * labelOffset, point.y + labelNormal.y * labelOffset);
+      ), point.x + labelNormal.x * labelOffset, point.y + labelNormal.y * labelOffset,
+      axisLabelLineHeightPx(valueFontPx));
     }
   }
   const categoryFontPx = chartTextFontSizePx(chart.catAxisFontSizeHpt, ptToPx) ?? 9 * ptToPx;
@@ -4431,7 +4509,7 @@ function renderCartesian(
           );
           previous = current;
         }
-        const widest = Math.max(0, ...formattedCategories.map(label => ctx.measureText(label).width));
+        const widest = Math.max(0, ...formattedCategories.map(label => measureAuthoredTextWidth(ctx, label)));
         // Office automatically angles dense cartesian 3-D category labels.
         // The boundary corpus repeats a -45° choice once a horizontal label
         // no longer fits between adjacent projected tick positions. Explicit
@@ -4460,10 +4538,12 @@ function renderCartesian(
         const onScreenLeft = axisMidpoint.x <= sceneMidpoint.x;
         ctx.textAlign = onScreenLeft ? 'right' : 'left';
         ctx.textBaseline = 'middle';
-        ctx.fillText(
+        fillAuthoredText(
+          ctx,
           formattedCategories[categoryIndex],
           point.x + (onScreenLeft ? -labelOffset : labelOffset),
           point.y,
+          axisLabelLineHeightPx(categoryFontPx),
         );
       } else {
         const sceneMidpoint = projection.project(
@@ -4485,6 +4565,7 @@ function renderCartesian(
           horizontal,
           outward.y < 0 ? -1 : 1,
           labelOffset,
+          axisLabelLineHeightPx(categoryFontPx),
         );
       }
     }

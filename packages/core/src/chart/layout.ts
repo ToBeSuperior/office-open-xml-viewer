@@ -24,6 +24,7 @@
 import type { ChartManualLayout, ChartModel } from '../types/chart';
 import { EMU_PER_PT } from '../units.js';
 import { categoryLabelOffsetPx } from './category-spacing';
+import { authoredExtraLinesHeight } from './chart-text-lines.js';
 
 // ─── Public types ────────────────────────────────────────────────────────────
 
@@ -213,7 +214,7 @@ export function chartTitleBand(
   // Font-proportional top inset, clamped so the title never overflows the band.
   const topPad = Math.min(Math.max(0, bandH - fontPx), fontPx * TITLE_TOP_PAD_FONT_FRAC);
   const bottomPad = bandH - fontPx - topPad;
-  return { fontPx, topPad, bottomPad, bandH };
+  return withPlainTitleBreaks(chart, { fontPx, topPad, bottomPad, bandH });
 }
 
 // ─── Legend reserve ──────────────────────────────────────────────────────────
@@ -313,6 +314,38 @@ export function axisTitleVerticalInsetPx(
 
 export type ChartAxisTitleSide = 'left' | 'right' | 'horizontal';
 
+/** Extra height of a title's authored lines beyond the first. Title lines
+ *  advance by one font size, as the rich-text title line boxes do. */
+export function titleExtraLinesPx(text: string | null | undefined, fontPx: number): number {
+  return text ? authoredExtraLinesHeight([text], fontPx) : 0;
+}
+
+/** Plain (run-less) chart-title text with authored breaks is painted as
+ *  stacked lines; grow the band by the extra lines below the unchanged top
+ *  pad. Rich-run titles are measured by `measuredCartesianTitleBand`. */
+function withPlainTitleBreaks(chart: ChartModel, band: ChartTitleBand): ChartTitleBand {
+  if (chart.titleRichRuns?.length) return band;
+  const extra = titleExtraLinesPx(chart.title, band.fontPx);
+  return extra > 0 ? { ...band, bandH: band.bandH + extra } : band;
+}
+
+/** How much an axis title's authored extra lines thicken its gutter band. The
+ *  lines stack perpendicular to the (possibly rotated) text, so a bottom
+ *  band grows by the vertical and a side band by the horizontal component.
+ *  Exactly 0 without breaks. */
+export function axisTitleBreakThicknessPx(
+  text: string | null | undefined,
+  fontPx: number,
+  side: ChartAxisTitleSide,
+  authoredRotation: number | null | undefined,
+  authoredVerticalMode?: ChartModel['catAxisTitleVerticalMode'],
+): number {
+  const extra = titleExtraLinesPx(text, fontPx);
+  if (extra === 0) return 0;
+  const rotation = axisTitleRotationRad(side, authoredRotation, authoredVerticalMode);
+  return extra * Math.abs(side === 'horizontal' ? Math.cos(rotation) : Math.sin(rotation));
+}
+
 /** Resolve the title's paint rotation. DrawingML `ST_Angle` is expressed in
  *  60000ths of a degree; any explicit `bodyPr@rot`/`bodyPr@vert` value has
  *  priority. With no authoring, both vertical value-axis titles read
@@ -386,9 +419,17 @@ export function chartAxisTitleBands(
     valFontPx,
     catBandH: chart.catAxisTitle
       ? catFontPx + catTextInsetPx + axisTitleMargin(h) + 4
+        + axisTitleBreakThicknessPx(
+          chart.catAxisTitle, catFontPx, 'horizontal',
+          chart.catAxisTitleRotation, chart.catAxisTitleVerticalMode,
+        )
       : 0,
     valBandW: chart.valAxisTitle
       ? valFontPx + valTextInsetPx + axisTitleMargin(w) + 4
+        + axisTitleBreakThicknessPx(
+          chart.valAxisTitle, valFontPx, 'left',
+          chart.valAxisTitleRotation, chart.valAxisTitleVerticalMode,
+        )
       : 0,
   };
 }
@@ -467,7 +508,7 @@ export function cartesianTitleBand(
   const bandH = fontPx * bandFrac;
   const topPad = Math.min(Math.max(0, bandH - fontPx), fontPx * TITLE_TOP_PAD_FONT_FRAC);
   const bottomPad = bandH - fontPx - topPad;
-  return { fontPx, topPad, bottomPad, bandH };
+  return withPlainTitleBreaks(chart, { fontPx, topPad, bottomPad, bandH });
 }
 
 /** Total bottom band (px) reserved for one row of horizontal category tick
@@ -522,10 +563,15 @@ export function chartManualOuterAxisInsets(metrics: Readonly<{
   valTitleBandW: number;
   catTitleBandH: number;
   secondaryBandW?: number;
+  /** Extra rise of the top value label block above its single-line half
+   *  height (authored line breaks); 0 when absent. */
+  valLabelExtraTopPx?: number;
 }>): ChartPad {
   const outerMargin = metrics.outerTextMarginPx ?? 0;
   return {
-    t: metrics.valAxisHidden ? 0 : metrics.valLabelFontPx / 2 + outerMargin,
+    t: metrics.valAxisHidden
+      ? 0
+      : metrics.valLabelFontPx / 2 + (metrics.valLabelExtraTopPx ?? 0) + outerMargin,
     r: (metrics.secondaryBandW ?? 0) > 0
       ? (metrics.secondaryBandW ?? 0) + outerMargin
       : 0,

@@ -1,6 +1,7 @@
 // Classic chart title helpers.
 import type { ChartModel, ChartTextRun } from '../../types/chart';
-import { cartesianTitleBand, chartTextFontSizePx, resolveManualLayoutRect } from '../layout.js';
+import { cartesianTitleBand, chartTextFontSizePx, resolveManualLayoutRect, titleExtraLinesPx } from '../layout.js';
+import { fillAuthoredText, measureAuthoredTextWidth } from '../chart-text-lines.js';
 import type { ChartTitleBand } from '../layout.js';
 import { rawLinkedChartStyleRole } from '../effective-style.js';
 import { paintChartLabelBox } from '../label-box.js';
@@ -154,14 +155,16 @@ function drawChartTitle(
     ctx.fillStyle = chart.titleFontColor ? `#${chart.titleFontColor}` : '#333';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
-    const measuredWidth = Math.min(w, ctx.measureText(chart.title).width);
+    // Authored breaks stack lines one font size apart (the rich-title line
+    // pitch) below the first; the band reserved them (`withPlainTitleBreaks`).
+    const measuredWidth = Math.min(w, measureAuthoredTextWidth(ctx, chart.title));
     paintChartLabelBox(ctx, titleBox, {
       x: x + (w - measuredWidth) / 2,
       y,
       w: measuredWidth,
-      h: fontSize * 1.2,
+      h: fontSize * 1.2 + titleExtraLinesPx(chart.title, fontSize),
     }, titlePtToPx);
-    ctx.fillText(chart.title, x + w / 2, y);
+    fillAuthoredText(ctx, chart.title, x + w / 2, y, fontSize);
     return;
   }
   ctx.save();
@@ -218,7 +221,7 @@ export function drawChartTitleForLayout(
       x: x + (w - autoWidth) / 2,
       y: defaultY,
       w: autoWidth,
-      h: fontSize,
+      h: fontSize + (chart.titleRichRuns?.length ? 0 : titleExtraLinesPx(chart.title, fontSize)),
     };
     const resolved = resolveManualLayoutRect(
       { ...ml, w: undefined, h: undefined },
