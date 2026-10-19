@@ -43,6 +43,7 @@ import {
 import { officeFaceWebAlias } from '../fonts/font-stack.js';
 import { classifyFontGeneric, cjkFallbackChain, type CjkLang } from '../fonts/scripts.js';
 import { quoteCssFontFamily } from '../internal/css-font-family.js';
+import { buildVisualOrder, getDefaultBidiEngine, hasStrongRtl } from '../text/bidi/index.js';
 import { referenceFontDecoration } from '../text/font-decoration.js';
 import { DECORATION_LINE_WIDTH_EM, STRIKE_RISE_EM } from '../text/underline.js';
 
@@ -405,8 +406,9 @@ export interface WmfTextState {
   bkMode: number;
   textAlign: number;
   charExtra: number;
-  breakExtra: number;
   breakCount: number;
+  breakQuotientPx: number;
+  breakErrorPx: number;
   currentX: number;
   currentY: number;
   currentPositionKnown: boolean;
@@ -430,6 +432,11 @@ export function drawWmfText(s: WmfTextState, out: WmfTextOutput): { drew: boolea
   const sy = s.vpH / s.extY;
   if (!s.haveExt) return { problem: 'logical mapping undefined' };
   if (!(Number.isFinite(sx) && Number.isFinite(sy) && sx !== 0 && sy !== 0)) return { problem: 'degenerate mapping' };
+  if (out.bytes.length === 0) {
+    // An empty string draws nothing but the ETO_OPAQUE rectangle.
+    const opaqued = out.rect !== null && (out.options & ETO_OPAQUE) !== 0 && paintOpaqueRect(s, out.rect);
+    return { drew: opaqued };
+  }
   const font = s.curFont;
   if (!font) return { problem: 'no font selected' };
   if (!font.valid) return { problem: 'malformed font' };
@@ -477,15 +484,13 @@ export function drawWmfText(s: WmfTextState, out: WmfTextOutput): { drew: boolea
   const across = Math.hypot(sin * sx, cos * sy) * Math.sign(sy);
 
   // Advances along the baseline (device px) and perpendicular offsets.
-  // SetTextCharacterExtra / SetTextJustification work in integer logical
-  // units: CharExtra is added to every character; BreakExtra is divided
-  // among the BreakCount break characters, each receiving the integer
-  // quotient and the first (BreakExtra mod BreakCount) of them one more unit.
+  // CharExtra (MS-WMF 2.3.5.25) is transformed to device units and rounded;
+  // the justification quotient and its carried error were rounded the same
+  // way when META_SETTEXTJUSTIFICATION was played.
   const pdy = (out.options & ETO_PDY) !== 0;
-  const breakQuotient = s.breakCount > 0 ? Math.trunc(s.breakExtra / s.breakCount) : 0;
-  let breakRemainder = s.breakCount > 0 ? s.breakExtra - breakQuotient * s.breakCount : 0;
-  const justified = s.breakCount > 0 && s.breakExtra !== 0;
-  const spaced = out.dx !== null || s.charExtra !== 0 || justified;
+  const charExtraPx = Math.round(s.charExtra * along);
+  const justified = s.breakCount > 0 && (s.breakQuotientPx !== 0 || s.breakErrorPx !== 0);
+  const spaced = out.dx !== null || charExtraPx !== 0 || justified;
   // Widths are measured lazily and once per distinct (font, text): a long
   // string costs at most one measurement per distinct character or run.
   const widths = new Map<string, number>();
@@ -502,7 +507,7 @@ export function drawWmfText(s: WmfTextState, out: WmfTextOutput): { drew: boolea
 
   // Draw groups: one Canvas call per run of same-face units when the natural
   // advances apply, else one call per character at its own pen position.
-  interface Group { text: string; font: string; pen: number; rise: number; advance: number }
+  interface Group { text: string; font: string; pen: number; rise: number; advance: number; x: number; level: number }
   const groups: Group[] = [];
   let pen = 0;
   let rise = 0;
@@ -511,15 +516,14 @@ export function drawWmfText(s: WmfTextState, out: WmfTextOutput): { drew: boolea
     if (!spaced) {
       const last = groups.at(-1);
       if (last && last.font === unitFont) last.text += unit.text;
-      else groups.push({ text: unit.text, font: unitFont, pen: 0, rise: 0, advance: 0 });
+      else groups.push({ text: unit.text, font: unitFont, pen: 0, rise: 0, advance: 0, x: 0, level: 0 });
       continue;
     }
-    let logical = s.charExtra;
+    let advance = charExtraPx;
     if (justified && unit.count === 1 && out.bytes[unit.start] === 0x20) {
-      logical += breakQuotient;
-      if (breakRemainder > 0) { logical += 1; breakRemainder -= 1; }
+      advance += s.breakQuotientPx;
+      if (s.breakErrorPx > 0) { advance += 1; s.breakErrorPx -= 1; }
     }
-    let advance = logical * along;
     let unitRise = 0;
     if (out.dx) {
       for (let b = unit.start; b < unit.start + unit.count; b++) {
@@ -529,7 +533,7 @@ export function drawWmfText(s: WmfTextState, out: WmfTextOutput): { drew: boolea
     } else {
       advance += measure(unit.text, unitFont);
     }
-    groups.push({ text: unit.text, font: unitFont, pen, rise, advance });
+    groups.push({ text: unit.text, font: unitFont, pen, rise, advance, x: 0, level: 0 });
     pen += advance;
     rise += unitRise;
   }
@@ -547,6 +551,34 @@ export function drawWmfText(s: WmfTextState, out: WmfTextOutput): { drew: boolea
   const total = pen;
   const totalRise = rise;
 
+  // Visual order (UAX #9, as ExtTextOut lays out bidi runs): each cell keeps
+  // its own logical advance; RTL runs are placed right to left as wholes,
+  // so European digits inside Hebrew keep their left-to-right order.
+  let order = groups.map((_, index) => index);
+  if (groups.length > 1) {
+    const logicalText = groups.map((group) => group.text).join('');
+    if (rtl || hasStrongRtl(logicalText)) {
+      const engine = getDefaultBidiEngine();
+      const { levels, paragraphLevel } = engine.computeLevels(logicalText, rtl ? 'rtl' : 'ltr');
+      const starts: number[] = [];
+      let offset = 0;
+      for (const group of groups) { starts.push(offset); offset += group.text.length; }
+      const visual = buildVisualOrder(levels, paragraphLevel, starts);
+      order = visual.order;
+      groups.forEach((group, index) => {
+        group.level = visual.segLevels[index];
+        // UAX #9 L4: a lone mirrored character at an RTL level.
+        const chars = [...group.text];
+        const mirrored = chars.length === 1 && (group.level & 1) ? engine.getMirror(chars[0].codePointAt(0)!) : null;
+        if (mirrored !== null) group.text = String.fromCodePoint(mirrored);
+      });
+    }
+  }
+  {
+    let x = 0;
+    for (const index of order) { groups[index].x = x; x += groups[index].advance; }
+  }
+
   const useCp = useCpFlag;
   const refX = useCp ? s.currentX : out.x;
   const refY = useCp ? s.currentY : out.y;
@@ -558,18 +590,12 @@ export function drawWmfText(s: WmfTextState, out: WmfTextOutput): { drew: boolea
     ? referenceFontDecoration(font.face, weight, font.italic ? 'italic' : 'normal')
     : null;
 
+  let opaqued = false;
   ctx.save();
   try {
     if (out.rect && (out.options & (ETO_OPAQUE | ETO_CLIPPED))) {
-      const [l, t, r, b] = out.rect;
-      const ax = s.vpX + (l - s.orgX) * sx; const bx = s.vpX + (r - s.orgX) * sx;
-      const ay = s.vpY + (t - s.orgY) * sy; const by = s.vpY + (b - s.orgY) * sy;
-      const rx = Math.min(ax, bx); const ry = Math.min(ay, by);
-      const rw = Math.abs(bx - ax); const rh = Math.abs(by - ay);
-      if (out.options & ETO_OPAQUE) {
-        ctx.fillStyle = s.bkColor;
-        ctx.fillRect(rx, ry, rw, rh);
-      }
+      const [rx, ry, rw, rh] = deviceRect(s, out.rect);
+      if (out.options & ETO_OPAQUE) opaqued = paintOpaqueRect(s, out.rect);
       if (out.options & ETO_CLIPPED) {
         ctx.beginPath();
         ctx.rect(rx, ry, rw, rh);
@@ -587,7 +613,7 @@ export function drawWmfText(s: WmfTextState, out: WmfTextOutput): { drew: boolea
     }
     // Each character cell (or same-face run) sits at its own advance and,
     // with ETO_PDY, its own vertical offset.
-    const cellX = (group: Group) => ox + x0 + (rtl ? total - group.pen - group.advance : group.pen);
+    const cellX = (group: Group) => ox + x0 + group.x;
     if (s.bkMode === OPAQUE) {
       ctx.fillStyle = s.bkColor;
       for (const group of groups) {
@@ -597,10 +623,10 @@ export function drawWmfText(s: WmfTextState, out: WmfTextOutput): { drew: boolea
     ctx.fillStyle = s.textColor;
     ctx.textAlign = 'left';
     ctx.textBaseline = 'alphabetic';
-    ctx.direction = rtl ? 'rtl' : 'ltr';
     for (const group of groups) {
       if (!group.text) continue;
       const gx = cellX(group);
+      ctx.direction = groups.length === 1 ? (rtl ? 'rtl' : 'ltr') : (group.level & 1 ? 'rtl' : 'ltr');
       const gy = oy + baseline + group.rise;
       ctx.font = group.font;
       if (hScale === 1) {
@@ -620,14 +646,15 @@ export function drawWmfText(s: WmfTextState, out: WmfTextOutput): { drew: boolea
       const underlineTop = decoration ? decoration.underlineTopEm * emPx : Math.max(2, thickness);
       const strikeTop = decoration ? decoration.strikeTopEm * emPx : -STRIKE_RISE_EM * emPx - strike / 2;
       // One rule per baseline height: adjacent cells sharing a rise merge.
+      const visual = order.map((index) => groups[index]);
       let start = 0;
-      while (start < groups.length) {
+      while (start < visual.length) {
         let end = start + 1;
-        while (end < groups.length && groups[end].rise === groups[start].rise) end++;
-        const first = groups[start];
-        const last = groups[end - 1];
-        const from = rtl ? total - last.pen - last.advance : first.pen;
-        const width = last.pen + last.advance - first.pen;
+        while (end < visual.length && visual[end].rise === visual[start].rise) end++;
+        const first = visual[start];
+        const last = visual[end - 1];
+        const from = first.x;
+        const width = last.x + last.advance - first.x;
         if (width > 0) {
           const y = oy + baseline + first.rise;
           if (font.underline) ctx.fillRect(ox + x0 + from, y + underlineTop, width, thickness);
@@ -649,5 +676,23 @@ export function drawWmfText(s: WmfTextState, out: WmfTextOutput): { drew: boolea
     s.currentX = refX + dxDev / sx;
     s.currentY = refY + dyDev / sy;
   }
-  return { drew: units.length > 0 };
+  return { drew: units.length > 0 || opaqued };
+}
+
+function deviceRect(s: WmfTextState, rect: readonly [number, number, number, number]): [number, number, number, number] {
+  const sx = s.vpW / s.extX;
+  const sy = s.vpH / s.extY;
+  const [l, t, r, b] = rect;
+  const ax = s.vpX + (l - s.orgX) * sx; const bx = s.vpX + (r - s.orgX) * sx;
+  const ay = s.vpY + (t - s.orgY) * sy; const by = s.vpY + (b - s.orgY) * sy;
+  return [Math.min(ax, bx), Math.min(ay, by), Math.abs(bx - ax), Math.abs(by - ay)];
+}
+
+/** ETO_OPAQUE fills the rectangle with the background color; it needs no font. */
+function paintOpaqueRect(s: WmfTextState, rect: readonly [number, number, number, number]): boolean {
+  const [x, y, w, h] = deviceRect(s, rect);
+  if (!(w > 0 && h > 0)) return false;
+  s.ctx.fillStyle = s.bkColor;
+  s.ctx.fillRect(x, y, w, h);
+  return true;
 }

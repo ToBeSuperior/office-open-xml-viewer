@@ -228,6 +228,24 @@ describe('WMF text: Font object and DC state records', () => {
     expect(run.texts().map((op) => op.args[1])).toEqual([0, 10, 23, 33, 46, 56, 68]);
   });
 
+  it('carries the justification error across text outputs until the next SETTEXTJUSTIFICATION', () => {
+    // BreakExtra 1 over BreakCount 2: only the first break character, in
+    // either output, receives the extra unit.
+    const run = play(picture(font(), record(0x020a, [...u16(2), ...u16(1)]),
+      extText(0, 50, ascii(' A')), extText(0, 60, ascii(' A'))));
+    expect(run.texts().map((op) => op.args)).toEqual([[' ', 0, 50], ['A', 11, 50], [' A', 0, 60]]);
+  });
+
+  it('rounds the transformed CharExtra and BreakExtra to device pixels', () => {
+    // Window 100 → 60px: CharExtra 1 is 0.6px → 1px; BreakExtra 3 over 1 is 1.8px → 2px.
+    const file = join(header(), windowExt(100, 100), bkMode(1), font({ height: -20 }), select(0), textAlign(0x18),
+      record(0x0108, u16(1)), record(0x020a, [...u16(1), ...u16(3)]), extText(0, 50, ascii(' AB')), eof());
+    const mock = context();
+    playWmf(file, mock.ctx, 60, 60);
+    // 20 logical → 12px em; advances 6px + 1px CharExtra (+2px for the space).
+    expect(mock.texts().map((op) => op.args[1])).toEqual([0, 9, 16]);
+  });
+
   it('measures and paints with kerning disabled, as GDI text output does', () => {
     // Right-aligned "AV": the unkerned width is 20px, so it starts at 20.
     const run = play(picture(font(), textAlign(0x1a), extText(40, 50, ascii('AV'))));
@@ -322,15 +340,37 @@ describe('WMF text: META_EXTTEXTOUT options and Dx', () => {
     expect(ops[0].fill).toBe('#0000ff');
   });
 
-  it('lays out right-to-left reading order from the far edge', () => {
+  it('orders Dx cells by bidi runs, keeping digits left-to-right inside Hebrew', () => {
+    // Hebrew (code page 1255) alef, bet, then "12"; Dx in logical order.
+    const bytes = [0xe0, 0xe1, 0x31, 0x32];
+    const dx = { dx: [10, 20, 30, 40] };
     for (const file of [
-      picture(font(), extText(0, 50, ascii('AB'), { options: 0x0080, dx: [10, 30] })),
-      picture(font(), textAlign(0x118), extText(0, 50, ascii('AB'), { dx: [10, 30] })),
+      picture(font({ charset: 177 }), extText(0, 50, bytes, { options: 0x0080, ...dx })),
+      picture(font({ charset: 177 }), textAlign(0x118), extText(0, 50, bytes, dx)),
     ]) {
       const run = play(file);
-      expect(run.texts().map((op) => op.args)).toEqual([['A', 30, 50], ['B', 0, 50]]);
-      expect(run.texts()[0].direction).toBe('rtl');
+      // RTL paragraph: "12" (as a left-to-right run) left of bet, alef.
+      expect(run.texts().map((op) => op.args)).toEqual([['א', 90, 50], ['ב', 70, 50], ['1', 0, 50], ['2', 30, 50]]);
     }
+    // LTR paragraph: digits after Hebrew resolve to a higher level (UAX #9
+    // I1), so the same visual order results; Latin before Hebrew stays left.
+    const ltr = play(picture(font({ charset: 177 }), extText(0, 50, [0x41, 0xe0, 0xe1], { dx: [10, 20, 30] })));
+    expect(ltr.texts().map((op) => op.args)).toEqual([['A', 0, 50], ['א', 40, 50], ['ב', 10, 50]]);
+    // A Latin run in an RTL paragraph keeps its own order; a lone RTL
+    // parenthesis is mirrored (UAX #9 L4).
+    const latin = play(picture(font(), extText(0, 50, ascii('AB'), { options: 0x0080, dx: [10, 30] })));
+    expect(latin.texts().map((op) => op.args)).toEqual([['A', 0, 50], ['B', 10, 50]]);
+    const paren = play(picture(font({ charset: 177 }), extText(0, 50, [0x28, 0xe0], { options: 0x0080, dx: [10, 10] })));
+    expect(paren.texts().map((op) => op.args[0])).toEqual([')', 'א']);
+  });
+
+  it('reports an empty ETO_OPAQUE output as drawn, without needing a font', () => {
+    const file = join(header(), windowExt(), record(0x0201, u32(0x0000ff)),
+      extText(0, 0, [], { options: 0x0002, rect: [10, 10, 30, 20] }), eof());
+    const run = play(file);
+    expect(run.drew).toBe(true);
+    expect(run.unsupported).toEqual([]);
+    expect(run.ops.filter((op) => op.op === 'fillRect').map((op) => [op.args, op.fill])).toEqual([[[10, 10, 20, 10], '#ff0000']]);
   });
 
   it('reports glyph-index strings and malformed Dx arrays without drawing', () => {

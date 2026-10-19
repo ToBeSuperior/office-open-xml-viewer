@@ -318,8 +318,9 @@ interface PlayState {
   bkColor: string;
   textAlign: number;
   charExtra: number;
-  breakExtra: number;
   breakCount: number;
+  breakQuotientPx: number;
+  breakErrorPx: number;
   fillRule: CanvasFillRule; // from SETPOLYFILLMODE
   rop2: number;
   bkMode: number;
@@ -782,8 +783,9 @@ export function playWmf(
     bkColor: '#ffffff',
     textAlign: 0,
     charExtra: 0,
-    breakExtra: 0,
     breakCount: 0,
+    breakQuotientPx: 0,
+    breakErrorPx: 0,
     fillRule: 'nonzero',
     rop2: 13,
     bkMode: 2,
@@ -1005,8 +1007,14 @@ function replayWmfRecords(bytes: Uint8Array, s: PlayState, pos: number): void {
         // MS-WMF 2.3.5.27: u16 BreakCount, then u16 BreakExtra (logical units
         // shared by the break characters of following text output).
         if (c.remaining !== 4) { s.extTextSafe = false; break; }
+        // GDI transforms BreakExtra to device units, rounds it, and shares it
+        // over the break characters: each gets the quotient, and the error
+        // (remainder) is paid one unit at a time by successive break
+        // characters, across text outputs, until the next justification.
         s.breakCount = c.u16();
-        s.breakExtra = c.u16();
+        const breakExtraPx = Math.round(c.u16() * Math.abs(s.vpW / s.extX));
+        s.breakQuotientPx = s.breakCount > 0 && Number.isFinite(breakExtraPx) ? Math.trunc(breakExtraPx / s.breakCount) : 0;
+        s.breakErrorPx = s.breakCount > 0 && Number.isFinite(breakExtraPx) ? breakExtraPx - s.breakQuotientPx * s.breakCount : 0;
         break;
       }
       case META.CREATEPALETTE:
