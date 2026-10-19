@@ -1915,6 +1915,9 @@ function renderSunburstChart(
   });
   drawChartTitleForLayout(ctx, chart, x, y, w, h, y + frame.title.topPad, frame.title.fontPx);
   const { px0, py0, pw, ph } = frame.plotRect;
+  // A title band grown by authored lines can exhaust a small frame; paint no
+  // plot into a non-positive rectangle, as the cartesian families do.
+  if (!(pw > 0) || !(ph > 0)) return;
   paintPlotAreaFrame(ctx, chart, px0, py0, pw, ph, ptToPx, shapeRotationDeg);
   const cx = px0 + pw / 2;
   const cy = py0 + ph / 2;
@@ -2245,6 +2248,9 @@ function renderTreemapChart(
   });
   drawChartTitleForLayout(ctx, chart, r.x, r.y, r.w, r.h, r.y + frame.title.topPad, frame.title.fontPx);
   const { px0, py0, pw, ph } = frame.plotRect;
+  // A title band grown by authored lines can exhaust a small frame; paint no
+  // plot into a non-positive rectangle, as the cartesian families do.
+  if (!(pw > 0) || !(ph > 0)) return;
   paintPlotAreaFrame(ctx, chart, px0, py0, pw, ph, ptToPx, shapeRotationDeg);
   const plotBounds = { x: px0, y: py0, w: pw, h: ph };
 

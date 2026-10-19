@@ -15,9 +15,13 @@ interface Label { text: string; x: number; y: number; align: string; baseline: s
 interface Segment { x1: number; y1: number; x2: number; y2: number }
 
 interface FilledRect { x: number; y: number; w: number; h: number }
+interface ArcCall { r: number }
 
-function recordingContext(): { ctx: CanvasRenderingContext2D; labels: Label[]; segments: Segment[]; rects: FilledRect[] } {
+function recordingContext(): {
+  ctx: CanvasRenderingContext2D; labels: Label[]; segments: Segment[]; rects: FilledRect[]; arcs: ArcCall[];
+} {
   const rects: FilledRect[] = [];
+  const arcs: ArcCall[] = [];
   const labels: Label[] = [];
   const segments: Segment[] = [];
   const path: Array<{ x: number; y: number }> = [];
@@ -41,6 +45,9 @@ function recordingContext(): { ctx: CanvasRenderingContext2D; labels: Label[]; s
         });
         case 'getLineDash': return () => [];
         case 'fillRect': return (x: number, y: number, w: number, h: number) => { rects.push({ x, y, w, h }); };
+        case 'rect': return (x: number, y: number, w: number, h: number) => { rects.push({ x, y, w, h }); };
+        case 'arc': return (_x: number, _y: number, r: number) => { arcs.push({ r }); };
+        case 'ellipse': return (_x: number, _y: number, rx: number, ry: number) => { arcs.push({ r: Math.min(rx, ry) }); };
         case 'createLinearGradient':
         case 'createRadialGradient': return () => ({ addColorStop() {} });
         case 'createPattern': return () => null;
@@ -49,7 +56,7 @@ function recordingContext(): { ctx: CanvasRenderingContext2D; labels: Label[]; s
     },
     set(_target, prop: string, value) { state[prop] = value; return true; },
   };
-  return { ctx: new Proxy(state, handler) as unknown as CanvasRenderingContext2D, labels, segments, rects };
+  return { ctx: new Proxy(state, handler) as unknown as CanvasRenderingContext2D, labels, segments, rects, arcs };
 }
 
 function series(over: Partial<ChartSeries> = {}): ChartSeries {
@@ -614,4 +621,30 @@ describe('multi-level outer rows follow authored breaks only', () => {
     expect(label(rec, 'Group').y - firstInner).toBeCloseTo(14, 6);
     expect(label(rec, 'Group').y + 10).toBeLessThanOrEqual(RECT.h);
   });
+});
+
+describe('radial families with a title band grown by authored lines', () => {
+  const short: ChartRect = { x: 0, y: 0, w: 640, h: 100 };
+  const title = Array.from({ length: 7 }, (_, index) => `Line ${index}`).join('\n');
+  const cases: Array<[string, Partial<ChartModel>]> = [
+    ['pie', { chartType: 'pie', series: [series({ values: [3, 2, 1] })], categories: ['A', 'B', 'C'] }],
+    ['doughnut', { chartType: 'doughnut', series: [series({ values: [3, 2, 1] })], categories: ['A', 'B', 'C'] }],
+    ['radar', { chartType: 'radar', series: [series({ values: [3, 2, 1] })], categories: ['A', 'B', 'C'] }],
+    ['sunburst', { chartType: 'sunburst', series: [series({ values: [1, 2] })],
+      chartexSunburst: { rows: [{ path: ['Root', 'A'], size: 1 }, { path: ['Root', 'B'], size: 2 }] } }],
+    ['treemap', { chartType: 'treemap', series: [series({ values: [] })],
+      chartexTreemap: { parentLabelLayout: 'none', rows: [{ path: ['North', 'A'], size: 4 }, { path: ['South', 'B'], size: 2 }] } }],
+  ];
+  for (const [name, over] of cases) {
+    it(`${name}: paints no negative-size plot or radius`, () => {
+      const rec = recordingContext();
+      renderChart(
+        rec.ctx, model({ ...over, title, plotAreaBg: 'FFFFFF' }), short, 1, 0,
+        { render: renderSimpleThreeDChart }, undefined, undefined, { render: renderChartExChart },
+      );
+      expect(rec.labels.some(entry => entry.text === 'Line 6')).toBe(true);
+      expect(rec.rects.filter(r => r.w < 0 || r.h < 0)).toEqual([]);
+      expect(rec.arcs.filter(arc => !(arc.r >= 0))).toEqual([]);
+    });
+  }
 });

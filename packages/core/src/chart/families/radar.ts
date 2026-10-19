@@ -66,6 +66,9 @@ export function renderRadarChart(
   drawChartTitleForLayout(ctx, chart, x, y, w, h, y + frame.title.topPad, titleFontPx);
 
   const { px0: plotLeft, py0: plotTop, pw, ph } = frame.plotRect;
+  // A title band grown by authored lines can exhaust a small frame; paint no
+  // plot into a non-positive rectangle, as the cartesian families do.
+  if (!(pw > 0) || !(ph > 0)) return;
   paintPlotAreaFrame(
     ctx, chart, plotLeft, plotTop, pw, ph, ptToPx, shapeRotationDeg,
   );
