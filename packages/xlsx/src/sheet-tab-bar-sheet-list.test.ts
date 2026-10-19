@@ -205,4 +205,22 @@ describe('SheetTabBar sheet list', () => {
       expect(focused.element).toBeNull();
     }
   });
+
+  it('places the list beside the previous-sheets button whichever scroll button opened it', () => {
+    const { doc } = makePopoverDocument();
+    const { bar, navGroup, list } = makeBar(doc, 'show', []);
+    bar.build(['A', 'B'], [null, null]);
+    const rect = (left: number, top: number) => () =>
+      ({ left, top, right: left + 20, bottom: top + 20, width: 20, height: 20 });
+    Object.assign(bar.navPrev, { getBoundingClientRect: rect(10, 700) });
+    Object.assign(bar.navNext, { getBoundingClientRect: rect(30, 700) });
+
+    for (const opener of [bar.navPrev, bar.navNext]) {
+      navGroup.dispatch('contextmenu', contextMenu(opener, 0));
+      const opened = list()!;
+      expect(opened.matches(':popover-open')).toBe(true);
+      expect(opened.style.left).toBe('10px');
+      (opened as unknown as { hidePopover(): void }).hidePopover();
+    }
+  });
 });

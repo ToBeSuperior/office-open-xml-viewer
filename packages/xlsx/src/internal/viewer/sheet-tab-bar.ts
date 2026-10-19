@@ -460,7 +460,9 @@ export class SheetTabBar {
     // return focus to it, so focus the scroll button first.
     opener.focus({ preventScroll: true });
     if (!list.matches(':popover-open')) list.showPopover();
-    this.placeSheetList(opener);
+    // Both scroll buttons open the list at the same place: the nav group's
+    // leading corner, i.e. beside the previous-sheets button.
+    this.placeSheetList(this.navPrev);
     const current = this.listItems[this.activeIndex] ?? this.listItems.find((item) => item !== undefined);
     if (current) this.focusListItem(current);
   }
