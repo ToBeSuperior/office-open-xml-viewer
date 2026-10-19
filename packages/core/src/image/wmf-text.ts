@@ -411,7 +411,11 @@ export interface CursiveCell { first: number; last: number; joinBefore: boolean;
  *  to the preceding one; Transparent marks are skipped). A cell keeps its
  *  Transparent marks and a lam-alef pair stays one ligature cell. Neighbours
  *  in a different face never join. */
-export function cursiveCells(texts: readonly string[], fonts: readonly string[]): CursiveCell[] {
+export function cursiveCells(
+  texts: readonly string[],
+  fonts: readonly string[],
+  levels: readonly number[] = texts.map(() => 0),
+): CursiveCell[] {
   const cells: CursiveCell[] = [];
   const base = (index: number) => texts[index].codePointAt(0) ?? 0;
   const transparent = (index: number) => [...texts[index]].every((char) => joiningType(char.codePointAt(0)!) === 'T');
@@ -423,7 +427,8 @@ export function cursiveCells(texts: readonly string[], fonts: readonly string[])
   };
   for (let index = 0; index < texts.length; index++) {
     const last = cells.at(-1);
-    if (last && fonts[index] === fonts[last.first] && texts[index].length > 0
+    // Never merge across a bidi level boundary: each cell is placed by level.
+    if (last && fonts[index] === fonts[last.first] && levels[index] === levels[last.first] && texts[index].length > 0
       && (transparent(index)
         || (lastBase(last) === last.first && base(last.first) === LAM && LAM_ALEF_PARTNERS.has(base(index))))) {
       last.last = index;
@@ -431,13 +436,21 @@ export function cursiveCells(texts: readonly string[], fonts: readonly string[])
     }
     cells.push({ first: index, last: index, joinBefore: false, joinAfter: false });
   }
+  // Joins skip whole cells of Transparent characters (e.g. an LRM kept in its
+  // own cell by a level boundary); every cell in between gets ZWJ context.
+  const allTransparent = (cell: CursiveCell) => {
+    for (let index = cell.first; index <= cell.last; index++) if (!transparent(index)) return false;
+    return true;
+  };
   for (let k = 1; k < cells.length; k++) {
-    const before = cells[k - 1];
     const after = cells[k];
-    if (fonts[before.first] !== fonts[after.first]) continue;
-    if (joinsToFollowing(base(lastBase(before))) && joinsToPreceding(base(after.first))) {
-      before.joinAfter = true;
-      after.joinBefore = true;
+    if (allTransparent(after)) continue;
+    let j = k - 1;
+    while (j >= 0 && fonts[cells[j].first] === fonts[after.first] && allTransparent(cells[j])) j--;
+    if (j < 0 || fonts[cells[j].first] !== fonts[after.first]) continue;
+    if (joinsToFollowing(base(lastBase(cells[j]))) && joinsToPreceding(base(after.first))) {
+      for (let m = j; m < k; m++) cells[m].joinAfter = true;
+      for (let m = j + 1; m <= k; m++) cells[m].joinBefore = true;
     }
   }
   return cells;
@@ -620,7 +633,8 @@ export function drawWmfText(s: WmfTextState, out: WmfTextOutput): { drew: boolea
   } else {
     // Character cells: a base character with its following Transparent marks
     // (Joining_Type T), and lam with a following alef as one ligature cell.
-    const cells = cursiveCells(units.map((unit) => unit.text), units.map(fontFor));
+    const cells = cursiveCells(units.map((unit) => unit.text), units.map(fontFor),
+      resolvedUnitLevels(units.map((unit) => unit.text), rtlReading));
     for (const cell of cells) {
       let advance = 0;
       let cellRise = 0;

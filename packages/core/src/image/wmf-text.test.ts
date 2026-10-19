@@ -411,6 +411,19 @@ describe('WMF text: META_EXTTEXTOUT options and Dx', () => {
     expect(lrm.texts().map((op) => op.args[0]).slice(0, 3)).toEqual(['ب\u200d', '\u200d\u200e\u200d', '\u200dب']);
   });
 
+  it('keeps Dx cells at bidi level boundaries: an LRM never merges into a neighbouring letter', () => {
+    // Code page 1256 beh, LRM, teh in an LTR paragraph, Dx [10, 0, 20]:
+    // levels [1, 0, 1] give three runs in logical order; the letters join.
+    const run = play(picture(font({ charset: 178 }), extText(0, 50, [0xc8, 0xfd, 0xca], { dx: [10, 0, 20] })));
+    expect(run.texts().map((op) => op.args)).toEqual([
+      ['ب\u200d', 0, 50], ['\u200d\u200e\u200d', 10, 50], ['\u200dت', 10, 50],
+    ]);
+    // A mark at its base's level still attaches to that base's cell.
+    const marked = play(picture(font({ charset: 178 }), extText(0, 50, [0xc8, 0xf3, 0xca], { dx: [10, 0, 20] })));
+    // One RTL run: beh+fatha (Dx 10+0) on the right at 20, teh on the left at 0.
+    expect(marked.texts().map((op) => op.args)).toEqual([['بَ\u200d', 20, 50], ['\u200dت', 0, 50]]);
+  });
+
   it.each([
     ['Arabic', 0x0628], ['Syriac', 0x0712], ["N'Ko", 0x07d3], ['Mandaic', 0x0841], ['Syriac Supplement', 0x0860],
     ['Mongolian', 0x182a], ['Phags-pa', 0xa840], ['Manichaean', 0x10ac1], ['Psalter Pahlavi', 0x10b82],
