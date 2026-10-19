@@ -602,7 +602,7 @@ export function measureParagraph(
     environment.verticalGlyphMeasurement,
     context.overflowPunct !== false,
     wordJustifiedInterwordCompressionApplies(
-      paragraph.alignment, environment.compatibilityMode, environment.lineWrapLikeWord6,
+      paragraph.alignment, environment.compatibilityMode,
     ) && environment.verticalCJK !== true,
   );
   if (lines.length === 0) return measureMarkOnly();

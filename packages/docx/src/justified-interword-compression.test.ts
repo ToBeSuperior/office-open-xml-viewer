@@ -391,13 +391,24 @@ describe('WORD_JUSTIFIED_INTERWORD_COMPRESSION', () => {
     ['kashida', paragraph(CONTROL, 'lowKashida'), {}, {}],
     ['RTL', withRuns([textRun(CONTROL)], { bidi: true }), {}, {}],
     ['left', paragraph(CONTROL, 'left'), {}, {}],
-    ['Word6', paragraph(CONTROL, 'both'), {}, { lineWrapLikeWord6: true }],
   ] as const)('preserves the previous partition for %s', async (_name, element, section, settings) => {
     for (const width of [233.3, 237.3]) {
       const partition = (lines: DocxTextRunInfo[][]) => lines.map(line => words(line));
       const previous = await renderLines(element, width, { compatibilityMode: 14, ...settings }, section as Partial<SectionProps>);
       const current = await renderLines(element, width, { compatibilityMode: 15, ...settings }, section as Partial<SectionProps>);
       expect(partition(current)).toEqual(partition(previous));
+    }
+  });
+
+  // Windows Word exports identical compressed justified lines with and
+  // without lineWrapLikeWord6 in mode 15.
+  it('compresses justified mode-15 lines regardless of lineWrapLikeWord6', async () => {
+    for (const width of [233.3, 237.3]) {
+      const partition = (lines: DocxTextRunInfo[][]) => lines.map(line => words(line));
+      const plain = await renderLines(paragraph(CONTROL, 'both'), width, { compatibilityMode: 15 });
+      const word6 = await renderLines(paragraph(CONTROL, 'both'), width,
+        { compatibilityMode: 15, lineWrapLikeWord6: true });
+      expect(partition(word6)).toEqual(partition(plain));
     }
   });
 
