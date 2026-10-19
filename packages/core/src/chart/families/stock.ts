@@ -16,7 +16,6 @@ import {
   catAxisLabelBandH,
   chartLegendBands,
   chartAxisTitleBands,
-  axisTitleFontPx,
   chartTextFontSizePx,
 } from '../layout.js';
 

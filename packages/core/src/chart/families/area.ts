@@ -20,7 +20,6 @@ import {
   catAxisLabelBandH,
   chartLegendBands,
   chartAxisTitleBands,
-  axisTitleFontPx,
   chartTextFontSizePx,
   chartManualOuterAxisInsets,
   categoryTickLabelGapPx,

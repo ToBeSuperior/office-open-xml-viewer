@@ -1577,4 +1577,57 @@ Subtitle</a:t></a:r></a:p>
             Some(false)
         );
     }
+
+    #[test]
+    fn drawingml_line_breaks_reach_titles_text_boxes_and_flattened_text() {
+        // ECMA-376 §21.1.2.2.1: `<a:br>` is a line break inside a paragraph.
+        let title_xml = format!(
+            r#"<c:chart xmlns:c="{C_NS}" xmlns:a="{A_NS}"><c:title><c:tx><c:rich>
+              <a:p><a:r><a:t>A</a:t></a:r><a:br><a:rPr sz="900"/></a:br><a:r><a:t>B</a:t></a:r></a:p>
+              <a:p><a:r><a:t>C</a:t></a:r></a:p>
+            </c:rich></c:tx><c:txPr><a:bodyPr/><a:p><a:pPr><a:defRPr/></a:pPr><a:endParaRPr/></a:p></c:txPr></c:title></c:chart>"#
+        );
+        let document = root_of(&title_xml);
+        let root = document.root_element();
+        assert_eq!(extract_chart_title_text(root).as_deref(), Some("A\nB\nC"));
+        let runs = parse_chart_title_rich_runs(child(root, "title").unwrap(), &StubResolver)
+            .expect("rich title runs");
+        assert_eq!(
+            runs.iter().map(|run| run.text.as_str()).collect::<Vec<_>>(),
+            vec!["A", "\n", "B", "\n", "C"]
+        );
+        let rich = child(child(child(root, "title").unwrap(), "tx").unwrap(), "rich").unwrap();
+        assert_eq!(flatten_rich_text(rich, None), "A\nB\nC");
+
+        // Formatting-only paragraphs never invent a title.
+        let empty = format!(
+            r#"<c:chart xmlns:c="{C_NS}" xmlns:a="{A_NS}"><c:title><c:tx><c:rich>
+              <a:p/><a:p><a:br/></a:p></c:rich></c:tx></c:title></c:chart>"#
+        );
+        let empty_document = root_of(&empty);
+        assert!(extract_chart_title_text(empty_document.root_element()).is_none());
+
+        let shapes = roxmltree::Document::parse(
+            r#"<c:userShapes xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"
+                 xmlns:cdr="http://schemas.openxmlformats.org/drawingml/2006/chartDrawing"
+                 xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+              <cdr:relSizeAnchor>
+                <cdr:from><cdr:x>0</cdr:x><cdr:y>0</cdr:y></cdr:from>
+                <cdr:to><cdr:x>0.5</cdr:x><cdr:y>0.5</cdr:y></cdr:to>
+                <cdr:sp><cdr:spPr/><cdr:txBody><a:bodyPr/>
+                  <a:p><a:pPr><a:defRPr sz="1400"/></a:pPr>
+                    <a:r><a:t>First</a:t></a:r><a:br/><a:r><a:t>Second</a:t></a:r></a:p>
+                </cdr:txBody></cdr:sp>
+              </cdr:relSizeAnchor>
+            </c:userShapes>"#,
+        )
+        .unwrap();
+        let boxes = parse_chart_user_shapes(shapes.root_element(), &StubResolver);
+        let runs = &boxes[0].paragraphs[0].runs;
+        assert_eq!(
+            runs.iter().map(|run| run.text.as_str()).collect::<Vec<_>>(),
+            vec!["First", "\n", "Second"]
+        );
+        assert_eq!(runs[1].font_size_hpt, Some(1400));
+    }
 }

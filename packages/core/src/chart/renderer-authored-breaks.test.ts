@@ -545,3 +545,53 @@ describe('authored breaks in titles, data-table values and short region maps', (
     expect(label(rec, 'Source B').y).toBeGreaterThan(label(rec, 'Source A').y);
   });
 });
+
+describe('authored breaks in chart text boxes and parsed <a:br> runs', () => {
+  for (const wrap of ['none', 'square'] as const) {
+    it(`text box run "First\\nSecond" breaks the line (wrap=${wrap})`, () => {
+      const rec = render(model({
+        chartTextBoxes: [{
+          x: 0, y: 0, w: 0.5, h: 0.5, wrap,
+          paragraphs: [{ align: null, runs: [{ text: 'First\nSecond', fontSizeHpt: 1000 }] }],
+        }],
+      }));
+      expectNoJoinedText(rec);
+      const first = label(rec, 'First');
+      const second = label(rec, 'Second');
+      expect(second.x).toBe(first.x);
+      expect(second.y - first.y).toBeCloseTo(12, 6); // 10 px × 1.2 line box
+    });
+  }
+
+  it('a parsed <a:br> run breaks a text box once, and an empty line keeps the break run height', () => {
+    const rec = render(model({
+      chartTextBoxes: [{
+        x: 0, y: 0, w: 0.5, h: 0.5, wrap: 'square',
+        paragraphs: [{ align: null, runs: [
+          { text: 'First', fontSizeHpt: 1000 },
+          { text: '\n', fontSizeHpt: 2000 },
+          { text: '\n', fontSizeHpt: 2000 },
+          { text: 'Third', fontSizeHpt: 1000 },
+        ] }],
+      }],
+    }));
+    expectNoJoinedText(rec);
+    // First (12 px line) + blank line at the 20 px break size (24 px).
+    expect(label(rec, 'Third').y - label(rec, 'First').y).toBeCloseTo(12 + 24, 6);
+  });
+
+  it('rich title break runs start exactly one new line', () => {
+    const rec = render(model({
+      title: 'A\nB',
+      titleRichRuns: [{ text: 'A' }, { text: '\n' }, { text: 'B' }],
+    }));
+    expectNoJoinedText(rec);
+    const a = label(rec, 'A');
+    const b = label(rec, 'B');
+    const plainPitch = (() => {
+      const plain = render(model({ title: 'A\nB' }));
+      return label(plain, 'B').y - label(plain, 'A').y;
+    })();
+    expect(b.y - a.y).toBeCloseTo(plainPitch, 6);
+  });
+});

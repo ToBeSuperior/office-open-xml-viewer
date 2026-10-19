@@ -907,6 +907,9 @@ pub(super) fn flatten_rich_text(rich_root: Node, cellrange_cache: Option<&str>) 
         first_para = false;
         for c in p.children().filter(|n| n.is_element()) {
             match c.tag_name().name() {
+                // `<a:br>` (ECMA-376 §21.1.2.2.1) is a line break within the
+                // paragraph.
+                "br" => out.push('\n'),
                 "r" => {
                     if let Some(t) = c.children().find(|n| n.tag_name().name() == "t") {
                         if let Some(s) = t.text() {
