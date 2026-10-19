@@ -47,7 +47,12 @@ import {
 import { officeFaceWebAlias } from '../fonts/font-stack.js';
 import { classifyFontGeneric, cjkFallbackChain, type CjkLang } from '../fonts/scripts.js';
 import { quoteCssFontFamily } from '../internal/css-font-family.js';
-import { buildVisualOrder, getDefaultBidiEngine, hasStrongRtl, REMOVED_LEVEL } from '../text/bidi/index.js';
+// Direct bidi modules, not the bidi index: importing the index from this
+// eagerly loaded player made Rolldown treat single-entry IIFE builds of the
+// renderers as code-splitting builds.
+import { getDefaultBidiEngine } from '../text/bidi/engine.js';
+import { buildVisualOrder, hasStrongRtl } from '../text/bidi/line-order.js';
+import { REMOVED_LEVEL } from '../text/bidi/types.js';
 import { joiningType, joinsToFollowing, joinsToPreceding } from '../text/joining-type.js';
 import { referenceFontDecoration } from '../text/font-decoration.js';
 import { DECORATION_LINE_WIDTH_EM, STRIKE_RISE_EM } from '../text/underline.js';
@@ -576,7 +581,6 @@ export function drawWmfText(s: WmfTextState, out: WmfTextOutput): { drew: boolea
   const pdy = (out.options & ETO_PDY) !== 0;
   const charExtraPx = Math.round(s.charExtra * along);
   const justified = s.breakCount > 0 && (s.breakQuotientPx !== 0 || s.breakErrorPx !== 0);
-  const spaced = out.dx !== null || charExtraPx !== 0 || justified;
   // Widths are measured lazily and once per distinct (font, text): a long
   // string costs at most one measurement per distinct character or run.
   const widths = new Map<string, number>();
