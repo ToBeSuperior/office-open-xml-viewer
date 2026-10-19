@@ -3480,8 +3480,13 @@ function composeDocumentEndnotes(
   const blockStartPt = terminalBody
     ? terminalBody.flowBounds.yPt + terminalBody.flowBounds.heightPt
     : bodyDomain.logicalBounds.yPt;
+  // A column band (WORD_PER_COLUMN_FOOTNOTE_BANDS) limits only its column.
+  const bodyLeftPt = bodyDomain.logicalBounds.xPt;
+  const bodyRightPt = bodyLeftPt + bodyDomain.logicalBounds.widthPt;
   const pageFootnoteTopPt = page.layers.notes
-    .filter((node) => node.kind === 'note' && node.source.story === 'footnote')
+    .filter((node) => node.kind === 'note' && node.source.story === 'footnote'
+      && (!node.flowDomainId.includes(':band:')
+        || (node.flowBounds.xPt < bodyRightPt && node.flowBounds.xPt + node.flowBounds.widthPt > bodyLeftPt)))
     .reduce(
       (top, note) => Math.min(top, note.flowBounds.yPt),
       bodyDomain.logicalBounds.yPt + bodyDomain.logicalBounds.heightPt,

@@ -171,3 +171,17 @@ it('continues a note outliving the body into the next column before a new page',
     .map((note) => [note.flowBounds.xPt < 162 ? 1 : 2, note.story.blocks.length]));
   expect(lineCounts).toEqual([[[1, 6], [2, 9]], [[1, 5]]]);
 });
+
+it('limits a column-2 endnote only by column 2 footnotes', () => {
+  // Column 1 holds L01..L03 above note 1's band (top 102pt); the text ends
+  // in column 2 at L08 (122pt) and the endnote fits below it there.
+  const document = model(11, { 1: '1' }, { 1: 6 }, 8);
+  const body = document.body as unknown as DocParagraph[];
+  body[7] = { ...body[7]!, runs: [...body[7]!.runs, textRun('e', { noteRef: { kind: 'endnote', id: '1' } })] } as DocParagraph;
+  (document as unknown as { endnotes: unknown }).endnotes = [{ id: '1', content: [paragraph('E1-01')] }];
+  const layout = render(document);
+  expect(layout.diagnostics).toEqual([]);
+  const endnotes = layout.pages.flatMap((page) => page.layers.notes)
+    .filter((node): node is NoteLayout => node.kind === 'note' && node.source.story === 'endnote');
+  expect(endnotes.map((note) => note.story.blocks.map(text).join(''))).toEqual(['E1-01']);
+});
