@@ -1109,6 +1109,56 @@ impl Row {
                     }
                 }
             }
+            // [MS-DOC] 2.6.3 sprmTBrcTopCv/LeftCv/BottomCv/RightCv and
+            // 2.9.19 BrcCvOperand: one COLORREF per cell of the row (cb MUST
+            // be 4 * cell count) giving the 24-bit color of that cell's top,
+            // logical-left, bottom or logical-right border. Brc80 carries
+            // only an Ico palette index, so these refine the color of the
+            // current cell border (TC80 or an earlier cell assignment) while
+            // keeping its type and width; a later assignment replaces the
+            // whole border, color included. 0xFFFFFFFF "specifies that there
+            // is no corresponding border": it agrees with an absent or
+            // cleared border and is then inert. Over a visible border the two
+            // facts contradict and no precedence is documented, so that row
+            // stays an unsupported table property, as does a cell side whose
+            // current value is a style-aware assignment not yet resolved.
+            0xd61a..=0xd61d => {
+                let side = match code {
+                    0xd61a => 0,
+                    0xd61b => 1,
+                    0xd61c => 2,
+                    _ => 3,
+                };
+                let cb = usize::from(
+                    *b.first()
+                        .ok_or_else(|| unsupported("short Word border color array"))?,
+                );
+                if b.len() != cb + 1 || cb % 4 != 0 || cb / 4 != self.cells.len() {
+                    return Err(unsupported("invalid Word border color array"));
+                }
+                let colors = b[1..]
+                    .chunks_exact(4)
+                    // Outer None: the no-border value; inner None: cvAuto.
+                    .map(|cv| {
+                        (u32_at(cv, 0)? != u32::MAX)
+                            .then(|| super::colorref::read(cv))
+                            .transpose()
+                    })
+                    .collect::<Result<Vec<_>, String>>()?;
+                let resolvable = self.cells.iter().zip(&colors).all(|(cell, color)| {
+                    cell.prepared_borders[side].is_none()
+                        && (color.is_some()
+                            || cell.borders[side].as_ref().is_none_or(Border::is_cleared))
+                });
+                if !resolvable {
+                    return Ok(false);
+                }
+                for (cell, color) in self.cells.iter_mut().zip(colors) {
+                    if let (Some(border), Some(color)) = (&mut cell.borders[side], color) {
+                        border.refine_color(color);
+                    }
+                }
+            }
             0x9602 => self.gap = nonnegative(b)?,
             0x9407 => self.height = signed(b)?,
             0x3404 => self.header = boolean(b[0])?,
@@ -2382,5 +2432,78 @@ mod tests {
         assert_eq!(p.depth().unwrap(), 1);
         p.apply(0x6649, &u32::MAX.to_le_bytes()).unwrap();
         assert!(p.depth().is_err());
+    }
+
+    #[test]
+    fn border_color_arrays_refine_tc80_borders_per_cell_and_side() {
+        // Two cells: cell 0 has single red-ico top and nil left borders,
+        // cell 1 has none (type 0) top and nil left.
+        let mut definition = vec![50, 0, 2, 0, 0, 0xe8, 3, 0xd0, 7];
+        definition.extend([
+            0, 0, 0, 0, 8, 1, 6, 0, 255, 255, 255, 255, 8, 1, 6, 0, 8, 1, 6, 0,
+        ]);
+        definition.extend([
+            0, 0, 0, 0, 8, 0, 0, 0, 255, 255, 255, 255, 8, 1, 6, 0, 8, 1, 6, 0,
+        ]);
+        let color = |cell: &Cell, side: usize| cell.borders[side].as_ref().unwrap().direct_spec();
+        let cv = |values: [[u8; 4]; 2]| {
+            let mut operand = vec![8];
+            values.iter().for_each(|value| operand.extend(value));
+            operand
+        };
+        let mut row = Row::default();
+        row.apply(0xd608, &definition).unwrap();
+        assert_eq!(color(&row.cells[0], 0).color.as_deref(), Some("ff0000"));
+
+        // sprmTBrcTopCv: RGB replaces the Ico color, keeping type and width;
+        // a color for a cleared border and the no-border value over a
+        // cleared border are inert.
+        assert!(row
+            .apply(0xd61a, &cv([[0x12, 0x34, 0x56, 0], [0, 0, 0, 0]]))
+            .unwrap());
+        let top = color(&row.cells[0], 0);
+        assert_eq!(
+            (top.color.as_deref(), top.style.as_str(), top.width),
+            (Some("123456"), "single", 1.0)
+        );
+        assert_eq!(color(&row.cells[1], 0).style, "none");
+        // cvAuto is an automatic color, not black.
+        assert!(row.apply(0xd61a, &cv([[0, 0, 0, 0xff], [255; 4]])).unwrap());
+        assert_eq!(color(&row.cells[0], 0).color, None);
+        assert_eq!(color(&row.cells[1], 0).style, "none");
+        // sprmTBrcLeftCv addresses the logical-left side only.
+        assert!(row.apply(0xd61b, &cv([[255; 4], [255; 4]])).unwrap());
+        assert_eq!(color(&row.cells[0], 1).style, "nil");
+        // sprmTBrcRightCv / BottomCv address their own sides.
+        assert!(row
+            .apply(0xd61d, &cv([[0, 0xff, 0, 0], [0, 0, 0xff, 0]]))
+            .unwrap());
+        assert_eq!(color(&row.cells[0], 3).color.as_deref(), Some("00ff00"));
+        assert_eq!(color(&row.cells[1], 3).color.as_deref(), Some("0000ff"));
+        assert_eq!(color(&row.cells[0], 2).color.as_deref(), Some("ff0000"));
+
+        // The no-border value over a visible border has no documented
+        // precedence: the row stays unsupported without partial changes.
+        assert!(!row.apply(0xd61c, &cv([[1, 2, 3, 0], [255; 4]])).unwrap());
+        assert_eq!(color(&row.cells[0], 2).color.as_deref(), Some("ff0000"));
+        // A style-aware cell assignment is resolved later; refining the TC80
+        // layer beneath it would be silently lost.
+        let assignment = [11, 0, 1, 0x01, 0, 0, 0, 0, 8, 1, 0, 0];
+        assert_eq!(
+            row.apply_style_aware_borders(0xd62f, &assignment).unwrap(),
+            StyleAwareBorderApply::Handled
+        );
+        assert!(!row
+            .apply(0xd61a, &cv([[1, 2, 3, 0], [1, 2, 3, 0]]))
+            .unwrap());
+        // The array must cover exactly the row's cells with valid COLORREFs.
+        for operand in [
+            vec![4, 0, 0, 0, 0],
+            vec![12; 13],
+            vec![8, 0, 0, 0, 1, 0, 0, 0, 0],
+            vec![],
+        ] {
+            assert!(row.apply(0xd61a, &operand).is_err());
+        }
     }
 }
