@@ -36,7 +36,7 @@ import {
 import { planNumericValueAxis, finiteDataExtent } from '../axis-scale.js';
 import { axisLineWidthPx, resolveAxisLine, isCrossBetween } from '../axis-style.js';
 import { formatCategoryLabel } from '../chart-number-format.js';
-import { elideToWidth } from '../text-elide.js';
+import { authoredExtraLinesHeight, authoredTextLines, axisLabelLineHeightPx, fillAuthoredText, fillAuthoredTextDownward, measureAuthoredTextWidth } from '../chart-text-lines.js';
 import {
   categoryLabelAnchorFraction,
   categoryLabelOffsetPx,
@@ -76,7 +76,7 @@ import { createDataLabelLegendKeyResolver, measuredLegendReserve, drawLegendForL
 import type { DataLabelLegendKey, MeasuredLegendLayout } from '../shared/legend.js';
 import { drawAxisTick, strokeAxisSegment, axisTickLengthPx, strokeValueGridlineH, valGridStroke, valMinorGridStroke, drawCatMajorGridlines, catGridStroke, catGridlineFractions, catAxisReversed, drawValMajorGridlines, formatPrimaryValueAxisTick, formatAxisTickWithUnits, planValueAxis, axisLabelPx, wrapMeasuredText, catLabelsVisible, catLabelRotationRad, drawRotatedCatLabel } from '../shared/axis.js';
 import { drawSeriesTrendlines, trendlineLegendSeries } from '../shared/trendline.js';
-import { chartDateAxisPlan, forEachErrorBarEndpoint, computeSecondaryAxis, drawSecondaryValueGridlines, drawSecondaryValueAxis, drawSecondaryCategoryAxis } from '../shared/secondary-axis.js';
+import { chartDateAxisPlan, forEachErrorBarEndpoint, computeSecondaryAxis, drawSecondaryValueGridlines, drawSecondaryValueAxis, drawSecondaryCategoryAxis, secondaryCategoryLabelExtraH } from '../shared/secondary-axis.js';
 import { measuredCartesianTitleBand, drawChartTitleForLayout } from '../shared/title.js';
 import { dataLabelWithinAxisMaximum, customRichDataLabelOptions, drawBoundedDataLabelText } from '../shared/data-labels.js';
 import { chartCategories } from '../category-spacing.js';
@@ -353,9 +353,19 @@ export function renderBarChart(
     && (chart.categoryLevels?.length ?? 0) > 1
     ? chart.categoryLevels!
     : null;
-  const multiLevelCategoryBandH = categoryLevels
+  // Extra height authored breaks add to one outer category level (its labels
+  // are elided, never width-wrapped, so only authored breaks add lines).
+  const outerCategoryLevelExtraH = (levelIndex: number, fontPx: number): number =>
+    authoredExtraLinesHeight(
+      (categoryLevels?.[levelIndex] ?? []).filter(label => (label ?? '') !== ''),
+      axisLabelLineHeightPx(fontPx),
+    );
+  let multiLevelCategoryBandH = categoryLevels
     ? (categoryLevels.length - 1) * (catAxFontPx + 4)
     : 0;
+  for (let levelIndex = 1; levelIndex < (categoryLevels?.length ?? 0); levelIndex++) {
+    multiLevelCategoryBandH += outerCategoryLevelExtraH(levelIndex, catAxFontPx);
+  }
   const hasDataTable = chartHasDataTable(chart);
   const dataTableBaseH = chartDataTableBaseHeight(chart, ptToPx);
   const dataTableHeaderW = chartDataTableHeaderWidth(ctx, chart, ptToPx);
@@ -394,10 +404,12 @@ export function renderBarChart(
   const secondaryCatFontPx = chartTextFontSizePx(secondaryCat?.fontSizeHpt, ptToPx) ?? 9 * ptToPx;
   const secondaryCatLabelBandH = secondaryCat && !secondaryCat.hidden
     && secondaryCat.tickLabelPos !== 'none'
-    ? secondaryCatFontPx + categoryLabelOffsetPx(
-      categoryTickLabelGapPx(secondaryCatFontPx),
-      secondaryCat.labelOffsetPercent,
-    ) + 2
+    ? secondaryCatFontPx
+      + secondaryCategoryLabelExtraH(secondaryCategories, secondaryCat, chart, secondaryCatFontPx)
+      + categoryLabelOffsetPx(
+        categoryTickLabelGapPx(secondaryCatFontPx),
+        secondaryCat.labelOffsetPercent,
+      ) + 2
     : 0;
   const secondaryCatTitleBandH = secondaryCat?.title
     ? axisTitleFontPx(secondaryCat.titleFontSizeHpt, ptToPx) + 6
@@ -432,7 +444,7 @@ export function renderBarChart(
     for (const category of cats) {
       horizontalCategoryLabelBandW = Math.max(
         horizontalCategoryLabelBandW,
-        ctx.measureText(formatCategoryLabel(category, chart.catAxisFormatCode, chart.date1904)).width,
+        measureAuthoredTextWidth(ctx, formatCategoryLabel(category, chart.catAxisFormatCode, chart.date1904)),
       );
     }
     ctx.restore();
@@ -696,7 +708,7 @@ export function renderBarChart(
     let wmax = 0;
     for (const val of plan.majorLines) {
       const label = formatPrimaryValueAxisTick(chart, val, primaryPercentAxis);
-      wmax = Math.max(wmax, ctx.measureText(label).width);
+      wmax = Math.max(wmax, measureAuthoredTextWidth(ctx, label));
     }
     valLabelTextW = wmax;
     valLabelBandW = valLabelTextW + 16; // ~12px tick+gap to the axis + ~4px to the title
@@ -711,16 +723,43 @@ export function renderBarChart(
     ctx.font = `${secFontPx}px ${chartFontFamily(chart, sec.fontFace, 'minor')}`;
     let wmax = 0;
     for (const value of secScale?.majorLines ?? []) {
-      wmax = Math.max(wmax, ctx.measureText(formatAxisTickWithUnits(
+      wmax = Math.max(wmax, measureAuthoredTextWidth(ctx, formatAxisTickWithUnits(
         secondaryPercentAxis ? value / 100 : value,
         sec.formatCode ?? null,
         chart.date1904,
         sec.displayUnits,
-      )).width);
+      )));
     }
     secLabelBandW = wmax + 18;
   }
   ctx.font = prevFont;
+  // A value-axis tick label with authored breaks (a number format containing a
+  // line feed) is a block of lines. On a vertical axis the block is centred on
+  // its tick, so the top label rises half the extra lines above the single-line
+  // half-label reserve; below a horizontal (bar) value axis the lines hang
+  // downward and deepen the bottom band. Both are exactly 0 without breaks.
+  const primaryValueLabelExtraH = chart.valAxisHidden || chart.valAxisTickLabelPos === 'none'
+    ? 0
+    : authoredExtraLinesHeight(
+      plan.majorLines.map(value => formatPrimaryValueAxisTick(chart, value, primaryPercentAxis)),
+      axisLabelLineHeightPx(measuredValTickFontPx),
+    );
+  const secondaryValueLabelExtraH = sec && !sec.hidden && sec.tickLabelPos !== 'none' && !isH
+    ? authoredExtraLinesHeight(
+      (secScale?.majorLines ?? []).map(value => formatAxisTickWithUnits(
+        secondaryPercentAxis ? value / 100 : value,
+        sec.formatCode ?? null,
+        chart.date1904,
+        sec.displayUnits,
+      )),
+      axisLabelLineHeightPx(secFontPx),
+    )
+    : 0;
+  const valueLabelTopExtraH = isH
+    ? 0
+    : Math.max(primaryValueLabelExtraH, secondaryValueLabelExtraH) / 2;
+  const horizontalValueLabelExtraH = isH ? primaryValueLabelExtraH : 0;
+  padT += valueLabelTopExtraH;
   const secTitleBandW = sec && sec.title
     ? axisTitleFontPx(sec.titleFontSizeHpt, ptToPx) + 8
     : 0;
@@ -730,7 +769,7 @@ export function renderBarChart(
     t: padT,
     r: legRightW + w * 0.03 + (primaryAxisRight
       ? valLabelBandW + valTitleW : secLabelBandW + secTitleBandW),
-    b: padB,
+    b: padB + horizontalValueLabelExtraH,
     // Column charts: title band + measured label band, tight to the axis.
     // Horizontal bars: keep the wider left band for the category labels
     // (`c:catAx/c:delete val="1"` → no category labels, so tighten).
@@ -755,7 +794,7 @@ export function renderBarChart(
     ? {
         t: 0,
         r: chart.valAxisHidden ? 0 : measuredValTickFontPx / 2,
-        b: chart.valAxisHidden ? 0 : measuredValTickFontPx + catTitleH,
+        b: chart.valAxisHidden ? 0 : measuredValTickFontPx + horizontalValueLabelExtraH + catTitleH,
         l: chart.catAxisHidden ? 0 : horizontalCategoryLabelBandW + valTitleW,
       }
     : chartManualOuterAxisInsets({
@@ -777,6 +816,7 @@ export function renderBarChart(
         valTitleBandW: valTitleW,
         catTitleBandH: catTitleH,
         secondaryBandW: secLabelBandW + secTitleBandW,
+        valLabelExtraTopPx: valueLabelTopExtraH,
       });
 
   // Plot-area placement: honor `<c:plotArea><c:layout><c:manualLayout>` when
@@ -809,7 +849,7 @@ export function renderBarChart(
     titleTopPad = titleBand.topPad;
     titleH = titleBand.bandH;
     padT = titleH + legTopH + valAxLabelFontPx / 2 + 2
-      + secondaryCatLabelBandH + secondaryCatTitleBandH;
+      + secondaryCatLabelBandH + secondaryCatTitleBandH + valueLabelTopExtraH;
     pad.t = manualTopLegendPlotInset(
       chart, leg, x, y, w, h, titleH, padT,
     );
@@ -851,7 +891,9 @@ export function renderBarChart(
   // lines so they remain inside the chart frame.
   const catLabelRotation = catLabelRotationRad(chart);
   const wrappedColumnCategories: string[][] = [];
-  let wrappedCategoryExtraH = 0;
+  // Height the inner category labels need beyond one line (measured wraps
+  // and authored breaks); it lowers the outer multi-level rows as well.
+  let innerCategoryExtraH = 0;
   if (!hasDataTable && !isH && !dateAxisPlan && !chart.catAxisHidden && catLabelsVisible(chart) && catLabelRotation === 0) {
     const slotW = pw / n;
     const wrapFontPx = chart.catAxisFontSizeHpt != null
@@ -879,12 +921,28 @@ export function renderBarChart(
     }
     ctx.restore();
     const maxLines = Math.max(1, ...wrappedColumnCategories.map(lines => lines.length));
-    const manualInner = chart.plotAreaManualLayout?.layoutTarget === 'inner' &&
-      chart.plotAreaManualLayout.w != null && chart.plotAreaManualLayout.h != null;
-    if (!manualInner && maxLines > 1) {
-      wrappedCategoryExtraH = (maxLines - 1) * (wrapFontPx + 2);
-      ph = Math.max(1, ph - wrappedCategoryExtraH);
-    }
+    if (maxLines > 1) innerCategoryExtraH = (maxLines - 1) * (wrapFontPx + 2);
+  } else if (!hasDataTable && !isH && !chart.catAxisHidden && catLabelsVisible(chart)) {
+    // Date-axis and rotated column labels are not width-wrapped, but their
+    // authored breaks still stack lines (perpendicular to rotated text).
+    const labelFontPx = chart.catAxisFontSizeHpt != null
+      ? catAxFontPx
+      : Math.max(8, Math.min(11, (pw / n) * 0.5));
+    const labels = dateAxisPlan
+      ? dateAxisPlan.majorTicks.map(tick =>
+        formatCategoryLabel(String(tick.serial), chart.catAxisFormatCode, chart.date1904))
+      : cats.map(category =>
+        formatCategoryLabel(category.toString(), chart.catAxisFormatCode, chart.date1904));
+    innerCategoryExtraH = authoredExtraLinesHeight(
+      labels,
+      axisLabelLineHeightPx(labelFontPx),
+      catLabelRotation,
+    );
+  }
+  const manualInner = chart.plotAreaManualLayout?.layoutTarget === 'inner' &&
+    chart.plotAreaManualLayout.w != null && chart.plotAreaManualLayout.h != null;
+  if (!manualInner && innerCategoryExtraH > 0) {
+    ph = Math.max(1, ph - innerCategoryExtraH);
   }
 
   const dataTableLayout = hasDataTable
@@ -969,7 +1027,10 @@ export function renderBarChart(
             : chart.valAxisFontSizeHpt != null
               ? valueTickLabelGapPx(drawnValTickFontPx)
               : 12;
-          ctx.fillText(label, primaryAxisRight ? px0 + pw + gap : px0 - gap, gy);
+          fillAuthoredText(
+            ctx, label, primaryAxisRight ? px0 + pw + gap : px0 - gap, gy,
+            axisLabelLineHeightPx(drawnValTickFontPx),
+          );
         }
       } else {
         const gx = valX(val);
@@ -988,7 +1049,7 @@ export function renderBarChart(
           const gap = chart.valAxisFontSizeHpt != null
             ? categoryTickLabelGapPx(drawnValTickFontPx)
             : 10;
-          ctx.fillText(label, gx, py0 + ph + gap);
+          fillAuthoredTextDownward(ctx, label, gx, py0 + ph + gap, axisLabelLineHeightPx(drawnValTickFontPx));
         }
       }
     }
@@ -1922,13 +1983,16 @@ export function renderBarChart(
         );
         if (rotRad === 0) {
           const lines = entry.categoryIndex >= 0
-            ? (wrappedColumnCategories[entry.categoryIndex] ?? [raw])
-            : [raw];
+            ? (wrappedColumnCategories[entry.categoryIndex] ?? authoredTextLines(raw))
+            : authoredTextLines(raw);
           lines.forEach((line, lineIndex) => {
             ctx.fillText(line, lx, categoryLabelAxisY + gap + lineIndex * (drawnCatTickFontPx + 2));
           });
         } else {
-          drawRotatedCatLabel(ctx, elideToWidth(ctx, raw, budget), lx, categoryLabelAxisY + gap, rotRad);
+          drawRotatedCatLabel(
+            ctx, raw, lx, categoryLabelAxisY + gap, rotRad,
+            axisLabelLineHeightPx(drawnCatTickFontPx), budget,
+          );
         }
       } else {
         const ly = entry.fraction != null
@@ -1950,7 +2014,7 @@ export function renderBarChart(
         // the left gutter. `lblAlgn` only replaces that default when authored.
         ctx.textAlign = alignment === 'l' ? 'left' : alignment === 'ctr' ? 'center' : 'right';
         ctx.textBaseline = 'middle';
-        ctx.fillText(elideToWidth(ctx, raw, horizLabelMaxPx), lx, ly);
+        fillAuthoredText(ctx, raw, lx, ly, axisLabelLineHeightPx(drawnCatTickFontPx), horizLabelMaxPx);
       }
     }
 
@@ -1994,7 +2058,19 @@ export function renderBarChart(
         }
         outerBoundaryIndices.add(n);
       }
-      const firstBandBottom = categoryLabelAxisY + gap + drawnCatTickFontPx + 2;
+      // Rows below the inner labels start after the inner level's actual
+      // extent (wrapped or authored extra lines) and after every shallower
+      // outer level's authored extra lines.
+      const innerLabelExtraH = innerCategoryExtraH;
+      const levelExtraH = categoryLevels.map((_level, levelIndex) => levelIndex === 0
+        ? innerLabelExtraH
+        : outerCategoryLevelExtraH(levelIndex, drawnCatTickFontPx));
+      const levelRowTop = (levelIndex: number): number => {
+        let top = categoryLabelAxisY + gap + levelIndex * rowHeight;
+        for (let shallower = 0; shallower < levelIndex; shallower++) top += levelExtraH[shallower];
+        return top;
+      };
+      const firstBandBottom = categoryLabelAxisY + gap + drawnCatTickFontPx + 2 + innerLabelExtraH;
       for (let boundaryIndex = 0; boundaryIndex <= n; boundaryIndex++) {
         if (outerBoundaryIndices.has(boundaryIndex)) continue;
         const boundary = px0 + boundaryIndex / n * pw;
@@ -2017,18 +2093,21 @@ export function renderBarChart(
           const label = level[start] ?? '';
           const left = px0 + start / n * pw;
           const right = px0 + end / n * pw;
-          const rowTop = categoryLabelAxisY + gap + levelIndex * rowHeight;
+          const rowTop = levelRowTop(levelIndex);
           const alignment = chart.catAxisLabelAlignment;
           const labelX = alignment === 'l'
             ? left
             : alignment === 'r' ? right : (left + right) / 2;
           ctx.textAlign = alignment === 'l' ? 'left' : alignment === 'r' ? 'right' : 'center';
-          ctx.fillText(
-            elideToWidth(ctx, label, Math.max(0, right - left - 4)),
+          fillAuthoredText(
+            ctx,
+            label,
             labelX,
             rowTop,
+            axisLabelLineHeightPx(drawnCatTickFontPx),
+            Math.max(0, right - left - 4),
           );
-          const bracketBottom = rowTop + drawnCatTickFontPx + 2;
+          const bracketBottom = rowTop + drawnCatTickFontPx + 2 + levelExtraH[levelIndex];
           for (const boundaryIndex of [start, end]) {
             outerBoundaryBottoms.set(
               boundaryIndex,

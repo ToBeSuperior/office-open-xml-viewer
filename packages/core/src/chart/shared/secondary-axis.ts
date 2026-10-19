@@ -6,7 +6,7 @@ import { planNumericValueAxis } from '../axis-scale.js';
 import { axisTitleFontPx, categoryTickLabelGapPx, chartTextFontSizePx } from '../layout.js';
 import { rawLinkedChartStyleRole } from '../effective-style.js';
 import { categoryLabelAnchorFraction, categoryLabelOffsetPx } from '../category-spacing.js';
-import { elideToWidth } from '../text-elide.js';
+import { authoredExtraLinesHeight, axisLabelLineHeightPx, fillAuthoredText } from '../chart-text-lines.js';
 import { formatCategoryLabel } from '../chart-number-format.js';
 import { catAxisReversed, drawAxisTick, drawAxisTitle, formatAxisTickWithUnits, secondaryMajorGridStroke, secondaryMinorGridStroke, strokeAxisSegment, strokeValueGridlineH, valueAxisUnitInRendererSpace } from './axis.js';
 import { chartFontCss, chartFontFamily } from './fonts.js';
@@ -238,7 +238,8 @@ export function drawSecondaryValueAxis(
       // Same tick geometry as the left axis, mirrored to the right edge.
       drawAxisTick(ctx, sec.majorTickMark, 'val', axX, gy, secLineColor, secLineW, side === 'right', sec.lineHidden, 'major', ptToPx, sec.lineDash);
       if (sec.tickLabelPos !== 'none') {
-        ctx.fillText(
+        fillAuthoredText(
+          ctx,
           formatAxisTickWithUnits(
             percentStacked ? sval / 100 : sval,
             sec.formatCode ?? null,
@@ -247,6 +248,7 @@ export function drawSecondaryValueAxis(
           ),
           side === 'left' ? axX - 14 : axX + 14,
           gy,
+          axisLabelLineHeightPx(secFontPx),
         );
       }
     }
@@ -375,10 +377,13 @@ export function drawSecondaryCategoryAxis(
     for (let index = 0; index < count; index += labelSkip) {
       const anchor = labelAnchor(index);
       ctx.textAlign = anchor.textAlign;
-      ctx.fillText(
-        elideToWidth(ctx, formatCategoryLabel(categories[index], axis.formatCode, chart.date1904), budget),
+      fillAuthoredText(
+        ctx,
+        formatCategoryLabel(categories[index], axis.formatCode, chart.date1904),
         px0 + anchor.fraction * pw,
         py0 - labelGap,
+        axisLabelLineHeightPx(fontPx),
+        budget,
       );
     }
   }
@@ -390,10 +395,11 @@ export function drawSecondaryCategoryAxis(
       px0 + pw / 2,
       py0 - (axis.tickLabelPos === 'none'
         ? 0
-        : fontPx + categoryLabelOffsetPx(
-          categoryTickLabelGapPx(fontPx),
-          axis.labelOffsetPercent,
-        ))
+        : fontPx + secondaryCategoryLabelExtraH(categories, axis, chart, fontPx)
+          + categoryLabelOffsetPx(
+            categoryTickLabelGapPx(fontPx),
+            axis.labelOffsetPercent,
+          ))
         - titleFontPx / 2 - 4,
       'horizontal',
       titleFontPx,
@@ -416,4 +422,23 @@ export function drawSecondaryCategoryAxis(
       ptToPx,
     );
   }
+}
+
+
+/** Height the authored line breaks of the secondary (top) category labels add
+ *  above a single label line: the labels grow upward from the axis, so the
+ *  label band and the title above it grow by this amount. 0 without breaks. */
+export function secondaryCategoryLabelExtraH(
+  categories: readonly string[],
+  axis: SecondaryValueAxis,
+  chart: ChartModel,
+  fontPx: number,
+): number {
+  if (axis.tickLabelPos === 'none') return 0;
+  const labelSkip = Math.max(1, Math.floor(axis.tickLabelSkip ?? 1));
+  const labels: string[] = [];
+  for (let index = 0; index < categories.length; index += labelSkip) {
+    labels.push(formatCategoryLabel(categories[index], axis.formatCode, chart.date1904));
+  }
+  return authoredExtraLinesHeight(labels, axisLabelLineHeightPx(fontPx));
 }

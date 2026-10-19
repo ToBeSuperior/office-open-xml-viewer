@@ -17,7 +17,7 @@ import { computeChartFrame } from '../layout.js';
 import { automaticRadarMajorUnit, planNumericValueAxis } from '../axis-scale.js';
 import { axisLineWidthPx, resolveAxisLine } from '../axis-style.js';
 import { formatCategoryLabel } from '../chart-number-format.js';
-import { elideToWidth } from '../text-elide.js';
+import { axisLabelLineHeightPx, fillAuthoredText } from '../chart-text-lines.js';
 import { categoryLabelOffsetPx } from '../category-spacing.js';
 
 import { chartDataPointStyleRole, chartSeriesVariesByPoint } from '../effective-style.js';
@@ -196,7 +196,7 @@ export function renderRadarChart(
         chart.valAxisLineDash,
       );
       if (chart.valAxisTickLabelPos !== 'none') {
-        ctx.fillText(formatPrimaryValueAxisTick(chart, v, false), cx2 - 3, y);
+        fillAuthoredText(ctx, formatPrimaryValueAxisTick(chart, v, false), cx2 - 3, y, axisLabelLineHeightPx(valAxPx));
       }
     }
     if (needsMinorTicks) {
@@ -259,7 +259,7 @@ export function renderRadarChart(
     // §21.2.2.71: format numeric-serial categories via the category-axis
     // numFmt; string spoke labels pass through unchanged.
     const label = formatCategoryLabel((cats[i] ?? '').toString(), chart.catAxisFormatCode, chart.date1904);
-    ctx.fillText(elideToWidth(ctx, label, maxPx), lx, ly);
+    fillAuthoredText(ctx, label, lx, ly, axisLabelLineHeightPx(radarCatFontPx), maxPx);
   }
 
   // ECMA-376 §21.2.3.10 c:radarStyle — "filled" closes the polygon with a

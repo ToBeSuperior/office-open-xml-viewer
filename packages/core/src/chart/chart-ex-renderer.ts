@@ -23,6 +23,7 @@ import {
 } from './layout.js';
 import { niceStep, planLinearValueAxis } from './axis-scale.js';
 import { axisLineWidthPx, resolveAxisLine } from './axis-style.js';
+import { authoredExtraLinesHeight, axisLabelLineHeightPx, fillAuthoredText, measureAuthoredTextWidth } from './chart-text-lines.js';
 import { formatCategoryLabel } from './chart-number-format.js';
 import { resolveCategoryGapWidthPercent } from './category-spacing.js';
 import { planHistogramBins } from './histogram-binning.js';
@@ -450,11 +451,19 @@ function renderWaterfallChart(
     for (const value of provisionalPlan.majorLines) {
       maxWidth = Math.max(
         maxWidth,
-        ctx.measureText(formatPrimaryValueAxisTick(chart, value, false)).width,
+        measureAuthoredTextWidth(ctx, formatPrimaryValueAxisTick(chart, value, false)),
       );
     }
     valLabelBandW = maxWidth + 8;
   }
+  // Value tick labels with authored breaks are centred on their ticks, so the
+  // top label rises half its extra lines above the half-label reserve.
+  const valueLabelTopExtraH = valueTickLabelsVisible
+    ? authoredExtraLinesHeight(
+      provisionalPlan.majorLines.map(value => formatPrimaryValueAxisTick(chart, value, false)),
+      axisLabelLineHeightPx(valFontPx),
+    ) / 2
+    : 0;
 
   // Category labels participate in layout. Measure wrapped lines with the
   // authored category-axis font and the available category interval rather
@@ -517,7 +526,7 @@ function renderWaterfallChart(
     leg, chart.legendOverlay === true,
   );
   const pad = {
-    t: titleBand.bandH + legTopH + valFontPx / 2 + 2,
+    t: titleBand.bandH + legTopH + valFontPx / 2 + 2 + valueLabelTopExtraH,
     r: legRightW + w * 0.02,
     b: legBottomH + axBands.catBandH + categoryLabelBandH,
     l: legLeftW + axBands.valBandW + (chart.valAxisHidden
@@ -586,10 +595,12 @@ function renderWaterfallChart(
       // matching the other renderers — `toLocaleString()` grouped by the
       // viewer's OS locale, so the same chart read differently across machines.
       if (valueTickLabelsVisible) {
-        ctx.fillText(
+        fillAuthoredText(
+          ctx,
           formatPrimaryValueAxisTick(chart, value, false),
           px0 - 4,
           gy,
+          axisLabelLineHeightPx(valFontPx),
         );
       }
       drawAxisTick(
@@ -867,7 +878,7 @@ function renderFunnelChart(
   let labelW = 0;
   if (!chart.catAxisHidden) {
     for (let index = 0; index < Math.min(n, chart.categories.length); index++) {
-      labelW = Math.max(labelW, ctx.measureText(chart.categories[index]).width);
+      labelW = Math.max(labelW, measureAuthoredTextWidth(ctx, chart.categories[index]));
     }
     if (chart.categories.length > 0) labelW += 10;
   }
@@ -932,7 +943,7 @@ function renderFunnelChart(
       ctx.fillStyle = chart.catAxisFontColor ? `#${chart.catAxisFontColor}` : '#595959';
       ctx.textAlign = 'right';
       ctx.textBaseline = 'middle';
-      ctx.fillText(category, px0 - 6, by + barH / 2);
+      fillAuthoredText(ctx, category, px0 - 6, by + barH / 2, axisLabelLineHeightPx(catFontPx));
     }
     const label = resolveChartExLabel(
       chart, series, index, category ?? '', value,
@@ -1330,7 +1341,7 @@ function renderBoxWhiskerChart(
     let maxLabelW = 0;
     for (const value of provisionalScale.majorTicks) {
       const label = formatPrimaryValueAxisTick(chart, value, false);
-      maxLabelW = Math.max(maxLabelW, ctx.measureText(label).width);
+      maxLabelW = Math.max(maxLabelW, measureAuthoredTextWidth(ctx, label));
     }
     ctx.font = previousFont;
     valLabelBandW = maxLabelW + valTickLabelLayoutGap + AXIS_OUTER_TEXT_MARGIN_PT * ptToPx;
@@ -1376,10 +1387,22 @@ function renderBoxWhiskerChart(
   const { legRightW, legLeftW, legTopH, legBottomH } = chartLegendBands(
     leg, chart.legendOverlay === true,
   );
+  // Authored breaks: value tick labels are centred on their ticks (the top
+  // label rises half its extra lines); category labels hang downward and
+  // deepen the bottom band. Both are exactly 0 without breaks.
+  const valueLabelTopExtraH = chart.valAxisHidden
+    ? 0
+    : authoredExtraLinesHeight(
+      provisionalScale.majorTicks.map(value => formatPrimaryValueAxisTick(chart, value, false)),
+      axisLabelLineHeightPx(valFontPx),
+    ) / 2;
+  const categoryLabelExtraH = chart.catAxisHidden
+    ? 0
+    : authoredExtraLinesHeight(box.categories, axisLabelLineHeightPx(catAxFontPx0));
   const pad = {
-    t: titleBand.bandH + legTopH + valAxFontPx0 / 2 + 2,
+    t: titleBand.bandH + legTopH + valAxFontPx0 / 2 + 2 + valueLabelTopExtraH,
     r: legRightW + w * 0.02,
-    b: legBottomH + axBands.catBandH + (chart.catAxisHidden ? h * 0.02 : catAxisLabelBandH(catAxFontPx0)),
+    b: legBottomH + axBands.catBandH + (chart.catAxisHidden ? h * 0.02 : catAxisLabelBandH(catAxFontPx0) + categoryLabelExtraH),
     l: legLeftW + axBands.valBandW + (chart.valAxisHidden ? w * 0.02 : valLabelBandW),
   };
   // Fixed gutter fractions in the pad: library policy, see ChartPad in layout.ts.
@@ -1437,10 +1460,12 @@ function renderBoxWhiskerChart(
         if (valGridline.dash.length > 0) ctx.setLineDash(previousDash);
       }
       ctx.fillStyle = chart.valAxisFontColor ? `#${chart.valAxisFontColor}` : '#595959';
-      ctx.fillText(
+      fillAuthoredText(
+        ctx,
         formatPrimaryValueAxisTick(chart, v, false),
         px0 - valTickLabelPaintGap,
         gy,
+        axisLabelLineHeightPx(valFontPx),
       );
       drawAxisTick(
         ctx,
@@ -1766,7 +1791,7 @@ function renderBoxWhiskerChart(
       ctx.textAlign = 'center';
       ctx.textBaseline = 'top';
       const label = cats[ci];
-      ctx.fillText(label, categoryCenterX, py0 + ph + catTickLabelGap);
+      fillAuthoredText(ctx, label, categoryCenterX, py0 + ph + catTickLabelGap, axisLabelLineHeightPx(catFontPx));
     }
   }
   ctx.restore();

@@ -28,6 +28,7 @@ import { scatterXValue } from '../shared/scatter-geometry.js';
 import type { BubbleGroupSettings } from '../shared/scatter-geometry.js';
 import { drawScatterSeriesLayer } from '../shared/scatter-paint.js';
 import { clamp } from '../shared/geometry.js';
+import { authoredExtraLinesHeight, axisLabelLineHeightPx, fillAuthoredText, measureAuthoredTextWidth } from '../chart-text-lines.js';
 
 export function renderScatterChart(
   ctx: CanvasRenderingContext2D,
@@ -174,7 +175,7 @@ export function renderScatterChart(
     for (const value of provisionalSecondaryY.majorTicks) {
       secondaryYLabelWidth = Math.max(
         secondaryYLabelWidth,
-        ctx.measureText(formatAxisTickWithUnits(value, secondaryY.formatCode, chart.date1904, secondaryY.displayUnits)).width,
+        measureAuthoredTextWidth(ctx, formatAxisTickWithUnits(value, secondaryY.formatCode, chart.date1904, secondaryY.displayUnits)),
       );
     }
     secondaryYLabelWidth += valueTickLabelGapPx(yAxLabelFontPx) + 4;
@@ -184,11 +185,80 @@ export function renderScatterChart(
     ? (chartTextFontSizePx(secondaryX.fontSizeHpt, ptToPx) ?? xAxLabelFontPx)
       + categoryTickLabelGapPx(xAxLabelFontPx) + 2
     : 0;
+  // Value tick labels with authored breaks (a number format containing a line
+  // feed) stack lines: Y labels are centred on their ticks (the top label
+  // rises half its extra lines), bottom X labels hang downward and top
+  // secondary X labels grow upward. Counted on provisional scales (the same
+  // 70 % axis-length estimate as the secondary Y gutter); exactly 0 without
+  // breaks.
+  const provisionalTicks = (
+    extent: { min: number; max: number },
+    explicitMin: number | null | undefined,
+    explicitMax: number | null | undefined,
+    axisLenPx: number,
+    axisOrientation: 'vertical' | 'horizontal',
+    majorUnit: number | null | undefined,
+    logBase: number | null | undefined,
+    reversed: boolean,
+  ): number[] => planNumericValueAxis({
+    dataMin: explicitMin ?? extent.min,
+    dataMax: explicitMax ?? extent.max,
+    explicitMin,
+    explicitMax,
+    axisLenPt: Math.max(1, axisLenPx * 0.7 / ptToPx),
+    axisOrientation,
+    majorUnit,
+    minorUnit: null,
+    needMinor: false,
+    logBase,
+    reversed,
+  }).majorTicks;
+  const primaryYLabelExtraH = chart.valAxisHidden || chart.valAxisTickLabelPos === 'none'
+    ? 0
+    : authoredExtraLinesHeight(
+      provisionalTicks(
+        primaryExtent.y, chart.valMin, chart.valMax, h, 'vertical',
+        chart.valAxisMajorUnit, chart.valAxisLogBase, valAxisReversed(chart),
+      ).map(value => formatPrimaryValueAxisTick(chart, value, false)),
+      axisLabelLineHeightPx(yAxLabelFontPx),
+    );
+  const secondaryYLabelExtraH = secondaryY && provisionalSecondaryY && !secondaryY.hidden
+    && secondaryY.tickLabelPos !== 'none'
+    ? authoredExtraLinesHeight(
+      provisionalSecondaryY.majorTicks.map(value =>
+        formatAxisTickWithUnits(value, secondaryY.formatCode, chart.date1904, secondaryY.displayUnits)),
+      axisLabelLineHeightPx(chartTextFontSizePx(secondaryY.fontSizeHpt, ptToPx) ?? yAxLabelFontPx),
+    )
+    : 0;
+  const primaryXLabelExtraH = chart.catAxisHidden || chart.catAxisTickLabelPos === 'none'
+    ? 0
+    : authoredExtraLinesHeight(
+      provisionalTicks(
+        primaryExtent.x,
+        chart.catAxisMin ?? (textBubbleOrdinalMax == null ? null : 0),
+        chart.catAxisMax ?? textBubbleOrdinalMax,
+        w, 'horizontal', chart.catAxisMajorUnit, chart.catAxisLogBase, catAxisReversed(chart),
+      ).map(value => formatAxisTickWithUnits(value, chart.catAxisFormatCode, chart.date1904, chart.catAxisDisplayUnits)),
+      axisLabelLineHeightPx(xAxLabelFontPx),
+    );
+  const secondaryXLabelExtraH = secondaryX && !secondaryX.hidden && secondaryX.tickLabelPos !== 'none'
+    ? authoredExtraLinesHeight(
+      provisionalTicks(
+        secondaryExtent.x, secondaryX.min, secondaryX.max, w, 'horizontal',
+        secondaryX.majorUnit, secondaryX.logBase, secondaryX.orientation === 'maxMin',
+      ).map(value => formatAxisTickWithUnits(value, secondaryX.formatCode, chart.date1904, secondaryX.displayUnits)),
+      axisLabelLineHeightPx(chartTextFontSizePx(secondaryX.fontSizeHpt, ptToPx) ?? xAxLabelFontPx),
+    )
+    : 0;
+  const valueLabelTopExtraH = Math.max(
+    Math.max(primaryYLabelExtraH, secondaryYLabelExtraH) / 2,
+    secondaryXLabelExtraH,
+  );
   // Fixed gutter fractions: library policy, see ChartPad in layout.ts.
   const pad = {
-    t: titleBand.bandH + legTopH + yAxLabelFontPx / 2 + 2 + secondaryXLabelHeight,
+    t: titleBand.bandH + legTopH + yAxLabelFontPx / 2 + 2 + secondaryXLabelHeight + valueLabelTopExtraH,
     r: legRightW + w * 0.05 + secondaryYLabelWidth,
-    b: (chart.catAxisHidden ? h * 0.04 : catAxisLabelBandH(xAxLabelFontPx)) + catTitleH + legBottomH,
+    b: (chart.catAxisHidden ? h * 0.04 : catAxisLabelBandH(xAxLabelFontPx) + primaryXLabelExtraH) + catTitleH + legBottomH,
     l: (chart.valAxisHidden ? w * 0.04 : w * 0.12) + valTitleW + legLeftW,
   };
   const { plotRect: { px0, py0, pw, ph } } = computeChartFrame(chart, x, y, w, h, ptToPx, {
@@ -358,7 +428,7 @@ export function renderScatterChart(
           ctx.textAlign = 'right'; labelX = yAxisX - yMajorTickOutset - yTickGap;
         }
         ctx.textBaseline = 'middle';
-        ctx.fillText(formatPrimaryValueAxisTick(chart, v, false), labelX, gy);
+        fillAuthoredText(ctx, formatPrimaryValueAxisTick(chart, v, false), labelX, gy, axisLabelLineHeightPx(yTickFontPx));
       }
       // Scatter keeps its own undefined colour default (→ drawAxisTick's '#888'),
       // so only the width formula is shared. `axisLineWidthPx`'s 1 px fallback is
@@ -460,7 +530,11 @@ export function renderScatterChart(
     for (const v of xMajorTicks) {
       const gx = toX(v);
       if (labelPos !== 'none') {
-        ctx.fillText(formatAxisTickWithUnits(v, chart.catAxisFormatCode, chart.date1904, chart.catAxisDisplayUnits), gx, labelY);
+        fillAuthoredText(
+          ctx,
+          formatAxisTickWithUnits(v, chart.catAxisFormatCode, chart.date1904, chart.catAxisDisplayUnits),
+          gx, labelY, axisLabelLineHeightPx(tickFontPx),
+        );
       }
       drawAxisTick(ctx, chart.catAxisMajorTickMark, 'cat', xAxisY, gx, xAxisLineColor, lineWidth, false, chart.catAxisLineHidden, 'major', ptToPx, chart.catAxisLineDash);
     }
@@ -559,10 +633,12 @@ export function renderScatterChart(
     for (const value of secondaryXPlan.majorTicks) {
       const sx = toSecondaryX(value);
       if (secondaryX.tickLabelPos !== 'none') {
-        ctx.fillText(
+        fillAuthoredText(
+          ctx,
           formatAxisTickWithUnits(value, secondaryX.formatCode, chart.date1904, secondaryX.displayUnits),
           sx,
           py0 - tickOutset - categoryTickLabelGapPx(fontPx),
+          axisLabelLineHeightPx(fontPx),
         );
       }
       drawAxisTick(

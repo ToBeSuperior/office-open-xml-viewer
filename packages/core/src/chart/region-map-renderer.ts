@@ -12,6 +12,7 @@ import { chartTitleBand, resolveManualLayoutRect } from './layout.js';
 import { paintLegendFrame } from './legend-frame.js';
 import { paintPlotAreaFrame } from './plot-area-frame.js';
 import { formatChartValWithCode } from './chart-number-format.js';
+import { authoredLineCount, axisLabelLineHeightPx, fillAuthoredText, measureAuthoredTextWidth } from './chart-text-lines.js';
 import {
   NATURAL_EARTH_110M,
   type RegionMapFeature,
@@ -272,11 +273,12 @@ function drawLegend(
   ctx.fillStyle = chart.legendFontColor ? `#${chart.legendFontColor}` : '#595959';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
-  if (name) ctx.fillText(name, x + w / 2, y);
+  // Authored breaks in the series name stack lines and lower the scale bar.
+  if (name) fillAuthoredText(ctx, name, x + w / 2, y, fontPx + 2);
   const barW = Math.min(w * .58, 240);
   const barH = Math.max(6, Math.min(12, h * .25));
   const bx = x + (w - barW) / 2;
-  const by = y + (name ? fontPx + 2 : 0);
+  const by = y + (name ? fontPx + 2 + (authoredLineCount(name) - 1) * (fontPx + 2) : 0);
   const gradient = ctx.createLinearGradient(bx, 0, bx + barW, 0);
   gradient.addColorStop(0, scale.minColor);
   if (scale.midColor) gradient.addColorStop(.5, scale.midColor);
@@ -287,9 +289,9 @@ function drawLegend(
   ctx.textBaseline = 'top';
   ctx.textAlign = 'left';
   const formatCode = chart.series[0]?.valFormatCode ?? null;
-  ctx.fillText(formatChartValWithCode(scale.min, formatCode, chart.date1904), bx, by + barH + 2);
+  fillAuthoredText(ctx, formatChartValWithCode(scale.min, formatCode, chart.date1904), bx, by + barH + 2, fontPx + 2);
   ctx.textAlign = 'right';
-  ctx.fillText(formatChartValWithCode(scale.max, formatCode, chart.date1904), bx + barW, by + barH + 2);
+  fillAuthoredText(ctx, formatChartValWithCode(scale.max, formatCode, chart.date1904), bx + barW, by + barH + 2, fontPx + 2);
 }
 
 function drawUnavailableMessage(
@@ -431,7 +433,8 @@ export function renderRegionMapChart(
   }
 
   if (map.regionLabelLayout && map.regionLabelLayout !== 'none') {
-    ctx.font = `${Math.max(7, (chart.dataLabelFontSizeHpt ?? 800) / 100 * ptToPx)}px ${JSON.stringify(chart.dataLabelFontFace || chart.themeMinorFontLatin || 'sans-serif')}`;
+    const regionLabelFontPx = Math.max(7, (chart.dataLabelFontSizeHpt ?? 800) / 100 * ptToPx);
+    ctx.font = `${regionLabelFontPx}px ${JSON.stringify(chart.dataLabelFontFace || chart.themeMinorFontLatin || 'sans-serif')}`;
     ctx.fillStyle = chart.dataLabelFontColor ? `#${chart.dataLabelFontColor}` : '#404040';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -440,8 +443,10 @@ export function renderRegionMapChart(
       const bounds = feature ? featureBounds.get(feature) : undefined;
       if (!feature || !bounds || !row.label) continue;
       const point = canvasPoint(feature.l);
-      const fits = ctx.measureText(row.label).width <= Math.max(0, bounds.maxX - bounds.minX - 4);
-      if (map.regionLabelLayout === 'showAll' || fits) ctx.fillText(row.label, point.x, point.y);
+      const fits = measureAuthoredTextWidth(ctx, row.label) <= Math.max(0, bounds.maxX - bounds.minX - 4);
+      if (map.regionLabelLayout === 'showAll' || fits) {
+        fillAuthoredText(ctx, row.label, point.x, point.y, axisLabelLineHeightPx(regionLabelFontPx));
+      }
     }
   }
   if (map.geography?.attribution) {

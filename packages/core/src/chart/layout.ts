@@ -522,10 +522,15 @@ export function chartManualOuterAxisInsets(metrics: Readonly<{
   valTitleBandW: number;
   catTitleBandH: number;
   secondaryBandW?: number;
+  /** Extra rise of the top value label block above its single-line half
+   *  height (authored line breaks); 0 when absent. */
+  valLabelExtraTopPx?: number;
 }>): ChartPad {
   const outerMargin = metrics.outerTextMarginPx ?? 0;
   return {
-    t: metrics.valAxisHidden ? 0 : metrics.valLabelFontPx / 2 + outerMargin,
+    t: metrics.valAxisHidden
+      ? 0
+      : metrics.valLabelFontPx / 2 + (metrics.valLabelExtraTopPx ?? 0) + outerMargin,
     r: (metrics.secondaryBandW ?? 0) > 0
       ? (metrics.secondaryBandW ?? 0) + outerMargin
       : 0,

@@ -22,6 +22,7 @@ import { paintClassicDataPointRect } from './chartex-style.js';
 import { chartFaceWithFallback, resolveThemeFontRef } from './fonts.js';
 import { dashPatternForPreset } from './geometry.js';
 import { wrapMeasuredText } from './axis.js';
+import { authoredLineCount, authoredTextLines, fillAuthoredText, measureAuthoredTextWidth } from '../chart-text-lines.js';
 import { legendSeriesWithTrendlines } from './trendline.js';
 
 
@@ -896,6 +897,15 @@ export function legendSwatchWidths(
 }
 
 
+/** Height of one top/bottom legend row: the tallest entry's authored line
+ *  block (lines one font size apart) plus the row extra. Text without breaks
+ *  keeps the single-line `max(fontSize) + extra` row. */
+function legendRowHeight(entries: readonly LegendEntry[], fontSizes: readonly number[]): number {
+  return Math.max(0, ...fontSizes.map((fontSize, index) =>
+    authoredLineCount(entries[index]?.label ?? '') * fontSize)) + LEGEND_ROW_EXTRA_PX;
+}
+
+
 export function legendSwatchHeight(entry: LegendEntry, fontSize: number, ptToPx: number): number {
   return entry.swatchStyle === 'fill' ? FILLED_LEGEND_KEY_PT * ptToPx : fontSize;
 }
@@ -912,6 +922,12 @@ function sideLegendLabelLines(
   maxWidth: number,
 ): string[] {
   if (!(maxWidth > 0)) return [];
+  // Every authored line (including an interior blank line) is kept; the
+  // two-line wrap bound applies within each authored line.
+  const authored = authoredTextLines(label);
+  if (authored.length > 1) {
+    return authored.flatMap(line => sideLegendLabelLines(ctx, line, maxWidth));
+  }
   const wrapped = wrapMeasuredText(ctx, label, maxWidth);
   if (wrapped.length <= 2) return wrapped;
   return [
@@ -962,14 +978,16 @@ export function measuredLegendReserve(
   ctx.save();
   const itemWidths = entries.map((entry, index) => {
     setLegendFont(ctx, entryStyles[index], ptToPx);
-    return swatches[index] + LEGEND_SWATCH_TEXT_GAP + ctx.measureText(entry.label).width;
+    return swatches[index] + LEGEND_SWATCH_TEXT_GAP + measureAuthoredTextWidth(ctx, entry.label);
   });
   ctx.restore();
   const pos = chart.legendPos ?? 'r';
   const horizontal = pos === 't' || pos === 'b';
   const reserve = chartLegendReserve(chart, w, h, {
     itemWidths,
-    rowHeight: Math.max(0, ...fontSizes) + LEGEND_ROW_EXTRA_PX,
+    // A top/bottom row is as tall as its tallest entry; an entry with authored
+    // breaks stacks its lines at one font-size interval.
+    rowHeight: legendRowHeight(entries, fontSizes),
     itemGap: LEGEND_ITEM_GAP,
     horizontalPadding: horizontal ? LEGEND_HORIZONTAL_PADDING : LEGEND_SIDE_PADDING,
     verticalPadding: LEGEND_VERTICAL_PADDING,
@@ -1029,7 +1047,7 @@ export function drawLegend(
     : entryStyles.map(entryStyle => legendFontSizePx(entryStyle, ptToPx));
   if (entryStyles[0]) setLegendFont(ctx, entryStyles[0], ptToPx);
   ctx.textBaseline = 'middle';
-  const rowH = Math.max(0, ...fontSizes) + LEGEND_ROW_EXTRA_PX;
+  const rowH = legendRowHeight(entries, fontSizes);
   const swatches = canReuseMeasure
     ? measured.swatches
     : entries.map((entry, index) =>
@@ -1039,7 +1057,7 @@ export function drawLegend(
     ? measured.itemWidths
     : entries.map((entry, index) => {
         setLegendFont(ctx, entryStyles[index], ptToPx);
-        return swatches[index] + gap + ctx.measureText(entry.label).width;
+        return swatches[index] + gap + measureAuthoredTextWidth(ctx, entry.label);
       });
   if (orient === 'horizontal') {
     const rows = packLegendRows(itemWidths, lw, LEGEND_ITEM_GAP);
@@ -1068,7 +1086,6 @@ export function drawLegend(
           effectiveWidth - sw - gap + LEGEND_MEASUREMENT_EPSILON_PX,
         );
         setLegendFont(ctx, entryStyles[index], ptToPx);
-        const label = elideToWidth(ctx, entries[index].label, maxTextPx);
         const swatchH = legendSwatchHeight(entries[index], fontSizes[index], ptToPx);
         drawLegendSwatch(
           ctx, entries[index].swatchStyle, entries[index].color,
@@ -1084,7 +1101,7 @@ export function drawLegend(
         );
         ctx.fillStyle = entryStyles[index].color;
         ctx.textAlign = 'left';
-        ctx.fillText(label, rx + sw + gap, ry);
+        fillAuthoredText(ctx, entries[index].label, rx + sw + gap, ry, fontSizes[index], maxTextPx);
         rx += effectiveWidth + LEGEND_ITEM_GAP;
       }
     }
@@ -1104,7 +1121,7 @@ export function drawLegend(
     setLegendFont(ctx, entryStyles[index], ptToPx);
     return wrapSeriesNames
       ? sideLegendLabelLines(ctx, entry.label, maxTextPx)
-      : [elideToWidth(ctx, entry.label, maxTextPx)];
+      : authoredTextLines(entry.label).map(line => elideToWidth(ctx, line, maxTextPx));
   });
   const entryHeights = labelLines.map((lines, index) =>
     lines.length * fontSizes[index] + LEGEND_ROW_EXTRA_PX

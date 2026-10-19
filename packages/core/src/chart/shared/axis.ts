@@ -5,6 +5,7 @@ import { formatChartVal, formatChartValWithCode } from '../chart-number-format.j
 import { axisTitleMargin, axisTitleRotationRad, chartTextFontSizePx, resolveManualLayoutRect } from '../layout.js';
 import type { ChartAxisTitleSide } from '../layout.js';
 import { elideToWidth } from '../text-elide.js';
+import { authoredExtraLinesHeight, axisLabelLineHeightPx, fillAuthoredText, measureAuthoredTextWidth } from '../chart-text-lines.js';
 import type { ChartExStyle } from './chartex-style.js';
 import { paintChartLabelBox } from '../label-box.js';
 import { rawLinkedChartStyleRole } from '../effective-style.js';
@@ -453,9 +454,12 @@ export function drawChartDisplayUnitLabels(
     const rotation = label.rotation != null
       ? (label.rotation / 60_000) * Math.PI / 180
       : vertical ? -Math.PI / 2 : 0;
-    const textWidth = ctx.measureText(text).width;
-    const rotatedW = Math.abs(Math.cos(rotation)) * textWidth + Math.abs(Math.sin(rotation)) * fontPx;
-    const rotatedH = Math.abs(Math.sin(rotation)) * textWidth + Math.abs(Math.cos(rotation)) * fontPx;
+    // Authored breaks stack lines; the box covers the whole line block.
+    const textWidth = measureAuthoredTextWidth(ctx, text);
+    const lineHeight = axisLabelLineHeightPx(fontPx);
+    const textHeight = fontPx + authoredExtraLinesHeight([text], lineHeight);
+    const rotatedW = Math.abs(Math.cos(rotation)) * textWidth + Math.abs(Math.sin(rotation)) * textHeight;
+    const rotatedH = Math.abs(Math.sin(rotation)) * textWidth + Math.abs(Math.cos(rotation)) * textHeight;
     const automatic = {
       x: fallbackX - rotatedW / 2,
       y: fallbackY - rotatedH / 2,
@@ -489,7 +493,7 @@ export function drawChartDisplayUnitLabels(
     ctx.fillStyle = fontColor ? `#${fontColor}` : '#595959';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(text, 0, 0);
+    fillAuthoredText(ctx, text, 0, 0, lineHeight);
     ctx.restore();
   }
 }
@@ -680,9 +684,15 @@ export function catLabelRotationRad(chart: ChartModel): number {
  *  text trails up-left from the tick, matching PowerPoint's angled axis labels. */
 export function drawRotatedCatLabel(
   ctx: CanvasRenderingContext2D, text: string, x: number, y: number, rotRad: number,
+  // Authored line breaks start new lines this far apart. Unrotated lines grow
+  // with the caller's baseline; rotated lines stack perpendicular to the text
+  // direction, centred as a block on the pivot.
+  lineHeightPx: number,
+  // Optional per-line elision budget.
+  maxWidthPx?: number,
 ): void {
   if (rotRad === 0) {
-    ctx.fillText(text, x, y);
+    fillAuthoredText(ctx, text, x, y, lineHeightPx, maxWidthPx);
     return;
   }
   ctx.save();
@@ -690,7 +700,7 @@ export function drawRotatedCatLabel(
   ctx.rotate(rotRad);
   ctx.textAlign = 'right';
   ctx.textBaseline = 'middle';
-  ctx.fillText(text, 0, 0);
+  fillAuthoredText(ctx, text, 0, 0, lineHeightPx, maxWidthPx);
   ctx.restore();
 }
 
