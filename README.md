@@ -1099,8 +1099,10 @@ decode or playback failures after the presentation handle has been returned.
 Stable failures can be narrowed without parsing message strings:
 
 - `OoxmlError` — typed input and source failures. Its `code` is `encrypted`,
-  `invalid-password`, `unsupported-encryption`, `legacy-binary-format`, `unsupported-content`, or
-  `not-ooxml`. For `unsupported-content`, offer conversion: the configured
+  `invalid-password`, `unsupported-encryption`, `legacy-binary-format`,
+  `not-ooxml`, `unsupported-image-effect` (a picture-effect chain that is
+  malformed or cannot be drawn), `invalid-numbering` (DOCX numbering that Word
+  cannot open), or `unsupported-content`. For `unsupported-content`, offer conversion: the configured
   source cannot represent this input. Frozen `details` contain only its
   `format` identifier and `reason: 'source-subset'`.
 - `OoxmlResourceLimitError` (`code === 'ooxml-resource-limit'`) — a measured

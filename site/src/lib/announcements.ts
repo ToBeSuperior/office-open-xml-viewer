@@ -37,10 +37,11 @@ export interface Announcement {
 export const announcements: readonly Announcement[] = [
   {
     slug: 'experimental-legacy-office',
-    date: '2026-10-15',
-    label: 'Upcoming release',
+    date: '2026-10-19',
+    label: 'Release note',
+    version: 'v0.89.0',
     title: 'Windows-Office layout, full picture effects and experimental legacy Office reading',
-    summary: 'The upcoming release lays out Word documents from the fonts actually installed on the viewing host and from Windows Office observations, renders the full DrawingML picture-effect chain in every format, speeds up first display, hardens parsing against hostile input and adds optional, experimental reading of a supported subset of .doc, .xls and .ppt files. OOXML Viewer remains an OOXML viewer; legacy reading is enabled separately.',
+    summary: 'v0.89.0 lays out Word documents from the fonts actually installed on the viewing host and from Windows Office observations, renders the full DrawingML picture-effect chain in every format, speeds up first display, hardens parsing against hostile input and adds optional, experimental reading of a supported subset of .doc, .xls and .ppt files. OOXML Viewer remains an OOXML viewer; legacy reading is enabled separately.',
     audience: 'All Viewer and Node integrations. No migration is required; applications that branch on OoxmlError codes should handle the new codes listed below.',
     sections: [
       {
@@ -84,6 +85,7 @@ export const announcements: readonly Announcement[] = [
           'PowerPoint text follows the list-style chain for faces and sizes, built-in and per-level paragraph spacing, font alignment, compatible line spacing, per-language East Asian and complex-script theme fonts, and stacked vertical WordArt. Table style fallbacks, theme overrides and equation fallbacks also match PowerPoint more closely.',
           'Excel derives column widths from the workbook\'s first font, applies table and PivotTable style font colours as Excel does, formats time-only and fractional-second formats, keeps cached `TODAY()` and `NOW()` values and renders one-cell-anchored pictures. The viewer gains a sheet list popover from the tab navigation, whole-row and whole-column selection outlines, and resizing of several selected bands at once.',
           'Box-and-whisker, histogram and Pareto ChartEx charts follow Office aggregation, binning and paint order, and date and time axis labels use the worksheet number formatter.',
+          'Chart category, value, legend, data-table, title and text-box labels now keep authored line breaks, including `<a:br>` in chart text, and a multi-paragraph chart title renders one line per paragraph.',
         ],
       },
       {

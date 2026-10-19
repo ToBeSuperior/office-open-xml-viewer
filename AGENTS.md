@@ -463,6 +463,7 @@ Release checklist:
    - `site/src/lib/api-reference.ts`,
    - `site/src/components/Capabilities.astro` when capabilities changed.
    - `site/src/pages/bundle-size.astro` with the latest production measurements.
+     Measure with `node scripts/measure-bundle-size.mjs` after `pnpm build:wasm && pnpm build`.
 4. Add a new top `CHANGELOG.md` section:
    `## 0.x.0 — YYYY-MM-DD`.
 5. Bump all versions consistently:

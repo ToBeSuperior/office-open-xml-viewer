@@ -32,10 +32,9 @@ describe('experimental legacy Office add-on guidance', () => {
     expect(source('../../README.md')).toContain('https://ooxml.silurus.dev/legacy-office/');
   });
 
-  it('announces the optional subset with an explicit migration boundary and no invented release version', () => {
+  it('announces the optional subset as the v0.89.0 release note with an explicit migration boundary', () => {
     const announcement = announcements.find(({ slug }) => slug === 'experimental-legacy-office');
-    expect(announcement).toMatchObject({ label: 'Upcoming release', date: '2026-10-15' });
-    expect(announcement?.version).toBeUndefined();
+    expect(announcement).toMatchObject({ label: 'Release note', version: 'v0.89.0', date: '2026-10-19' });
     expect(announcement?.sections[0].kind).toBe('summary');
     const text = JSON.stringify(announcement);
     for (const phrase of ['experimental', '@silurus/ooxml-legacy-office', '{ legacyDoc }', 'createLegacyDoc', 'No migration is required', 'versions must match', 'reject', 'OOXML viewer']) {
