@@ -4633,17 +4633,35 @@ function* paginateBodyWithAnchorConvergenceSteps(
   // are bounded by the frame groups of the document.
   const everCarried = new Set<string>();
   let applied = convergedPlan;
-  for (;;) {
+  // Every round adds a plan entry (a carry or a frame-run deferral) that is
+  // never re-added; the cap is an operational guard against an unbounded run
+  // of deferrals, reported like the anchor solver's own pass limit.
+  const roundLimit = ANCHOR_PASS_BASE_LIMIT + 4 * carried.frameObservations.length;
+  for (let round = 0; ; round += 1) {
     const next = frameCarryPlan(carried, applied, everCarried);
     if (next === null) return carried;
+    if (round >= roundLimit) {
+      throw new LayoutInvariantError(
+        'NON_CONVERGENCE',
+        `Text-frame carry reached the operational round limit ${roundLimit}`,
+      );
+    }
+    const frameEntries = [...next.values()]
+      .filter((destination) => destination.kind === 'frame' || destination.kind === 'frame-deferral').length;
     anchorPassLimit = ANCHOR_PASS_BASE_LIMIT
-      + 4 * (pageOwnedAnchorCount + hostPlan.size + everCarried.size);
+      + 4 * (pageOwnedAnchorCount + hostPlan.size + frameEntries);
     try {
       carried = yield* converge(next, false);
       applied = convergedPlan;
     } catch (error) {
       if (!(error instanceof ExactConvergenceError)) throw error;
-      return carried;
+      // Never return a pass without a push it requires.
+      throw new LayoutInvariantError(
+        'NON_CONVERGENCE',
+        error.reason === 'cycle'
+          ? 'Text-frame carry repeated an exact-state cycle'
+          : `Text-frame carry reached the operational pass limit ${anchorPassLimit}`,
+      );
     }
   }
 }
