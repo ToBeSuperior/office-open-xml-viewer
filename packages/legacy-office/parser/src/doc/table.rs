@@ -1142,7 +1142,9 @@ impl Row {
                     return Err(unsupported("invalid Word border color array"));
                 }
                 let colors = b[1..]
-                    .chunks_exact(4)
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
                     // Outer None: the no-border value; inner None: cvAuto.
                     .map(|cv| {
                         (u32_at(cv, 0)? != u32::MAX)
