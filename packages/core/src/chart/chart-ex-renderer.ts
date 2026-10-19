@@ -547,6 +547,9 @@ function renderWaterfallChart(
   });
   drawChartTitleForLayout(ctx, chart, x, y, w, h, y + frame.title.topPad, frame.title.fontPx);
   const { px0, py0, pw, ph } = frame.plotRect;
+  // Authored label lines can exhaust the frame; draw nothing into a
+  // non-positive plot, as the classic families do.
+  if (pw <= 0 || ph <= 0) return;
   paintPlotAreaFrame(ctx, chart, px0, py0, pw, ph, ptToPx, shapeRotationDeg);
   const plan = planValueAxis(chart, rawMin, rawMax, ph / ptToPx);
   const yOf = (value: number): number => py0 + ph - plan.frac(value) * ph;
@@ -897,6 +900,9 @@ function renderFunnelChart(
   });
   drawChartTitleForLayout(ctx, chart, x, y, w, h, y + frame.title.topPad, frame.title.fontPx);
   const { px0, py0, pw, ph } = frame.plotRect;
+  // Authored label lines can exhaust the frame; draw nothing into a
+  // non-positive plot, as the classic families do.
+  if (pw <= 0 || ph <= 0) return;
   paintPlotAreaFrame(ctx, chart, px0, py0, pw, ph, ptToPx, shapeRotationDeg);
   const rowH = ph / n;
   const gapWidthPct = resolveCategoryGapWidthPercent(chart.barGapWidth, 'chartex');
@@ -1413,6 +1419,12 @@ function renderBoxWhiskerChart(
     honorPlotAreaManualLayout: true,
   });
   const { px0, py0, pw, ph } = frame.plotRect;
+  // Authored label lines can exhaust the frame; draw nothing into a
+  // non-positive plot, as the classic families do.
+  if (pw <= 0 || ph <= 0) {
+    drawChartTitleForLayout(ctx, chart, x, y, w, h, y + frame.title.topPad, frame.title.fontPx);
+    return;
+  }
   paintPlotAreaFrame(ctx, chart, px0, py0, pw, ph, ptToPx, shapeRotationDeg);
 
   const cats = box.categories;

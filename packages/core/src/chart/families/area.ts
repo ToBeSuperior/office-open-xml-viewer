@@ -415,7 +415,9 @@ export function renderAreaChart(
   // Authored breaks in a category label stack extra lines below the first;
   // an automatic/outer layout lifts the plot bottom by them (an authored inner
   // rectangle already leaves its own label band). Exactly 0 without breaks.
-  if (!hasDataTable && !chart.catAxisHidden) {
+  // Labels at the high (top) edge hang into the plot from its top, so they
+  // need no bottom band.
+  if (!hasDataTable && !chart.catAxisHidden && chart.catAxisTickLabelPos !== 'high') {
     const labelFontPx = chart.catAxisFontSizeHpt != null
       ? catAxFontPx
       : Math.max(8, Math.min(11, pw / n * 0.8));

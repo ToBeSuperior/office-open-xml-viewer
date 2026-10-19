@@ -2361,16 +2361,19 @@ function simpleLegend(
     const textX = bounds.x + 8 + key;
     const availableTextWidth = Math.max(0, bounds.x + bounds.w - 4 - textX);
     const lineHeight = Math.max(textStyle.fontPx * 1.2, 10);
-    // Each authored line keeps the one-line (category) or two-line (series)
-    // wrap bound, so no authored line is dropped.
+    // Each authored line gets its own one-line (category) or two-line
+    // (series) wrap budget, so a long line cannot consume a later line's.
     const authoredLines = authoredTextLines(entry.label);
-    const lines = fitDataLabelLines(
-      authoredLines.join('\n'),
+    const fitLine = (text: string): string[] => fitDataLabelLines(
+      text,
       availableTextWidth,
-      lineHeight * (categoryDriven ? 1 : 2) * authoredLines.length,
+      lineHeight * (categoryDriven ? 1 : 2),
       lineHeight,
       value => ctx.measureText(value).width,
     );
+    const lines = authoredLines.length === 1
+      ? fitLine(entry.label)
+      : authoredLines.flatMap(fitLine);
     if (lines.length === 0) continue;
     const itemHeight = Math.max(singleLineRow, lines.length * lineHeight + 2);
     if (rowTop + itemHeight > bounds.y + bounds.h + 1e-6) break;

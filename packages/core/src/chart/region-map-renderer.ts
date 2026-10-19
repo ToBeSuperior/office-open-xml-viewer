@@ -294,6 +294,20 @@ function drawLegend(
   fillAuthoredText(ctx, formatChartValWithCode(scale.max, formatCode, chart.date1904), bx + barW, by + barH + 2, fontPx + 2);
 }
 
+/** Extra legend height for authored breaks in the series name (above the
+ *  scale bar) and in the scale min/max values (below it); 0 without breaks. */
+function regionMapLegendExtraH(chart: ChartModel, scale: ColorScale, ptToPx: number): number {
+  const name = chart.series[0]?.name ?? '';
+  const fontPx = Math.max(8, (chart.legendFontSizeHpt ?? 900) / 100 * ptToPx);
+  const formatCode = chart.series[0]?.valFormatCode ?? null;
+  const nameExtra = name ? authoredLineCount(name) - 1 : 0;
+  const valueExtra = Math.max(
+    authoredLineCount(formatChartValWithCode(scale.min, formatCode, chart.date1904)),
+    authoredLineCount(formatChartValWithCode(scale.max, formatCode, chart.date1904)),
+  ) - 1;
+  return (nameExtra + valueExtra) * (fontPx + 2);
+}
+
 function drawUnavailableMessage(
   ctx: CanvasRenderingContext2D,
   rect: ChartRect,
@@ -352,7 +366,9 @@ export function renderRegionMapChart(
   );
   const title = chartTitleBand(chart, rect.h, ptToPx, .02, .015);
   drawTitle(ctx, chart, rect, title.fontPx, title.topPad);
-  const legendH = chart.showLegend ? Math.max(32, rect.h * .16) : 0;
+  const legendH = chart.showLegend
+    ? Math.max(32, rect.h * .16) + regionMapLegendExtraH(chart, colorScale, ptToPx)
+    : 0;
   const defaultLegendRect = chart.showLegend ? {
     x: rect.x,
     y: rect.y + title.bandH,

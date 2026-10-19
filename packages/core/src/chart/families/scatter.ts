@@ -250,15 +250,19 @@ export function renderScatterChart(
       axisLabelLineHeightPx(chartTextFontSizePx(secondaryX.fontSizeHpt, ptToPx) ?? xAxLabelFontPx),
     )
     : 0;
+  // Primary X labels drawn at the high (top) plot edge grow upward, so their
+  // extra lines belong to the top band rather than the bottom one.
+  const primaryXLabelsHigh = chart.catAxisTickLabelPos === 'high';
   const valueLabelTopExtraH = Math.max(
     Math.max(primaryYLabelExtraH, secondaryYLabelExtraH) / 2,
     secondaryXLabelExtraH,
-  );
+  ) + (primaryXLabelsHigh ? primaryXLabelExtraH : 0);
+  const primaryXLabelBottomExtraH = primaryXLabelsHigh ? 0 : primaryXLabelExtraH;
   // Fixed gutter fractions: library policy, see ChartPad in layout.ts.
   const pad = {
     t: titleBand.bandH + legTopH + yAxLabelFontPx / 2 + 2 + secondaryXLabelHeight + valueLabelTopExtraH,
     r: legRightW + w * 0.05 + secondaryYLabelWidth,
-    b: (chart.catAxisHidden ? h * 0.04 : catAxisLabelBandH(xAxLabelFontPx) + primaryXLabelExtraH) + catTitleH + legBottomH,
+    b: (chart.catAxisHidden ? h * 0.04 : catAxisLabelBandH(xAxLabelFontPx) + primaryXLabelBottomExtraH) + catTitleH + legBottomH,
     l: (chart.valAxisHidden ? w * 0.04 : w * 0.12) + valTitleW + legLeftW,
   };
   const { plotRect: { px0, py0, pw, ph } } = computeChartFrame(chart, x, y, w, h, ptToPx, {

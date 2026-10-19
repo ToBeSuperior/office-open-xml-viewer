@@ -13,7 +13,10 @@ import { drawSecondaryCategoryAxis, secondaryCategoryLabelExtraH } from './share
 interface Label { text: string; x: number; y: number; align: string; baseline: string; font: string }
 interface Segment { x1: number; y1: number; x2: number; y2: number }
 
-function recordingContext(): { ctx: CanvasRenderingContext2D; labels: Label[]; segments: Segment[] } {
+interface FilledRect { x: number; y: number; w: number; h: number }
+
+function recordingContext(): { ctx: CanvasRenderingContext2D; labels: Label[]; segments: Segment[]; rects: FilledRect[] } {
+  const rects: FilledRect[] = [];
   const labels: Label[] = [];
   const segments: Segment[] = [];
   const path: Array<{ x: number; y: number }> = [];
@@ -36,6 +39,7 @@ function recordingContext(): { ctx: CanvasRenderingContext2D; labels: Label[]; s
           text, x, y, align: String(state.textAlign), baseline: String(state.textBaseline), font: String(state.font),
         });
         case 'getLineDash': return () => [];
+        case 'fillRect': return (x: number, y: number, w: number, h: number) => { rects.push({ x, y, w, h }); };
         case 'createLinearGradient':
         case 'createRadialGradient': return () => ({ addColorStop() {} });
         case 'createPattern': return () => null;
@@ -44,7 +48,7 @@ function recordingContext(): { ctx: CanvasRenderingContext2D; labels: Label[]; s
     },
     set(_target, prop: string, value) { state[prop] = value; return true; },
   };
-  return { ctx: new Proxy(state, handler) as unknown as CanvasRenderingContext2D, labels, segments };
+  return { ctx: new Proxy(state, handler) as unknown as CanvasRenderingContext2D, labels, segments, rects };
 }
 
 function series(over: Partial<ChartSeries> = {}): ChartSeries {
@@ -314,7 +318,9 @@ describe('authored breaks in legends, data tables, secondary and ChartEx/3-D lab
   it('3-D category and legend labels draw each line', () => {
     const rec = render(model({
       categories: ['FY2024\n1Q', 'Beta'],
+      chartType: 'clusteredBar',
       threeD: { rotationX: 15, rotationY: 20, perspective: 30 },
+      plotGroups: [{ kind: 'bar3D', seriesStart: 0, seriesCount: 1, categoryAxis: 'primary', valueAxis: 'primary', seriesAxis: 'none', varyColors: false, barDirection: 'col', grouping: 'clustered' }],
       showLegend: true,
       legendPos: 'b',
       series: [series({ name: 'North\nEast' })],
@@ -368,5 +374,78 @@ describe('authored breaks in legends, data tables, secondary and ChartEx/3-D lab
     expect(label(rec, 'Sales').y - label(rec, 'Net').y).toBeCloseTo(11, 6);
     expect(label(rec, 'States').y - label(rec, 'United').y).toBeCloseTo(10, 6); // 8 px region labels
     expect(rec.labels.filter(entry => entry.text === 'units')).toHaveLength(2);
+  });
+
+});
+
+describe('authored-break reservations stay on the painted side and inside the chart', () => {
+  it('scatter X labels at the high edge reserve their extra lines at the top, inside the chart', () => {
+    const scatter = (labelPos: 'high' | 'nextTo') => model({
+      chartType: 'scatter', categories: ['0', '10'], scatterStyle: 'marker',
+      series: [series({ categories: ['0', '10'], values: [0, 20] })],
+      catAxisTickLabelPos: labelPos,
+      catAxisFormatCode: '0"\na\nb\nc"',
+    });
+    const rec = render(scatter('high'));
+    expectNoJoinedText(rec);
+    const xLines = rec.labels.filter(entry => ['a', 'b', 'c'].includes(entry.text));
+    expect(xLines.length).toBeGreaterThan(0);
+    for (const line of xLines) {
+      expect(line.baseline).toBe('bottom');
+      expect(line.y - 10).toBeGreaterThanOrEqual(RECT.y);
+    }
+  });
+
+  it('3-D side legend keeps the last authored line after a long wrapped first line', () => {
+    const rec = render(model({
+      chartType: 'clusteredBar',
+      threeD: { rotationX: 15, rotationY: 20, perspective: 30 },
+      plotGroups: [{ kind: 'bar3D', seriesStart: 0, seriesCount: 2, categoryAxis: 'primary', valueAxis: 'primary', seriesAxis: 'none', varyColors: false, barDirection: 'col', grouping: 'clustered' }],
+      showLegend: true,
+      legendPos: 'r',
+      series: [
+        series({ name: `${'word '.repeat(20)}\nLast` }),
+        series({ name: 'Other', values: [5, 6] }),
+      ],
+    }));
+    expectNoJoinedText(rec);
+    expect(rec.labels.some(entry => entry.text === 'Last')).toBe(true);
+  });
+
+  it('region-map legend grows so multi-line names and values stay above the map', () => {
+    const rec = recordingContext();
+    renderRegionMapChart(rec.ctx, {
+      chartType: 'regionMap',
+      categories: ['Canada'],
+      series: [{ name: 'A\nB\nC\nD', values: [420, 850], valFormatCode: '0"\nunits"' }],
+      showLegend: true,
+      plotAreaBg: 'FFFFFF',
+      chartexRegionMap: {
+        rows: [{ label: 'Canada', value: 420 }, { label: 'United States', value: 850 }],
+        geography: { projectionType: 'robinson', cachePresent: false },
+      },
+    } as ChartModel, RECT, 1);
+    const legendBottom = Math.max(...rec.labels.filter(entry => entry.text === 'units').map(entry => entry.y + 9));
+    const mapTop = Math.min(...rec.rects.filter(r => r.w > RECT.w * 0.9).map(r => r.y));
+    expect(legendBottom).toBeLessThanOrEqual(mapTop);
+  });
+
+  it('box-whisker never paints a negative-size plot when category lines exhaust the frame', () => {
+    const category = Array.from({ length: 32 }, (_, index) => `L${index}`).join('\n');
+    const rec = render(model({
+      chartType: 'boxWhisker',
+      plotAreaBg: 'FFFFFF',
+      categories: [category],
+      series: [series({ values: [] })],
+      chartexBox: {
+        categories: [category],
+        series: [{
+          name: 'S1', color: '4472C4', valuesByCategory: [[1, 2, 3, 4, 5]],
+          meanMarker: false, meanLine: false, showOutliers: false, showNonoutliers: false,
+          quartileMethod: 'inclusive',
+        }],
+      },
+    }));
+    expect(rec.rects.filter(r => r.w < 0 || r.h < 0)).toEqual([]);
   });
 });

@@ -421,7 +421,9 @@ export function renderLineChart(
   // an automatic/outer layout lifts the plot bottom by them, as the column
   // family does for its wrapped labels. An authored inner rectangle already
   // leaves its own label band. Exactly 0 without breaks.
-  if (!chart.catAxisHidden && !hasDataTable && catLabelsVisible(chart)) {
+  // Labels at the high (top) edge hang into the plot from its top, so they
+  // need no bottom band.
+  if (!chart.catAxisHidden && !hasDataTable && catLabelsVisible(chart) && chart.catAxisTickLabelPos !== 'high') {
     const manualInner = chart.plotAreaManualLayout?.layoutTarget === 'inner' &&
       chart.plotAreaManualLayout.w != null && chart.plotAreaManualLayout.h != null;
     const categoryLabelExtraH = authoredExtraLinesHeight(
