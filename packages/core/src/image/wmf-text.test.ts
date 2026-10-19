@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { playWmf } from './wmf.js';
+import { cursiveCells } from './wmf-text.js';
 import { decodeRasterOrMetafile, getIncompleteMetafileReport } from './raster-or-metafile.js';
 
 // Synthetic MS-WMF byte fixtures for META_TEXTOUT / META_EXTTEXTOUT and the
@@ -373,17 +374,38 @@ describe('WMF text: META_EXTTEXTOUT options and Dx', () => {
     expect(single.painted()).toEqual([')א']);
   });
 
-  it('keeps cursive joining: Dx in joining scripts is reported, justification paints whole words', () => {
-    // Code page 1256 beh, beh: separate cells would paint two isolated forms.
-    const dx = play(picture(font({ charset: 178 }), extText(0, 50, [0xc8, 0xc8], { dx: [10, 10] })));
-    expect(dx.texts()).toEqual([]);
-    expect(dx.unsupported).toEqual(['META_EXTTEXTOUT (per-character advances in a cursive-joining script)']);
+  it('keeps cursive joining: Dx cells carry ZWJ context, justification paints whole words', () => {
+    // Code page 1256 beh, beh with Dx: initial beh (joins after) and final beh
+    // (joins before), each at its own Dx position, right to left.
+    const dx = play(picture(font({ charset: 178 }), extText(0, 50, [0xc8, 0xc8], { dx: [10, 12] })));
+    expect(dx.unsupported).toEqual([]);
+    expect(dx.texts().map((op) => op.args)).toEqual([['ب\u200d', 12, 50], ['\u200dب', 0, 50]]);
     const extra = play(picture(font({ charset: 178 }), record(0x0108, u16(2)), extText(0, 50, [0xc8, 0xc8])));
-    expect(extra.unsupported).toEqual(['META_EXTTEXTOUT (per-character advances in a cursive-joining script)']);
+    expect(extra.texts().map((op) => op.args[0]).sort()).toEqual(['\u200dب', 'ب\u200d'].sort());
+    // Alef (right-joining) does not join the following beh; lam-alef stays one
+    // ligature cell; a fatha stays with its letter.
+    // Bytes: beh, alef, beh, lam, alef, beh, fatha.
+    const mixed = play(picture(font({ charset: 178 }),
+      extText(0, 50, [0xc8, 0xc7, 0xc8, 0xe1, 0xc7, 0xc8, 0xf3], { dx: [5, 5, 5, 5, 5, 5, 5] })));
+    // beh→alef join; alef and the lam-alef ligature (alef last) join nothing after.
+    expect(mixed.texts().map((op) => op.args[0]).sort())
+      .toEqual(['ب\u200d', '\u200dا', 'ب\u200d', '\u200dلا', 'بَ'].sort());
     const justified = play(picture(font({ charset: 178 }), record(0x020a, [...u16(1), ...u16(4)]),
       extText(0, 50, [0xc8, 0xc8, 0x20, 0xc8, 0xc8])));
     expect(justified.texts().map((op) => op.args[0]).sort()).toEqual([' ', 'بب', 'بب']);
     expect(justified.unsupported).toEqual([]);
+  });
+
+  it.each([
+    ['Arabic', 0x0628], ['Syriac', 0x0712], ["N'Ko", 0x07d3], ['Mandaic', 0x0841], ['Syriac Supplement', 0x0860],
+    ['Mongolian', 0x182a], ['Phags-pa', 0xa840], ['Manichaean', 0x10ac1], ['Psalter Pahlavi', 0x10b82],
+    ['Hanifi Rohingya', 0x10d01], ['Sogdian', 0x10f31], ['Old Uyghur', 0x10f71], ['Chorasmian', 0x10fb2], ['Adlam', 0x1e926],
+  ])('joins separately positioned %s dual-joining letters through their Joining_Type', (_script, cp) => {
+    const letter = String.fromCodePoint(cp);
+    const cells = cursiveCells([letter, letter, letter], ['f', 'f', 'f']);
+    expect(cells.map((cell) => [cell.joinBefore, cell.joinAfter])).toEqual([[false, true], [true, true], [true, false]]);
+    // A different face never joins across the boundary.
+    expect(cursiveCells([letter, letter], ['f', 'g']).map((cell) => [cell.joinBefore, cell.joinAfter])).toEqual([[false, false], [false, false]]);
   });
 
   it('reports an empty ETO_OPAQUE output as drawn, without needing a font', () => {

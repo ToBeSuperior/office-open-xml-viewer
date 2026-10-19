@@ -19,6 +19,10 @@
 // escapement and the orientation (lfOrientation is not used), and glyphs stay
 // upright on the device regardless of a mirrored logical mapping.
 //
+// Separately positioned characters (Dx, CharExtra) are drawn as cells in
+// UAX #9 visual order; cursive scripts keep their contextual forms through
+// zero-width joiners chosen from the Unicode Joining_Type of each neighbour.
+//
 // Character spacing follows the GDI ExtTextOut model: an authored Dx array
 // replaces the font's natural advances; SETTEXTCHAREXTRA is added to every
 // character and SETTEXTJUSTIFICATION's BreakExtra is shared across the break
@@ -44,6 +48,7 @@ import { officeFaceWebAlias } from '../fonts/font-stack.js';
 import { classifyFontGeneric, cjkFallbackChain, type CjkLang } from '../fonts/scripts.js';
 import { quoteCssFontFamily } from '../internal/css-font-family.js';
 import { buildVisualOrder, getDefaultBidiEngine, hasStrongRtl } from '../text/bidi/index.js';
+import { joiningType, joinsToFollowing, joinsToPreceding } from '../text/joining-type.js';
 import { referenceFontDecoration } from '../text/font-decoration.js';
 import { DECORATION_LINE_WIDTH_EM, STRIKE_RISE_EM } from '../text/underline.js';
 
@@ -378,12 +383,51 @@ function measuredAverageWidth(ctx: AnyCtx, css: (px: number) => string): number 
   return total / 1000 / PROBE_EM;
 }
 
-// Scripts whose letters join cursively (Unicode Joining_Type D/L/R/C):
-// Arabic and its supplements/extensions, Syriac, N'Ko, Mandaic, Mongolian,
-// Phags-pa, Manichaean, Psalter Pahlavi, Hanifi Rohingya, Sogdian, Old
-// Uyghur, Chorasmian and Adlam. Presentation forms are already shaped.
-const CURSIVE_JOINING_SCRIPT =
-  /[\u0600-\u06ff\u0700-\u074f\u0750-\u077f\u07c0-\u07ff\u0840-\u085f\u0860-\u086f\u0870-\u08ff\u1800-\u18af\ua840-\ua87f\u{10ac0}-\u{10aff}\u{10b80}-\u{10baf}\u{10d00}-\u{10d3f}\u{10f30}-\u{10fdf}\u{1e900}-\u{1e95f}]/u;
+const ZWJ = '\u200d';
+const LAM = 0x0644;
+// Lam followed by one of these alefs forms the obligatory lam-alef ligature.
+const LAM_ALEF_PARTNERS = new Set([0x0622, 0x0623, 0x0625, 0x0627, 0x0671]);
+
+export interface CursiveCell { first: number; last: number; joinBefore: boolean; joinAfter: boolean }
+
+/** Split separately positioned characters into cells and decide, from the
+ *  Unicode Joining_Type of each cell's base and its neighbours, on which sides
+ *  the cell joins cursively (UAX #44 / ArabicShaping.txt: a join exists where
+ *  the earlier letter joins to the following one and the later letter joins
+ *  to the preceding one; Transparent marks are skipped). A cell keeps its
+ *  Transparent marks and a lam-alef pair stays one ligature cell. Neighbours
+ *  in a different face never join. */
+export function cursiveCells(texts: readonly string[], fonts: readonly string[]): CursiveCell[] {
+  const cells: CursiveCell[] = [];
+  const base = (index: number) => texts[index].codePointAt(0) ?? 0;
+  const transparent = (index: number) => [...texts[index]].every((char) => joiningType(char.codePointAt(0)!) === 'T');
+  // The cell's last non-Transparent character decides its following join.
+  const lastBase = (cell: CursiveCell) => {
+    let index = cell.last;
+    while (index > cell.first && transparent(index)) index--;
+    return index;
+  };
+  for (let index = 0; index < texts.length; index++) {
+    const last = cells.at(-1);
+    if (last && fonts[index] === fonts[last.first] && texts[index].length > 0
+      && (transparent(index)
+        || (lastBase(last) === last.first && base(last.first) === LAM && LAM_ALEF_PARTNERS.has(base(index))))) {
+      last.last = index;
+      continue;
+    }
+    cells.push({ first: index, last: index, joinBefore: false, joinAfter: false });
+  }
+  for (let k = 1; k < cells.length; k++) {
+    const before = cells[k - 1];
+    const after = cells[k];
+    if (fonts[before.first] !== fonts[after.first]) continue;
+    if (joinsToFollowing(base(lastBase(before))) && joinsToPreceding(base(after.first))) {
+      before.joinAfter = true;
+      after.joinBefore = true;
+    }
+  }
+  return cells;
+}
 
 const MISSING_CONTROL_FAMILY = '__ooxml_wmf_missing_face_control_5b2e__';
 
@@ -515,42 +559,50 @@ export function drawWmfText(s: WmfTextState, out: WmfTextOutput): { drew: boolea
   // Draw groups. Natural advances: one Canvas call per run of same-face
   // units. Justification alone: one call per word, with the break
   // characters as their own cells. Dx or CharExtra: one cell per character.
-  interface Group { text: string; font: string; pen: number; rise: number; advance: number; x: number; level: number; extra: number; brk: boolean }
+  interface Group { text: string; font: string; pen: number; rise: number; advance: number; x: number; level: number; extra: number; brk: boolean; joinBefore: boolean; joinAfter: boolean }
   const perCharacter = out.dx !== null || charExtraPx !== 0;
-  // Separate Canvas calls cannot join cursive scripts across cells, and the
-  // Canvas API exposes no per-glyph positioning of one shaped run.
-  if (perCharacter && units.length > 1 && units.some((unit) => CURSIVE_JOINING_SCRIPT.test(unit.text))) {
-    return { problem: 'per-character advances in a cursive-joining script' };
-  }
   const groups: Group[] = [];
   let rise = 0;
-  for (const unit of units) {
-    const unitFont = fontFor(unit);
-    const isBreak = unit.count === 1 && out.bytes[unit.start] === 0x20;
-    let extra = 0;
-    if (justified && isBreak) {
-      extra += s.breakQuotientPx;
-      if (s.breakErrorPx > 0) { extra += 1; s.breakErrorPx -= 1; }
-    }
-    if (!perCharacter) {
+  const breakExtraFor = (unit: TextUnit) => {
+    if (!justified || unit.count !== 1 || out.bytes[unit.start] !== 0x20) return 0;
+    let extra = s.breakQuotientPx;
+    if (s.breakErrorPx > 0) { extra += 1; s.breakErrorPx -= 1; }
+    return extra;
+  };
+  if (!perCharacter) {
+    for (const unit of units) {
+      const unitFont = fontFor(unit);
+      const extra = breakExtraFor(unit);
+      const isBreak = justified && unit.count === 1 && out.bytes[unit.start] === 0x20;
       const last = groups.at(-1);
       const separate = justified && (isBreak || last?.brk === true);
       if (last && last.font === unitFont && !separate) last.text += unit.text;
-      else groups.push({ text: unit.text, font: unitFont, pen: 0, rise: 0, advance: 0, x: 0, level: 0, extra, brk: justified && isBreak });
-      continue;
+      else groups.push({ text: unit.text, font: unitFont, pen: 0, rise: 0, advance: 0, x: 0, level: 0, extra, brk: isBreak, joinBefore: false, joinAfter: false });
     }
-    let advance = charExtraPx + extra;
-    let unitRise = 0;
-    if (out.dx) {
-      for (let b = unit.start; b < unit.start + unit.count; b++) {
-        advance += out.dx[pdy ? b * 2 : b] * along;
-        if (pdy) unitRise += out.dx[b * 2 + 1] * across;
+  } else {
+    // Character cells: a base character with its following Transparent marks
+    // (Joining_Type T), and lam with a following alef as one ligature cell.
+    const cells = cursiveCells(units.map((unit) => unit.text), units.map(fontFor));
+    for (const cell of cells) {
+      let advance = 0;
+      let cellRise = 0;
+      for (let k = cell.first; k <= cell.last; k++) {
+        const unit = units[k];
+        advance += charExtraPx + breakExtraFor(unit);
+        if (out.dx) {
+          for (let b = unit.start; b < unit.start + unit.count; b++) {
+            advance += out.dx[pdy ? b * 2 : b] * along;
+            if (pdy) cellRise += out.dx[b * 2 + 1] * across;
+          }
+        }
       }
-    } else {
-      advance += measure(unit.text, unitFont);
+      const font = fontFor(units[cell.first]);
+      const text = units.slice(cell.first, cell.last + 1).map((unit) => unit.text).join('');
+      // Natural widths are taken in the cell's own joining context.
+      if (!out.dx) advance += measure(`${cell.joinBefore ? ZWJ : ''}${text}${cell.joinAfter ? ZWJ : ''}`, font);
+      groups.push({ text, font, pen: 0, rise, advance, x: 0, level: 0, extra: 0, brk: false, joinBefore: cell.joinBefore, joinAfter: cell.joinAfter });
+      rise += cellRise;
     }
-    groups.push({ text: unit.text, font: unitFont, pen: 0, rise, advance, x: 0, level: 0, extra: 0, brk: false });
-    rise += unitRise;
   }
   const rtl = (s.textAlign & TA_RTLREADING) !== 0 || (out.options & ETO_RTLREADING) !== 0;
   const useCpFlag = (s.textAlign & TA_UPDATECP) !== 0;
@@ -649,13 +701,16 @@ export function drawWmfText(s: WmfTextState, out: WmfTextOutput): { drew: boolea
         : [...group.text].length === 1 ? 'ltr' : (group.level & 1 ? 'rtl' : 'ltr');
       const gy = oy + baseline + group.rise;
       ctx.font = group.font;
+      // Zero-width joiners give a separately drawn cursive cell the
+      // contextual form it has in the whole string, without moving it.
+      const text = `${group.joinBefore ? ZWJ : ''}${group.text}${group.joinAfter ? ZWJ : ''}`;
       if (hScale === 1) {
-        ctx.fillText(group.text, gx, gy);
+        ctx.fillText(text, gx, gy);
       } else {
         ctx.save();
         ctx.translate(gx, gy);
         ctx.scale(hScale, 1);
-        ctx.fillText(group.text, 0, 0);
+        ctx.fillText(text, 0, 0);
         ctx.restore();
       }
     }
