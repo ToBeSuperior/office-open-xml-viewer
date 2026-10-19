@@ -22,7 +22,7 @@ it.skipIf(!skia).each([1, 2, 3])('renders a floating PNG at its page-relative SP
   const floatingAnchors = concat(little32(0), little32(1), little32(1027), little32(1440), little32(1440), little32(2880), little32(2160), little16((1 << 1) | (1 << 3) | (wrapping << 5)), little32(0));
   const drawingGroupData = concat(record(0xf000, 15, store), new Uint8Array([0]), record(0xf002, 15, record(0xf003, 15, shape)));
   const bytes = buildDocFixture({ text: '\u0008', floatingAnchors, drawingGroupData, characterProperties: concat(little16(0x0855), new Uint8Array([1])) });
-  const session = await openDocxDocument(bytes, { factory: skiaFactory(), currentDate: 0, modelSources: [testDocSource()] });
+  const session = await openDocxDocument(bytes, { factory: skiaFactory(), currentDate: 0, legacyDoc: testDocSource() });
   try {
     expect(session.pageCount).toBe(1);
     const canvas = await session.renderPage(0, { dpr: 1 }) as unknown as Pixels;

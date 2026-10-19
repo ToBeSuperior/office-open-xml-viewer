@@ -49,9 +49,10 @@ it.each(cases.flatMap(test => ['main', 'worker'].map(mode => ({ ...test, mode })
     vi.stubGlobal('OffscreenCanvas', class {});
     vi.stubGlobal('location', { href: 'https://example.test/' });
     const input = buildCfbFixture(['Root Entry', stream]);
-    const options = { mode: mode as 'main' | 'worker', modelSources: [source()] as ModelSource[] };
-    const pending = target === 'docx' ? DocxDocument.load(input, options)
-      : target === 'xlsx' ? XlsxWorkbook.load(input, options) : PptxPresentation.load(input, options);
+    const options = { mode: mode as 'main' | 'worker' };
+    const pending = target === 'docx' ? DocxDocument.load(input, { ...options, legacyDoc: source() as ModelSource<'docx'> })
+      : target === 'xlsx' ? XlsxWorkbook.load(input, { ...options, legacyXls: source() as ModelSource<'xlsx'> })
+        : PptxPresentation.load(input, { ...options, legacyPpt: source() as ModelSource<'pptx'> });
     await expect(pending).rejects.toBeInstanceOf(OoxmlError);
     await expect(pending).rejects.toMatchObject({ code: 'unsupported-content', details: { format, reason: 'source-subset' } });
     expect(terminated).toBeGreaterThan(0);
@@ -60,9 +61,10 @@ it.each(cases.flatMap(test => ['main', 'worker'].map(mode => ({ ...test, mode })
 
 it.each(cases)('$format rejection reaches the Node opener as the same typed contract', async ({ format, target, stream, source }) => {
   const input = buildCfbFixture(['Root Entry', stream]);
-  const options = { modelSources: [source()] as ModelSource[] };
-  const pending = target === 'docx' ? openDocxDocument(input, { ...options, factory: skiaFactory() })
-    : target === 'xlsx' ? openXlsxWorkbook(input, options) : openPptxPresentation(input, options);
+  const pending = target === 'docx'
+    ? openDocxDocument(input, { legacyDoc: source() as ModelSource<'docx'>, factory: skiaFactory() })
+    : target === 'xlsx' ? openXlsxWorkbook(input, { legacyXls: source() as ModelSource<'xlsx'> })
+      : openPptxPresentation(input, { legacyPpt: source() as ModelSource<'pptx'> });
   await expect(pending).rejects.toBeInstanceOf(OoxmlError);
   await expect(pending).rejects.toMatchObject({ code: 'unsupported-content', details: { format, reason: 'source-subset' } });
 });

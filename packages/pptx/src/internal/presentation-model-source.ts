@@ -64,8 +64,8 @@ export async function loadPptxModelSource(
     } else {
       buffer = input;
     }
-    const selected = selectModelSource(opts.modelSources, 'pptx', new Uint8Array(buffer));
-    if (!selected) return PptxPresentation.load(buffer, { ...opts, modelSources: undefined });
+    const selected = selectModelSource(opts.legacyPpt === undefined ? undefined : [opts.legacyPpt], 'pptx', new Uint8Array(buffer));
+    if (!selected) return PptxPresentation.load(buffer, { ...opts, legacyPpt: undefined });
     const load = beginModelSourceLoad(selected, 'pptx');
     try {
       metrics.setSourceBytes(buffer.byteLength);

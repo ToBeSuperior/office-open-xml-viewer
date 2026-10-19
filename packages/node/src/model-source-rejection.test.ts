@@ -23,7 +23,7 @@ it('normalizes source open and lazy failures, preserving frozen methods and thei
       moduleUrl: pathToFileURL(path).href, config: { failOpen } }, release() {} }),
   });
   const open = (failOpen: boolean) => resolveNodeSessionInput(new Uint8Array(), 'docx',
-    { modelSources: [source(failOpen)] }, value => value as { read(): void });
+    { source: source(failOpen) }, value => value as { read(): void });
   try {
     await expect(open(true)).rejects.toBeInstanceOf(OoxmlError);
     const result = await open(false);

@@ -12,6 +12,10 @@ import { parse } from '@babel/parser';
 
 const git = (args) => execFileSync('git', args, { encoding: 'utf8' }).trimEnd();
 const base = git(['merge-base', 'HEAD', 'origin/main']);
+// The opt-in source option key, before and after its per-format rename.
+const SOURCE_KEY = '(?:modelSources|legacyDoc|legacyXls|legacyPpt)';
+const SOURCE_ABSENT = new RegExp(`^options\\.${SOURCE_KEY}===undefined$`);
+const SOURCE_PRESENT = new RegExp(`^(?:__OOXML_MODEL_SOURCES__&&)?(?:opts|options)\\.${SOURCE_KEY}!==undefined$`);
 const cases = [
   ['packages/docx/src/internal/node-acquisition.ts', 'acquireDocxNodeDocument'],
   ['packages/xlsx/src/internal/node-acquisition.ts', 'acquireXlsxNodeSession'],
@@ -75,7 +79,7 @@ function ooxmlAwaits(node, code, pptxFontOwnerRefactor = false) {
       for (const statement of current.body) {
         if (statement.type === 'IfStatement') {
           const test = code.slice(statement.test.start, statement.test.end).replace(/\s+/g, '');
-          if (test === 'options.modelSources===undefined') {
+          if (SOURCE_ABSENT.test(test)) {
             walk(statement.consequent, googleFontsRequired);
             return;
           }
@@ -88,11 +92,11 @@ function ooxmlAwaits(node, code, pptxFontOwnerRefactor = false) {
       const test = code.slice(current.test.start, current.test.end).replace(/\s+/g, '');
       // The internal comparison-build flag can only narrow the existing
       // selected-source branch; the ordinary OOXML await path is unchanged.
-      if (/^(?:__OOXML_MODEL_SOURCES__&&)?(?:opts|options)\.modelSources!==undefined$/.test(test)) {
+      if (SOURCE_PRESENT.test(test)) {
         if (current.alternate) walk(current.alternate, googleFontsRequired);
         return;
       }
-      if (/^options\.modelSources===undefined$/.test(test)) {
+      if (SOURCE_ABSENT.test(test)) {
         walk(current.consequent, googleFontsRequired);
         return;
       }
@@ -107,7 +111,7 @@ function ooxmlAwaits(node, code, pptxFontOwnerRefactor = false) {
     }
     if (current.type === 'ConditionalExpression') {
       const test = code.slice(current.test.start, current.test.end).replace(/\s+/g, '');
-      if (test === 'options.modelSources===undefined') {
+      if (SOURCE_ABSENT.test(test)) {
         walk(current.consequent, googleFontsRequired);
         return;
       }

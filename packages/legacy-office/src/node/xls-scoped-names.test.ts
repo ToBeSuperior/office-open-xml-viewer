@@ -8,7 +8,7 @@ import { buildXlsScopedNamesFixture } from '../xls-scoped-names-fixture.js';
 import { compileCf, evaluateCf, materializeXlsxWorkbook } from './node-facade.js';
 
 it('keeps both same-name scopes and resolves the current-sheet local first in CF formulas', async () => {
-  const { workbookIndex, worksheets } = await materializeXlsxWorkbook(buildXlsScopedNamesFixture(), { modelSources: [testXlsSource()] });
+  const { workbookIndex, worksheets } = await materializeXlsxWorkbook(buildXlsScopedNamesFixture(), { legacyXls: testXlsSource() });
   expect(worksheets.map(sheet => sheet.name)).toEqual(['A', 'B']);
   // Sheet A sees the global and its own local; B sees only the global.
   expect(worksheets.map(sheet => sheet.definedNames)).toEqual([

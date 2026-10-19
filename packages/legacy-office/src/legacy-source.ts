@@ -97,6 +97,25 @@ export function createLegacySource<T extends ModelSourceTarget>(
   });
 }
 
+/**
+ * A source with the bundled defaults that can be exported as a constant. The
+ * real source (companion check and asset URL resolution) is created on the
+ * first `claim()` or `beginLoad()`, never at import time, so importing the
+ * entry fetches, instantiates and resolves nothing.
+ */
+export function deferredLegacySource<T extends ModelSourceTarget>(
+  target: T,
+  create: () => ModelSource<T>,
+): ModelSource<T> {
+  let source: ModelSource<T> | undefined;
+  const resolve = (): ModelSource<T> => (source ??= create());
+  return Object.freeze({
+    target,
+    claim: (bytes: Uint8Array): boolean => resolve().claim(bytes),
+    beginLoad: () => resolve().beginLoad(),
+  });
+}
+
 function absoluteUrl(value: unknown, field: 'wasmUrl' | 'moduleUrl', label: string): string {
   if (typeof value !== 'string' || value.length === 0 || value.trim() !== value) {
     throw new TypeError(`${label} ${field} must be a nonempty absolute URL`);

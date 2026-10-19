@@ -19,10 +19,10 @@ vi.mock('./legacy-doc-source-module.ts', () => { loaded.push('doc module'); retu
 vi.mock('./legacy-xls-source-module.ts', () => { loaded.push('xls module'); return {}; });
 vi.mock('./legacy-ppt-source-module.ts', () => { loaded.push('ppt module'); return {}; });
 
-import { legacyDocSource } from './legacy-doc.js';
-import { legacyPptSource } from './legacy-ppt.js';
-import { createLegacySource, type LegacyFamily } from './legacy-source.js';
-import { legacyXlsSource } from './legacy-xls.js';
+import { createLegacyDoc, legacyDoc } from './legacy-doc.js';
+import { createLegacyPpt, legacyPpt } from './legacy-ppt.js';
+import { createLegacySource, deferredLegacySource, type LegacyFamily } from './legacy-source.js';
+import { createLegacyXls, legacyXls } from './legacy-xls.js';
 import { buildStoredZip } from './zip-fixture.js';
 
 const cfb = (...streams: string[]) => new Uint8Array(buildCfbFixture(['Root Entry', ...streams]));
@@ -30,15 +30,49 @@ const WASM = 'https://cdn.example.test/legacy.wasm';
 const MODULE = 'https://cdn.example.test/legacy-source-module.js';
 
 const factories = [
-  { family: 'doc', target: 'docx', create: legacyDocSource, streams: [['WordDocument']] },
-  { family: 'xls', target: 'xlsx', create: legacyXlsSource, streams: [['Workbook'], ['Book']] },
-  { family: 'ppt', target: 'pptx', create: legacyPptSource, streams: [['PowerPoint Document']] },
+  { family: 'doc', target: 'docx', create: createLegacyDoc, constant: legacyDoc, streams: [['WordDocument']] },
+  { family: 'xls', target: 'xlsx', create: createLegacyXls, constant: legacyXls, streams: [['Workbook'], ['Book']] },
+  { family: 'ppt', target: 'pptx', create: createLegacyPpt, constant: legacyPpt, streams: [['PowerPoint Document']] },
 ] as const satisfies ReadonlyArray<{
   family: LegacyFamily;
   target: ModelSourceTarget;
   create: (options?: { wasmUrl?: string; moduleUrl?: string; maxInputBytes?: number }) => ModelSource;
+  constant: ModelSource;
   streams: ReadonlyArray<readonly string[]>;
 }>;
+
+describe.each(factories)('legacy $family default source constant', ({ target, create, constant, streams }) => {
+  it('is a frozen source for its own target that describes the bundled defaults', () => {
+    expect(constant.target).toBe(target);
+    expect(Object.isFrozen(constant)).toBe(true);
+    expect(constant.beginLoad().module).toEqual(create().beginLoad().module);
+    expect(constant.claim(cfb(...streams[0]))).toBe(true);
+    expect(constant.claim(new Uint8Array([1, 2, 3]))).toBe(false);
+  });
+});
+
+describe('deferredLegacySource', () => {
+  it('creates the real source once, on first use rather than at definition', () => {
+    const real = { target: 'docx', claim: vi.fn(() => true), beginLoad: vi.fn() } as unknown as ModelSource<'docx'>;
+    const create = vi.fn(() => real);
+    const deferred = deferredLegacySource('docx', create);
+    expect(create).not.toHaveBeenCalled();
+    expect(deferred.target).toBe('docx');
+    expect(deferred.claim(new Uint8Array())).toBe(true);
+    deferred.beginLoad();
+    expect(create).toHaveBeenCalledOnce();
+    expect(real.beginLoad).toHaveBeenCalledOnce();
+  });
+
+  it('surfaces a creation failure at first use and retries on the next', () => {
+    const failure = new Error('stale companion');
+    const create = vi.fn(() => { throw failure; });
+    const deferred = deferredLegacySource('xlsx', create);
+    expect(() => deferred.claim(new Uint8Array())).toThrow(failure);
+    expect(() => deferred.beginLoad()).toThrow(failure);
+    expect(create).toHaveBeenCalledTimes(2);
+  });
+});
 
 describe.each(factories)('legacy $family source factory', ({ family, target, create, streams }) => {
   it('describes its own target with frozen, admissible default asset URLs', () => {

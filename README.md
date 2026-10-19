@@ -209,30 +209,33 @@ shapes / text boxes the same way.)
 ### Experimental legacy DOC, XLS, and PPT sources
 
 Legacy binary Office files can be read directly into the ordinary document,
-workbook and presentation models through **model sources**, a format-generic
-`modelSources` load option. The legacy readers are separate opt-in entries, one
-per format in `@silurus/ooxml-legacy-office`. Install matching versions of both packages:
+workbook and presentation models through the experimental
+`@silurus/ooxml-legacy-office` add-on. Its readers are separate opt-in entries,
+one per format, passed in like the other opt-in modules (`{ legacyDoc }`,
+`{ legacyXls }` or `{ legacyPpt }`). Install matching versions of both packages:
 
 ```sh
 npm i @silurus/ooxml @silurus/ooxml-legacy-office
 ```
 
-Each entry returns a model source for the matching loader or viewer:
+Each entry exports a reader for the matching loader or viewer:
 
 ```typescript
 import { DocxViewer } from '@silurus/ooxml/docx';
-import { legacyDocSource } from '@silurus/ooxml-legacy-office/doc';
+import { legacyDoc } from '@silurus/ooxml-legacy-office/doc';
 
 const canvas = document.querySelector('canvas') as HTMLCanvasElement;
-const viewer = new DocxViewer(canvas, { modelSources: [legacyDocSource()] });
+const viewer = new DocxViewer(canvas, { legacyDoc });
 await viewer.load(docOrDocxBytes);
 ```
 
-`legacyXlsSource()` (`@silurus/ooxml-legacy-office/xls`) and `legacyPptSource()`
-(`@silurus/ooxml-legacy-office/ppt`) work the same way for XLSX and PPTX. A source
+`legacyXls` (`@silurus/ooxml-legacy-office/xls`) and `legacyPpt`
+(`@silurus/ooxml-legacy-office/ppt`) work the same way for XLSX and PPTX; for
+custom asset URLs create the reader with `createLegacyDoc({ wasmUrl, moduleUrl })`
+(likewise `createLegacyXls` and `createLegacyPpt`). A reader
 claims only its own binary family; every other input takes the unchanged OOXML
 path, and without a source a legacy file still rejects with the typed
-`legacy-binary-format` error. Creating a source fetches nothing: its
+`legacy-binary-format` error. Importing a reader fetches nothing: its
 self-contained source module and WASM load in the parser worker (or in Node)
 only when a claimed file is opened, and no OOXML package is generated. The
 readers are narrow and experimental and reject unsupported content rather than

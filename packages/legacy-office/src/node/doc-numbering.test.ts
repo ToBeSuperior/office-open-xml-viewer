@@ -8,7 +8,7 @@ import { materializeDocxDocument } from './node-facade.js';
 const reference = (id: number, level = 0) => concat(little16(0x460b), little16(id), little16(0x260a), new Uint8Array([level]));
 const distance = (code: number, value: number) => concat(little16(code), little16(value));
 const toggle = (code: number, value: boolean) => concat(little16(code), new Uint8Array([Number(value)]));
-const load = (bytes: Uint8Array) => materializeDocxDocument(bytes, { modelSources: [testDocSource()] });
+const load = (bytes: Uint8Array) => materializeDocxDocument(bytes, { legacyDoc: testDocSource() });
 
 interface Marker { text: string; format: string; fontFamily?: string; fontFacts?: { fontSize?: number; bold?: boolean } }
 interface Paragraph { type: string; numbering: Marker | null; indentLeft: number; indentFirst: number; bidi?: boolean; runs: { text?: string; bold?: boolean }[] }

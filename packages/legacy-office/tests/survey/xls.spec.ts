@@ -37,7 +37,7 @@ test.describe('legacy XLS corpus survey', () => {
         const pages: string[] = [];
         try {
           const { XlsxWorkbook } = await import('/src/workbook.ts');
-          const { legacyXlsSource } = await import(/* @vite-ignore */ module);
+          const { legacyXls } = await import(/* @vite-ignore */ module);
           // The dev server decodes paths with decodeURI, which keeps reserved
           // escapes such as %2B; encodeURI leaves those characters literal.
           const response = await fetch(`/private/xls/${encodeURI(file)}`);
@@ -47,7 +47,7 @@ test.describe('legacy XLS corpus survey', () => {
           // font's maximum digit width (ECMA-376 §18.3.1.13); the XLSX
           // renderer measures it with the same code that sizes the grid.
           const workbook = await XlsxWorkbook.load(bytes, {
-            modelSources: [legacyXlsSource()],
+            legacyXls,
           });
           try {
             for (let index = 0; index < workbook.sheetCount; index += 1) {

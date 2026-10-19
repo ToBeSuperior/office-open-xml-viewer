@@ -5,7 +5,7 @@ import { buildDocFixture, concat, little16 } from '../test-fixtures.js';
 import { testDocSource } from '../test-sources.js';
 import { materializeDocxDocument, openDocxDocument, skia, skiaFactory } from './node-facade.js';
 
-const load = (bytes: Uint8Array) => materializeDocxDocument(bytes, { modelSources: [testDocSource()] });
+const load = (bytes: Uint8Array) => materializeDocxDocument(bytes, { legacyDoc: testDocSource() });
 interface Run { type: string; text?: string; bold?: boolean; fieldType?: string; instruction?: string }
 interface Story { body: { type: string; runs: Run[] }[] }
 type Slots = Record<'default' | 'first' | 'even', Story | null>;
@@ -62,7 +62,7 @@ it.skipIf(!skia).each([false, true])('renders page stories after terminal page b
     facingPages: true, defaultTabTwips: 720,
     sectionProperties: concat(little16(0x300a), new Uint8Array([1])),
   });
-  const session = await openDocxDocument(source, { factory: skiaFactory(), currentDate: 0, modelSources: [testDocSource()] });
+  const session = await openDocxDocument(source, { factory: skiaFactory(), currentDate: 0, legacyDoc: testDocSource() });
   try {
     expect(session.pageCount).toBe(3);
     const bodyTops: number[] = [];

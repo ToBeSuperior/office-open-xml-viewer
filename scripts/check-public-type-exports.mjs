@@ -106,16 +106,16 @@ assert.deepEqual(
   'The ./tiff declaration entry must expose the runtime codec and its shared contract.',
 );
 
-for (const [entry, factory, options] of [
-  ['doc', 'legacyDocSource', 'LegacyDocSourceOptions'],
-  ['ppt', 'legacyPptSource', 'LegacyPptSourceOptions'],
-  ['xls', 'legacyXlsSource', 'LegacyXlsSourceOptions'],
+for (const [entry, constant, factory, options] of [
+  ['doc', 'legacyDoc', 'createLegacyDoc', 'LegacyDocOptions'],
+  ['ppt', 'legacyPpt', 'createLegacyPpt', 'LegacyPptOptions'],
+  ['xls', 'legacyXls', 'createLegacyXls', 'LegacyXlsOptions'],
 ]) {
   const exports = moduleExports(path.join(legacyTypesDir, `${entry}.d.ts`));
   assert.deepEqual(
     [...exports.keys()].sort(),
-    [options, factory].sort(),
-    `The ./${entry} declaration entry must preserve its model source factory and option types.`,
+    [constant, options, factory].sort(),
+    `The ./${entry} declaration entry must preserve its default model source, factory and option types.`,
   );
 }
 

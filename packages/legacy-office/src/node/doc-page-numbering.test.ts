@@ -22,7 +22,7 @@ it('maps every defined MSONFC to its page number format', async () => {
   expect(formats).toHaveLength(60);
   for (const value of [...Array.from({ length: 60 }, (_, i) => i), 255]) {
     const model = await materializeDocxDocument(buildDocFixture({ text: 'Body\r', sectionProperties: concat(format(value), restart(0)) }),
-      { modelSources: [testDocSource()] }) as unknown as { section: { pageNumType?: { fmt?: string; start?: number } } };
+      { legacyDoc: testDocSource() }) as unknown as { section: { pageNumType?: { fmt?: string; start?: number } } };
     expect(model.section.pageNumType, `MSONFC ${value}`).toEqual({ start: 0, fmt: value === 255 ? 'none' : formats[value] });
   }
 });
@@ -39,7 +39,7 @@ it.skipIf(!skia).each([
     sectionProperties: properties, defaultTabTwips: 720,
     headers: ['', '', '', footer, '', '', ...Array<string>(12).fill('')],
   });
-  const session = await openDocxDocument(source, { factory: skiaFactory(), currentDate: 0, modelSources: [testDocSource()] });
+  const session = await openDocxDocument(source, { factory: skiaFactory(), currentDate: 0, legacyDoc: testDocSource() });
   try {
     expect(session.pageCount).toBe(3);
     for (let page = 0; page < 3; page++) {
@@ -56,7 +56,7 @@ it.skipIf(!skia)('propagates a bounded page-number expansion failure and permits
     headers: ['', '', '', '\u0013PAGE\u001499\u0015\r', '', ''],
   });
   const render = async (value: number) => {
-    const session = await openDocxDocument(source(value), { factory: skiaFactory(), currentDate: 0, modelSources: [testDocSource()] });
+    const session = await openDocxDocument(source(value), { factory: skiaFactory(), currentDate: 0, legacyDoc: testDocSource() });
     try { await session.renderPage(0, { dpr: 1 }); }
     finally { await session.close(); }
   };

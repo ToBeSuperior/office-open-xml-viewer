@@ -34,27 +34,32 @@ executes macros, fields, formulas, actions or embedded objects.
 
 ## Enabling a source
 
-Pass the source in the format-generic `modelSources` option. It is available
-on the DOCX, XLSX and PPTX `load()` options, on the viewers, and on the Node
-session options (`openDocxDocument`, `materializeDocxDocument`,
-`openXlsxWorkbook`, `openPptxPresentation` and their siblings).
+Import the reader and pass it as its own option, like the other opt-in
+modules (`{ math }`, `{ chartEx }`, `{ tiff }`). The option is `legacyDoc` on
+the DOCX surfaces, `legacyXls` on the XLSX surfaces and `legacyPpt` on the
+PPTX surfaces: the `load()` options, the viewers and scroll viewers, and the
+Node session options (`openDocxDocument`, `materializeDocxDocument`,
+`openXlsxWorkbook`, `openPptxPresentation` and their siblings). Each option
+accepts only a source for its own format.
 
 ```typescript
 import { DocxViewer } from '@silurus/ooxml/docx';
-import { legacyDocSource } from '@silurus/ooxml-legacy-office/doc';
+import { legacyDoc } from '@silurus/ooxml-legacy-office/doc';
 
 const canvas = document.querySelector('canvas') as HTMLCanvasElement;
-const viewer = new DocxViewer(canvas, { modelSources: [legacyDocSource()] });
+const viewer = new DocxViewer(canvas, { legacyDoc });
 await viewer.load(docOrDocxBytes);
 ```
 
-| Input | Entry | Factory | Loaders and viewers |
-| --- | --- | --- | --- |
-| DOC | `@silurus/ooxml-legacy-office/doc` | `legacyDocSource()` | `DocxViewer`, `DocxDocument.load`, `openDocxDocument`, `materializeDocxDocument` |
-| XLS | `@silurus/ooxml-legacy-office/xls` | `legacyXlsSource()` | `XlsxViewer`, `XlsxWorkbook.load`, `openXlsxWorkbook` |
-| PPT | `@silurus/ooxml-legacy-office/ppt` | `legacyPptSource()` | `PptxViewer`, `PptxPresentation.load`, `openPptxPresentation` |
+| Input | Entry | Reader / factory | Option | Loaders and viewers |
+| --- | --- | --- | --- | --- |
+| DOC | `@silurus/ooxml-legacy-office/doc` | `legacyDoc` / `createLegacyDoc()` | `legacyDoc` | `DocxViewer`, `DocxScrollViewer`, `DocxDocument.load`, `openDocxDocument`, `materializeDocxDocument` |
+| XLS | `@silurus/ooxml-legacy-office/xls` | `legacyXls` / `createLegacyXls()` | `legacyXls` | `XlsxViewer`, `XlsxSheetViewer`, `XlsxWorkbook.load`, `openXlsxWorkbook` |
+| PPT | `@silurus/ooxml-legacy-office/ppt` | `legacyPpt` / `createLegacyPpt()` | `legacyPpt` | `PptxViewer`, `PptxScrollViewer`, `PptxPresentation.load`, `openPptxPresentation` |
 
-Each factory accepts the same optional settings:
+`legacyDoc`, `legacyXls` and `legacyPpt` use the bundled asset URLs. To change
+them, or to set an input limit, create a reader with the matching factory; each
+factory accepts the same optional settings:
 
 ```typescript
 interface LegacySourceOptions {
@@ -64,7 +69,7 @@ interface LegacySourceOptions {
 }
 ```
 
-Creating a source fetches nothing. When a claimed file loads, the parser
+Importing a reader or creating one with a factory fetches nothing. When a claimed file loads, the parser
 Worker (or Node) imports the source's self-contained ES module, emitted as
 `legacy-<format>-source-module*.mjs` next to the package files, and initializes
 the reader's dedicated WASM: `legacy_doc_direct_bg.wasm`, `legacy_xls_direct_bg.wasm` or
@@ -74,10 +79,13 @@ Security Policy restricts `script-src` or Worker imports. Applications with a
 custom asset pipeline pass absolute `moduleUrl` and `wasmUrl` values:
 
 ```typescript
-const source = legacyPptSource({
+import { createLegacyPpt } from '@silurus/ooxml-legacy-office/ppt';
+
+const legacyPpt = createLegacyPpt({
   moduleUrl: new URL('/assets/legacy-ppt-source-module.js', location.href).href,
   wasmUrl: new URL('/assets/legacy_ppt_direct_bg.wasm', location.href).href,
 });
+const viewer = new PptxViewer(canvas, { legacyPpt });
 ```
 
 Module URLs come only from application options; document content never
@@ -104,7 +112,7 @@ source does not claim takes the unchanged OOXML path, so:
 - a legacy file without a matching source rejects with the typed
   `legacy-binary-format` error;
 - encrypted OOXML packages keep their existing encryption errors;
-- configuring `legacyDocSource()` does not enable XLS or PPT input.
+- configuring `legacyDoc` does not enable XLS or PPT input.
 
 When the caller sets `maxInputBytes`, claimed input larger than that positive
 safe integer throws a `RangeError`. There is no default or library-imposed
@@ -139,10 +147,10 @@ No migration is required for applications that do not enable model sources.
 
 ```typescript
 import { DocxDocument } from '@silurus/ooxml/docx';
-import { legacyDocSource } from '@silurus/ooxml-legacy-office/doc';
+import { legacyDoc } from '@silurus/ooxml-legacy-office/doc';
 
 const document = await DocxDocument.load(legacyDocArrayBuffer, {
-  modelSources: [legacyDocSource()],
+  legacyDoc,
 });
 const canvas = window.document.querySelector('canvas') as HTMLCanvasElement;
 
@@ -157,11 +165,11 @@ Node supports DOC through the same reader:
 
 ```typescript
 import { openDocxDocument } from '@silurus/ooxml/node';
-import { legacyDocSource } from '@silurus/ooxml-legacy-office/doc';
+import { legacyDoc } from '@silurus/ooxml-legacy-office/doc';
 
 const session = await openDocxDocument(legacyDocBytes, {
   factory,
-  modelSources: [legacyDocSource()],
+  legacyDoc,
 });
 ```
 
@@ -242,10 +250,10 @@ Browser:
 
 ```typescript
 import { PptxPresentation } from '@silurus/ooxml/pptx';
-import { legacyPptSource } from '@silurus/ooxml-legacy-office/ppt';
+import { legacyPpt } from '@silurus/ooxml-legacy-office/ppt';
 
 const presentation = await PptxPresentation.load(legacyPptArrayBuffer, {
-  modelSources: [legacyPptSource()],
+  legacyPpt,
 });
 const canvas = document.querySelector('canvas') as HTMLCanvasElement;
 
@@ -260,10 +268,10 @@ Node:
 
 ```typescript
 import { openPptxPresentation } from '@silurus/ooxml/node';
-import { legacyPptSource } from '@silurus/ooxml-legacy-office/ppt';
+import { legacyPpt } from '@silurus/ooxml-legacy-office/ppt';
 
 const session = await openPptxPresentation(legacyPptBytes, {
-  modelSources: [legacyPptSource()],
+  legacyPpt,
 });
 
 try {
@@ -342,15 +350,15 @@ direct PPT source adopts that XML under the rule described below.
 
 ```typescript
 import { XlsxViewer } from '@silurus/ooxml/xlsx';
-import { legacyXlsSource } from '@silurus/ooxml-legacy-office/xls';
+import { legacyXls } from '@silurus/ooxml-legacy-office/xls';
 
 const container = document.querySelector('#workbook') as HTMLElement;
-const viewer = new XlsxViewer(container, { modelSources: [legacyXlsSource()] });
+const viewer = new XlsxViewer(container, { legacyXls });
 await viewer.load(legacyXlsBytes);
 ```
 
-`XlsxWorkbook.load(bytes, { modelSources: [legacyXlsSource()] })` and the Node
-`openXlsxWorkbook(bytes, { modelSources: [legacyXlsSource()], factory })`
+`XlsxWorkbook.load(bytes, { legacyXls })` and the Node
+`openXlsxWorkbook(bytes, { legacyXls, factory })`
 accept the same source.
 
 The direct XLS source is experimental and bounded. It reads a BIFF8 workbook

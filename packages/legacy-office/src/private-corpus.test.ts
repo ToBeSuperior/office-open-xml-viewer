@@ -43,7 +43,7 @@ const formats = [
     directory: new URL('../../docx/public/private/', import.meta.url),
     open: (bytes: Uint8Array, source = observed(testDocSource())) => ({
       claimed: source.claimed,
-      done: materializeDocxDocument(bytes, { modelSources: [source.source] }),
+      done: materializeDocxDocument(bytes, { legacyDoc: source.source }),
     }),
   },
   {
@@ -54,7 +54,7 @@ const formats = [
     open: (bytes: Uint8Array, source = observed(testXlsSource())) => ({
       claimed: source.claimed,
       done: materializeXlsxWorkbook(bytes, {
-        modelSources: [source.source],
+        legacyXls: source.source,
         ...(skia ? { factory: skiaFactory() } : {}),
       }),
     }),
@@ -65,7 +65,7 @@ const formats = [
     directory: new URL('../../pptx/public/private/', import.meta.url),
     open: (bytes: Uint8Array, source = observed(testPptSource())) => ({
       claimed: source.claimed,
-      done: materializePptxPresentation(bytes, { modelSources: [source.source] }),
+      done: materializePptxPresentation(bytes, { legacyPpt: source.source }),
     }),
   },
 ] as const;

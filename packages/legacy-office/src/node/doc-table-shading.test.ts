@@ -15,7 +15,7 @@ const tableFixture = (code: number, operand: Uint8Array) => buildDocFixture({ te
   { end: 5, properties: concat(cell, new Uint8Array([0x17, 0x24, 1, 0x21, 0x76, 0, 2, 0xe8, 3]), little16(code), operand) },
 ] });
 const modern = (pattern = 0) => concat(new Uint8Array([0, 0, 0, 255, 0x12, 0x34, 0x56, 0]), little16(pattern));
-const load = (bytes: Uint8Array) => materializeDocxDocument(bytes, { modelSources: [testDocSource()] });
+const load = (bytes: Uint8Array) => materializeDocxDocument(bytes, { legacyDoc: testDocSource() });
 interface Table { type: string; tblpPr?: unknown; overlap?: string; colWidths: number[]; rows: { cells: { background: string | null }[] }[] }
 const tableOf = async (bytes: Uint8Array) => (await load(bytes)).body.find(block => (block as { type: string }).type === 'table') as unknown as Table;
 

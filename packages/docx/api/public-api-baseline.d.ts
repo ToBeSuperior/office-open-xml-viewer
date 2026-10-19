@@ -1853,6 +1853,7 @@ export interface LineSpacing {
 }
 export interface LoadOptions extends LoadOptions__emitterCollision1 {
     allowFootnoteContinuation?: boolean;
+    legacyDoc?: ModelSource<'docx'>;
     math?: MathRenderer;
     mode?: 'main' | 'worker';
     sliceLayout?: boolean;
@@ -1867,7 +1868,6 @@ interface LoadOptions__emitterCollision1 {
     useGoogleFonts?: boolean;
     cjkFallback?: CjkFallback;
     password?: string;
-    modelSources?: readonly ModelSource[];
     wasmUrl?: string | URL;
     maxZipEntryBytes?: number;
     resourceLimits?: OoxmlResourceLimits;

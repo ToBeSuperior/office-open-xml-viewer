@@ -1,4 +1,4 @@
-import { resolveCjkFallback, type CjkFallback } from '@silurus/ooxml-core';
+import { resolveCjkFallback, type CjkFallback, type ModelSource } from '@silurus/ooxml-core';
 import type { DocxDocumentModel, DocxTextRunInfo } from '@silurus/ooxml-docx';
 import type {
   OoxmlResourceUsageSnapshot,
@@ -43,6 +43,12 @@ const getDocxWasmModule = createLazyWasmModule(() => resolveWasm(
 
 /** Options for the bounded Node DOCX page session. */
 export interface OpenDocxDocumentOptions extends OoxmlNodeSessionOptions {
+  /**
+   * Opt-in model source for document input that is not an OOXML package (a
+   * `ModelSource<'docx'>`). When its `claim()` accepts the bytes, it opens them
+   * in this realm; otherwise the ordinary OOXML path runs unchanged.
+   */
+  legacyDoc?: ModelSource<'docx'>;
   cjkFallback?: CjkFallback;
   /** Canvas implementation used for text measurement and page allocation. */
   factory: NodeCanvasFactory;
@@ -98,7 +104,7 @@ export async function openDocxDocument(
   options: OpenDocxDocumentOptions,
 ): Promise<DocxDocumentSession> {
   if (!options?.factory) throw new TypeError('openDocxDocument requires a canvas factory');
-  if (__OOXML_MODEL_SOURCES__ && options.modelSources !== undefined) {
+  if (__OOXML_MODEL_SOURCES__ && options.legacyDoc !== undefined) {
     const { openDocxSource } = await import('./docx-model-source.ts');
     return openDocxSource(buffer, options, getDocxWasmModule);
   }
@@ -157,9 +163,9 @@ export async function openDocxDocument(
  * body-unit coordinator without creating measurement or page-layout state. */
 export async function materializeDocxDocument(
   buffer: ArrayBuffer | Uint8Array,
-  options: OoxmlNodeSessionOptions = {},
+  options: OoxmlNodeSessionOptions & Pick<OpenDocxDocumentOptions, 'legacyDoc'> = {},
 ): Promise<DocxDocumentModel> {
-  if (__OOXML_MODEL_SOURCES__ && options.modelSources !== undefined) {
+  if (__OOXML_MODEL_SOURCES__ && options.legacyDoc !== undefined) {
     const { materializeDocxSource } = await import('./docx-model-source.ts');
     return materializeDocxSource(buffer, options, getDocxWasmModule);
   }

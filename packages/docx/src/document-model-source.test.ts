@@ -21,7 +21,7 @@ vi.mock('@silurus/ooxml-core', async (load) => ({
   loadOfficeFontFallbacks: async () => ({ faces: [], routes: {} }),
 }));
 
-// DocxDocument.load() with LoadOptions.modelSources, driven through the real
+// DocxDocument.load() with LoadOptions.legacyDoc, driven through the real
 // WorkerBridge against a scripted worker that speaks the parse / pull protocol.
 // View precedence is one rule for every source: explicit caller option > the
 // source's view default > the renderer default (final view).
@@ -163,7 +163,7 @@ describe('DocxDocument.load with model sources', () => {
     install(parseWorkerScript(undefined, 1, noteContinuationModel()));
     const { source, release } = fakeSource();
     const document = await DocxDocument.load(cfbBytes(), {
-      modelSources: [source], sliceLayout, allowFootnoteContinuation: true, currentDate: 0,
+      legacyDoc: source, sliceLayout, allowFootnoteContinuation: true, currentDate: 0,
     });
     try {
       expect(document.pageCount).toBeGreaterThan(1);
@@ -189,7 +189,7 @@ describe('DocxDocument.load with model sources', () => {
     install(parseWorkerScript(undefined, 1, noteContinuationBoundaryModel()));
     const { source } = fakeSource();
     const document = await DocxDocument.load(cfbBytes(), {
-      modelSources: [source], sliceLayout, currentDate: 0,
+      legacyDoc: source, sliceLayout, currentDate: 0,
       ...(option === undefined ? {} : { allowFootnoteContinuation: option }),
     });
     try {
@@ -209,7 +209,7 @@ describe('DocxDocument.load with model sources', () => {
     install(renderWorkerScript(undefined));
     const { source } = fakeSource();
     const document = await DocxDocument.load(cfbBytes(), {
-      mode: 'worker', modelSources: [source],
+      mode: 'worker', legacyDoc: source,
       ...(option === undefined ? {} : { allowFootnoteContinuation: option }),
     });
     expect(ProtocolWorker.instances[0]!.parseRequests()[0]).toMatchObject({ allowFootnoteContinuation: wire });
@@ -223,7 +223,7 @@ describe('DocxDocument.load with model sources', () => {
     install(renderWorkerScript(undefined));
     const transfer = new ArrayBuffer(4);
     const { source, beginLoad, release } = fakeSource({ transfer: [transfer] });
-    const document = await DocxDocument.load(cfbBytes(), { ...options, modelSources: [source], allowFootnoteContinuation: true });
+    const document = await DocxDocument.load(cfbBytes(), { ...options, legacyDoc: source, allowFootnoteContinuation: true });
 
     const [parse, ...others] = ProtocolWorker.instances[0]!.parseRequests();
     expect(others).toEqual([]);
@@ -240,7 +240,7 @@ describe('DocxDocument.load with model sources', () => {
   it('streams a claimed load in main mode and releases it once', async () => {
     install(parseWorkerScript(undefined));
     const { source, release } = fakeSource();
-    const document = await DocxDocument.load(cfbBytes(), { modelSources: [source] });
+    const document = await DocxDocument.load(cfbBytes(), { legacyDoc: source });
     expect(ProtocolWorker.instances[0]!.parseRequests()).toEqual([
       expect.objectContaining({ source: descriptor }),
     ]);
@@ -259,7 +259,7 @@ describe('DocxDocument.load with model sources', () => {
     let viewChanged: (() => void) | null = null;
     let progress = 0;
     const document = await DocxDocument.load(cfbBytes(), {
-      modelSources: [source],
+      legacyDoc: source,
       [docxViewerLoadSignal]: {
         signal: abort.signal,
         requestedView: () => false,
@@ -294,7 +294,7 @@ describe('DocxDocument.load with model sources', () => {
     let changed = false;
     let progress = 0;
     const document = await DocxDocument.load(cfbBytes(), {
-      modelSources: [source],
+      legacyDoc: source,
       [docxViewerLoadSignal]: {
         signal: new AbortController().signal,
         requestedView: () => requested,
@@ -334,7 +334,7 @@ describe('DocxDocument.load with model sources', () => {
     const unload = vi.spyOn(core, 'unloadOfficeFontFallbacks').mockImplementation(() => undefined);
     const abort = new AbortController();
     const loading = DocxDocument.load(cfbBytes(), {
-      modelSources: [source],
+      legacyDoc: source,
       [docxViewerLoadSignal]: {
         signal: abort.signal,
         requestedView: () => undefined,
@@ -354,7 +354,7 @@ describe('DocxDocument.load with model sources', () => {
     const failure = new Error('release failed');
     const { source, release } = fakeSource();
     release.mockImplementation(() => { throw failure; });
-    await expect(DocxDocument.load(cfbBytes(), { mode: 'worker', modelSources: [source] }))
+    await expect(DocxDocument.load(cfbBytes(), { mode: 'worker', legacyDoc: source }))
       .rejects.toBe(failure);
     expect(release).toHaveBeenCalledOnce();
     expect(ProtocolWorker.instances[0]!.terminated).toBe(true);
@@ -363,13 +363,13 @@ describe('DocxDocument.load with model sources', () => {
   it('keeps unclaimed input on the OOXML path', async () => {
     install(renderWorkerScript(true));
     const { source, claim, beginLoad } = fakeSource({ claim: () => false });
-    await expect(DocxDocument.load(cfbBytes(), { modelSources: [source] }))
+    await expect(DocxDocument.load(cfbBytes(), { legacyDoc: source }))
       .rejects.toMatchObject({ code: 'legacy-binary-format' });
     expect(claim).toHaveBeenCalledOnce();
     expect(beginLoad).not.toHaveBeenCalled();
     expect(ProtocolWorker.instances).toEqual([]);
 
-    const document = await DocxDocument.load(new ArrayBuffer(4), { mode: 'worker', modelSources: [source] });
+    const document = await DocxDocument.load(new ArrayBuffer(4), { mode: 'worker', legacyDoc: source });
     const [parse] = ProtocolWorker.instances[0]!.parseRequests();
     expect(parse).not.toHaveProperty('source');
     expect(parse).not.toHaveProperty('showTrackedChanges');
@@ -380,12 +380,12 @@ describe('DocxDocument.load with model sources', () => {
     install(renderWorkerScript(undefined));
     const failure = new Error('claim failed');
     const throwing = fakeSource({ claim: () => { throw failure; } });
-    await expect(DocxDocument.load(new ArrayBuffer(4), { modelSources: [throwing.source] }))
+    await expect(DocxDocument.load(new ArrayBuffer(4), { legacyDoc: throwing.source }))
       .rejects.toBe(failure);
     expect(throwing.beginLoad).not.toHaveBeenCalled();
 
     const mismatched = fakeSource({ target: 'xlsx' });
-    await expect(DocxDocument.load(new ArrayBuffer(4), { modelSources: [mismatched.source] }))
+    await expect(DocxDocument.load(new ArrayBuffer(4), { legacyDoc: mismatched.source }))
       .rejects.toThrow(TypeError);
     expect(mismatched.claim).not.toHaveBeenCalled();
     expect(ProtocolWorker.instances).toEqual([]);
@@ -398,7 +398,7 @@ describe('DocxDocument.load with model sources', () => {
       }
     });
     const { source, release } = fakeSource();
-    await expect(DocxDocument.load(cfbBytes(), { mode: 'worker', modelSources: [source] }))
+    await expect(DocxDocument.load(cfbBytes(), { mode: 'worker', legacyDoc: source }))
       .rejects.toThrow('source parse failed');
     expect(release).toHaveBeenCalledOnce();
     expect(ProtocolWorker.instances[0]!.parseRequests()).toHaveLength(1);
@@ -416,7 +416,7 @@ describe('DocxDocument.load with model sources', () => {
       const { source } = fakeSource();
       const document = await DocxDocument.load(cfbBytes(), {
         mode: 'worker',
-        modelSources: [source],
+        legacyDoc: source,
         ...(caller === undefined ? {} : { showTrackedChanges: caller }),
       });
       const [parse] = ProtocolWorker.instances.at(-1)!.parseRequests();
@@ -431,7 +431,7 @@ describe('DocxDocument.load with model sources', () => {
     install(renderWorkerScript(true, { partial: true }));
     const { source } = fakeSource();
     const document = await DocxDocument.load(cfbBytes(), {
-      mode: 'worker', progressiveLayout: true, modelSources: [source],
+      mode: 'worker', progressiveLayout: true, legacyDoc: source,
     });
     expect(activeDocxLayoutViewOf(document).showTrackedChanges).toBe(true);
     document.destroy();
@@ -439,13 +439,13 @@ describe('DocxDocument.load with model sources', () => {
 
   it('applies the source view default in main mode only when the caller did not choose', async () => {
     install(parseWorkerScript({ showTrackedChanges: true }));
-    const followed = await DocxDocument.load(cfbBytes(), { modelSources: [fakeSource().source] });
+    const followed = await DocxDocument.load(cfbBytes(), { legacyDoc: fakeSource().source });
     expect(activeDocxLayoutViewOf(followed).showTrackedChanges).toBe(true);
     followed.destroy();
 
     install(parseWorkerScript({ showTrackedChanges: true }));
     const explicit = await DocxDocument.load(cfbBytes(), {
-      showTrackedChanges: false, modelSources: [fakeSource().source],
+      showTrackedChanges: false, legacyDoc: fakeSource().source,
     });
     expect(activeDocxLayoutViewOf(explicit).showTrackedChanges).toBe(false);
     explicit.destroy();

@@ -12,7 +12,7 @@ import { threeD } from '../../../../src/three-d.js';
 
 it.skipIf(!skia)('paints direct XLS cell text and its rich run color through the XLSX canvas path', async () => {
   const factory = skiaFactory();
-  const parsed = await materializeXlsxWorkbook(buildXlsRichFixture(), { modelSources: [testXlsSource()], factory });
+  const parsed = await materializeXlsxWorkbook(buildXlsRichFixture(), { legacyXls: testXlsSource(), factory });
   const canvas = factory.createCanvas(700, 200);
   const restoreImage = installImageBitmapShim(factory);
   const restoreOffscreen = installOffscreenCanvasShim(factory);
@@ -63,7 +63,7 @@ function cylinderChartSheet(): Uint8Array {
 
 it.skipIf(!skia)('paints a native XLS chart sheet in 3D when the optional painter is supplied', async () => {
   const factory = skiaFactory();
-  const parsed = await materializeXlsxWorkbook(cylinderChartSheet(), { modelSources: [testXlsSource()], factory });
+  const parsed = await materializeXlsxWorkbook(cylinderChartSheet(), { legacyXls: testXlsSource(), factory });
   const ws = parsed.worksheets[0]!;
   expect(ws.isChartSheet).toBe(true);
   const flat = factory.createCanvas(700, 390), projected = factory.createCanvas(700, 390);

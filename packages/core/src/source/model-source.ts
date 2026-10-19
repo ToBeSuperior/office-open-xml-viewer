@@ -124,9 +124,9 @@ export function selectModelSource<T extends ModelSourceTarget>(
   bytes: Uint8Array,
 ): ModelSource<T> | undefined {
   if (sources === undefined) return undefined;
-  if (!Array.isArray(sources)) throw new TypeError('modelSources must be an array');
+  if (!Array.isArray(sources)) throw new TypeError('model sources must be an array');
   if (sources.length > MAX_MODEL_SOURCES) {
-    throw new RangeError(`modelSources accepts at most ${MAX_MODEL_SOURCES} sources`);
+    throw new RangeError(`model source selection accepts at most ${MAX_MODEL_SOURCES} sources`);
   }
   for (const source of sources as readonly unknown[]) {
     if (typeof source !== 'object' || source === null) {

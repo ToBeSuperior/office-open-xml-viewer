@@ -80,7 +80,7 @@ it('normalizes numbering rejection while a selected DOCX model source opens', as
   const { materializeDocxDocument } = await import('./docx.ts');
   const sample = cases[0];
   const loading = materializeDocxDocument(fixture(sample.value, sample.definition), {
-    modelSources: [{
+    legacyDoc: {
       target: 'docx', claim: () => true,
       beginLoad: () => ({
         module: {
@@ -90,7 +90,7 @@ it('normalizes numbering rejection while a selected DOCX model source opens', as
         },
         release() {},
       }),
-    }],
+    },
   });
   await expect(loading).rejects.toMatchObject({ code: 'invalid-numbering', message: sample.message });
 });

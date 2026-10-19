@@ -37,14 +37,14 @@ test.describe('legacy PPT corpus survey', () => {
         const pages: string[] = [];
         try {
           const { PptxPresentation } = await import('/src/presentation.ts');
-          const { legacyPptSource } = await import(/* @vite-ignore */ module);
+          const { legacyPpt } = await import(/* @vite-ignore */ module);
           // The dev server decodes paths with decodeURI, which keeps reserved
           // escapes such as %2B; encodeURI leaves those characters literal.
           const response = await fetch(`/private/ppt/${encodeURI(file)}`);
           if (!response.ok) throw new Error(`fetch failed: ${response.status}`);
           const bytes = await response.arrayBuffer();
           const presentation = await PptxPresentation.load(bytes, {
-            modelSources: [legacyPptSource()],
+            legacyPpt,
           });
           try {
             for (let index = 0; index < presentation.slideCount; index += 1) {

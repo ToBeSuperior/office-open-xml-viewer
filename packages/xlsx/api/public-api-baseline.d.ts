@@ -1425,12 +1425,12 @@ export interface LegendManualLayout {
 }
 export interface LoadOptions extends LoadOptions__emitterCollision1 {
     mode?: 'main' | 'worker';
+    legacyXls?: ModelSource<'xlsx'>;
 }
 interface LoadOptions__emitterCollision1 {
     useGoogleFonts?: boolean;
     cjkFallback?: CjkFallback;
     password?: string;
-    modelSources?: readonly ModelSource[];
     wasmUrl?: string | URL;
     maxZipEntryBytes?: number;
     resourceLimits?: OoxmlResourceLimits;

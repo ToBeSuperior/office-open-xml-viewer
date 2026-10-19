@@ -14,16 +14,18 @@ describe('experimental legacy Office add-on guidance', () => {
       expect(source(path)).toContain('href="/legacy-office"');
     }
     expect(source('./components/Nav.astro')).not.toContain('/legacy-office');
-    for (const [entry, factory, viewer] of [
-      ['doc', 'legacyDocSource', 'DocxViewer'],
-      ['xls', 'legacyXlsSource', 'XlsxViewer'],
-      ['ppt', 'legacyPptSource', 'PptxViewer'],
+    for (const [entry, reader, viewer] of [
+      ['doc', 'legacyDoc', 'DocxViewer'],
+      ['xls', 'legacyXls', 'XlsxViewer'],
+      ['ppt', 'legacyPpt', 'PptxViewer'],
     ]) {
       expect(page).toContain(`@silurus/ooxml-legacy-office/${entry}`);
-      expect(page).toContain(`modelSources: [${factory}()]`);
+      expect(page).toContain(`import { ${reader} } from '@silurus/ooxml-legacy-office/${entry}'`);
+      expect(page).toContain(`{ ${reader} }`);
       expect(page).toContain(viewer);
     }
-    for (const contract of ['experimental', 'versions must match', 'openPptxPresentation', 'session.close()', 'legacy-binary-format', 'unsupported-content', 'source-subset', 'Markdown', 'WASM', 'moduleUrl', 'wasmUrl']) {
+    expect(page).not.toContain('modelSources');
+    for (const contract of ['experimental', 'versions must match', 'openPptxPresentation', 'session.close()', 'createLegacyPpt', 'legacy-binary-format', 'unsupported-content', 'source-subset', 'Markdown', 'WASM', 'moduleUrl', 'wasmUrl']) {
       expect(page).toContain(contract);
     }
     expect(source('./pages/bundle-size.astro')).toContain('Optional add-on package');
@@ -36,9 +38,10 @@ describe('experimental legacy Office add-on guidance', () => {
     expect(announcement?.version).toBeUndefined();
     expect(announcement?.sections[0].kind).toBe('summary');
     const text = JSON.stringify(announcement);
-    for (const phrase of ['experimental', '@silurus/ooxml-legacy-office', 'modelSources', 'No migration is required', 'versions must match', 'reject', 'OOXML viewer']) {
+    for (const phrase of ['experimental', '@silurus/ooxml-legacy-office', '{ legacyDoc }', 'createLegacyDoc', 'No migration is required', 'versions must match', 'reject', 'OOXML viewer']) {
       expect(text).toContain(phrase);
     }
+    expect(text).not.toContain('modelSources');
     expect(text).not.toMatch(/\b(?:KiB|MiB|gzip)\b|\d+%/);
   });
 });

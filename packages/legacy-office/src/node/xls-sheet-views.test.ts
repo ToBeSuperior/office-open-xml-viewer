@@ -27,7 +27,7 @@ function fixture(flags: number[], options: { count?: number; extra?: Uint8Array;
 }
 
 async function view(bytes: Uint8Array) {
-  const [worksheet] = (await materializeXlsxWorkbook(bytes, { modelSources: [testXlsSource()] })).worksheets;
+  const [worksheet] = (await materializeXlsxWorkbook(bytes, { legacyXls: testXlsSource() })).worksheets;
   expect(worksheet!.rows.flatMap(row => row.cells).map(cell => cell.value)).toEqual([{ type: 'number', number: 0 }]);
   return { gridlines: worksheet!.showGridlines, zeros: worksheet!.showZeros, rtl: worksheet!.rightToLeft };
 }

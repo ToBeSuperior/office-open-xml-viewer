@@ -111,16 +111,16 @@ export const announcements: readonly Announcement[] = [
         modules: ['@silurus/ooxml-legacy-office/doc', '@silurus/ooxml-legacy-office/xls', '@silurus/ooxml-legacy-office/ppt'],
         rationale: 'A separate package lets applications choose legacy previews without adding binary readers to ordinary OOXML viewing.',
         paragraphs: [
-          'Install `@silurus/ooxml` and `@silurus/ooxml-legacy-office` together; their versions must match exactly. Pass `legacyDocSource()`, `legacyXlsSource()` or `legacyPptSource()` to the matching viewer or Node session through `modelSources`. Each factory creates a source without fetching its reader.',
+          'Install `@silurus/ooxml` and `@silurus/ooxml-legacy-office` together; their versions must match exactly. Import `legacyDoc`, `legacyXls` or `legacyPpt` and pass it to the matching viewer or Node session as `{ legacyDoc }`, `{ legacyXls }` or `{ legacyPpt }`, like the other opt-in modules. Importing a reader fetches nothing; it loads only when a matching file is opened. For custom asset URLs, create one with `createLegacyDoc({ wasmUrl, moduleUrl })` (likewise `createLegacyXls` and `createLegacyPpt`).',
         ],
         examples: [
           {
             title: 'Enable experimental DOC reading',
             code: `import { DocxViewer } from '@silurus/ooxml/docx';
-import { legacyDocSource } from '@silurus/ooxml-legacy-office/doc';
+import { legacyDoc } from '@silurus/ooxml-legacy-office/doc';
 
 const canvas = document.querySelector('canvas') as HTMLCanvasElement;
-const viewer = new DocxViewer(canvas, { modelSources: [legacyDocSource()] });
+const viewer = new DocxViewer(canvas, { legacyDoc });
 await viewer.load(await file.arrayBuffer());`,
           },
         ],

@@ -18,6 +18,7 @@ import {
   resolveOoxmlContainer,
   toArrayBuffer,
   type LoadOptions as CoreLoadOptions,
+  type ModelSource,
   type ProgressiveLayoutPartial,
   type ProgressiveLayoutProgress,
   type MathRenderer,
@@ -122,6 +123,14 @@ export interface LoadOptions extends CoreLoadOptions {
    * table splitting, width changes and changed source cuts can reject layout,
    * and full-note acquisition is subject to the library source/page budgets. */
   allowFootnoteContinuation?: boolean;
+  /**
+   * Opt-in model source for document input that is not an OOXML package (a
+   * `ModelSource<'docx'>`). When its `claim()` accepts the raw bytes, it
+   * opens them in the parser realm through its own module; otherwise the
+   * ordinary OOXML path runs unchanged. A source for another format is a
+   * `TypeError`. Omitting this option imports and runs nothing extra.
+   */
+  legacyDoc?: ModelSource<'docx'>;
   /**
    * Opt-in OMML equation engine. Import it from the separate `@silurus/ooxml/math`
    * entry and pass it in: `import { math } from '@silurus/ooxml/math'`. When
@@ -475,7 +484,7 @@ export class DocxDocument {
       if (signal?.aborted) throw new PaginationAbortError();
     };
     checkAbort();
-    if (__OOXML_MODEL_SOURCES__ && opts.modelSources !== undefined) {
+    if (__OOXML_MODEL_SOURCES__ && opts.legacyDoc !== undefined) {
       const { loadDocxModelSource } = await import('./internal/document-model-source.js');
       const modelDocument = await loadDocxModelSource(source, opts, control);
       if (signal?.aborted) {

@@ -77,7 +77,7 @@ function ppt(bytes: Uint8Array, delayed: boolean, kind: Kind): Uint8Array {
 
 interface Picture { imagePath: string; mimeType: string }
 async function docPictures(bytes: Uint8Array): Promise<{ pictures: Picture[]; extract(path: string): Uint8Array }> {
-  const model = await materializeDocxDocument(bytes, { modelSources: [testDocSource()] }) as unknown as { body: { runs?: ({ type: string } & Picture)[] }[] };
+  const model = await materializeDocxDocument(bytes, { legacyDoc: testDocSource() }) as unknown as { body: { runs?: ({ type: string } & Picture)[] }[] };
   const source = await openDocSource(bytes, { wasmUrl: TEST_SOURCE_URLS.doc.wasmUrl, maxInputBytes: bytes.length });
   try {
     const pictures = model.body.flatMap(block => block.runs ?? []).filter(run => run.type === 'image');
@@ -87,7 +87,7 @@ async function docPictures(bytes: Uint8Array): Promise<{ pictures: Picture[]; ex
 }
 async function pptPictures(bytes: Uint8Array): Promise<{ pictures: Picture[]; extract(path: string): Uint8Array }> {
   // Slide images are admitted as their slide is pulled; read them meanwhile.
-  const session = await openPptxPresentation(bytes, { modelSources: [testPptSource()] });
+  const session = await openPptxPresentation(bytes, { legacyPpt: testPptSource() });
   const pictures: Picture[] = [];
   const images = new Map<string, Uint8Array>();
   try {

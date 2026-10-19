@@ -1,4 +1,4 @@
-import { resolveCjkFallback, type CjkFallback, type CjkLang } from '@silurus/ooxml-core';
+import { resolveCjkFallback, type CjkFallback, type CjkLang, type ModelSource } from '@silurus/ooxml-core';
 import {
   dropDecodedBitmapCache,
   dropSvgImageCache,
@@ -41,7 +41,15 @@ const getPptxWasmModule = createLazyWasmModule(() => resolveWasm(
   ));
 
 /** Options for the bounded Node presentation session. */
-export type OpenPptxPresentationOptions = OoxmlNodeSessionOptions & { cjkFallback?: CjkFallback };
+export type OpenPptxPresentationOptions = OoxmlNodeSessionOptions & {
+  cjkFallback?: CjkFallback;
+  /**
+   * Opt-in model source for presentation input that is not an OOXML package (a
+   * `ModelSource<'pptx'>`). When its `claim()` accepts the bytes, it opens them
+   * in this realm; otherwise the ordinary OOXML path runs unchanged.
+   */
+  legacyPpt?: ModelSource<'pptx'>;
+};
 
 export interface PptxSessionRenderOptions {
   readonly width?: number;
@@ -89,7 +97,7 @@ async function openPptxPresentationImpl(
   buffer: ArrayBuffer | Uint8Array,
   options: OpenPptxPresentationOptions = {},
 ): Promise<PptxPresentationSessionImpl> {
-  if (__OOXML_MODEL_SOURCES__ && options.modelSources !== undefined) {
+  if (__OOXML_MODEL_SOURCES__ && options.legacyPpt !== undefined) {
     const { openPptxSource } = await import('./pptx-model-source.ts');
     return openPptxSource(buffer, options, getPptxWasmModule);
   }
