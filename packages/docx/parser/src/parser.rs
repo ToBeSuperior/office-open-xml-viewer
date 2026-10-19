@@ -6495,7 +6495,10 @@ fn parse_paragraph_cond_at_depth_with_diagnostics(
         snap_to_grid: base_para.snap_to_grid,
         // ECMA-376 §17.3.1.11 — text-frame / drop-cap properties, resolved
         // through the style chain. Some ⇒ paragraph is part of a text frame.
-        frame_pr: base_para.frame_pr.clone(),
+        frame_pr: base_para
+            .frame_pr
+            .as_deref()
+            .map(|facts| Box::new(facts.resolve())),
         paragraph_typography_acquisition: base_para.paragraph_typography.clone(),
     }
 }
