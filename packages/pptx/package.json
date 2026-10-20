@@ -46,11 +46,11 @@
     "vrt:worker": "playwright test --config playwright.config.ts worker-equivalence"
   },
   "devDependencies": {
-    "@playwright/test": "^1.59.1",
+    "@playwright/test": "^1.64.1",
     "@types/pngjs": "^6.0.5",
     "@vitest/coverage-v8": "^4.1.4",
     "pixelmatch": "^7.1.0",
-    "playwright": "^1.59.1",
+    "playwright": "^1.64.1",
     "pngjs": "^7.0.0",
     "typescript": "^7.0.2",
     "vite": "^8.0.8",

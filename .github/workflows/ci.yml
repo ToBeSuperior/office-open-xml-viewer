@@ -243,9 +243,7 @@ jobs:
   # Chrome, and asserts every canvas receives ink. The only CI job that
   # exercises the full parse -> render pipeline in a browser.
   smoke:
-    # Playwright 1.59.1 cannot install WebKit on Ubuntu 26.04. Keep the
-    # multi-engine browser job on a supported OS when ubuntu-latest advances.
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
@@ -272,7 +270,7 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Build WASM
         run: pnpm build:wasm
-      # The Ubuntu runner ships Google Chrome (the `channel: 'chrome'` browser the
+      # ubuntu-latest ships Google Chrome (the `channel: 'chrome'` browser the
       # smoke config uses), so install only when it is genuinely absent. The
       # unconditional `playwright install chrome --with-deps` stalled >30min
       # twice in a row (apt/CDN hang inside --with-deps); the guard skips that
