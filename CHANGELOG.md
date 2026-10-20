@@ -5,6 +5,19 @@ semantic versioning. While the major version is zero, minor releases may contain
 explicitly documented breaking changes; patch releases remain compatible with
 the corresponding minor release.
 
+## 0.89.2 — 2026-10-21
+
+Compatible patch release. No migration is required.
+
+- **Office file compatibility:** more converter-generated DOCX, XLSX and PPTX
+  files now open successfully. ZIP integrity checks and resource limits remain
+  enforced (#1924, #1927).
+- **XLSX loading:** destroying a viewer while its first worksheet preview is
+  loading no longer causes an unhandled promise rejection (#1923, #1925).
+- **Chart data tables:** date-axis charts retain their date labels and place
+  data tables separately below the plot, including charts with secondary value
+  axes (#1926).
+
 ## 0.89.1 — 2026-10-20
 
 Compatible patch release.
