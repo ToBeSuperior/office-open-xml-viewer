@@ -288,9 +288,7 @@ pub struct ParaFmt {
 /// that the style hierarchy can layer them attribute by attribute.
 ///
 /// Inheritance (observed Word behavior; ECMA-376 §17.3.1.11 is silent): Word
-/// keeps each frame attribute as an independent paragraph property — the
-/// binary format stores them as separate SPRMs (MS-DOC 2.6.2 sprmPPc,
-/// sprmPDxaAbs, sprmPDyaAbs, sprmPDxaWidth, sprmPWr, ...) — and a Windows
+/// keeps each frame attribute as an independent paragraph property. A Windows
 /// Word export of a paragraph whose direct `<w:framePr w:wrap="notBeside"/>`
 /// overrides a styled frame (`w`, `xAlign="center"`, `hAnchor="page"`,
 /// `vAnchor="text"`) lays the paragraph out with the style's width, centering
