@@ -352,15 +352,17 @@ pub struct NoteLayoutSettingsWire {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub footnote_continuation_separator: Option<NoteSeparatorMark>,
     /// Ordinary DOCX producer only: the effective paragraph of a document-
-    /// listed (§17.11.3/.9) footnote separator story whose one paragraph
-    /// formats its single §17.11.23/§17.11.1 mark run. Present only with the
-    /// matching Short/Full mark above, so layout measures the band from the
-    /// story's own spacing and line facts. Bare, missing and unsupported
-    /// stories omit it and keep the scalar band policy.
+    /// listed (§17.11.3/.9) separator story whose one paragraph holds its
+    /// §17.11.23/§17.11.1 mark run, or is bare and empty. Present with a
+    /// matching Short/Full/None mark above. Layout measures inherited and
+    /// authored spacing and line facts (§17.3.1.33); no pPr does not mean zero
+    /// or a fixed gap. Missing and unsupported stories retain the fallback.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub footnote_separator_paragraph: Option<Box<DocParagraph>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub footnote_continuation_separator_paragraph: Option<Box<DocParagraph>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub endnote_separator_paragraph: Option<Box<DocParagraph>>,
     /// Reserved note separator stories (ECMA-376 §17.11.2/§17.11.10
     /// `w:footnote`/`w:endnote` of §17.18.33 type `separator`,
     /// `continuationSeparator` or `continuationNotice`) supplied as resolved

@@ -303,7 +303,8 @@ function* selectedSeparatorUsages(
   collection: FontCollection,
 ): Generator<DocxRenderedTextUsage> {
   const settings = (doc as InternalDocxDocumentModel).__noteLayoutSettings;
-  for (const paragraph of [settings?.footnoteSeparatorParagraph, settings?.footnoteContinuationSeparatorParagraph]) {
+  for (const paragraph of [settings?.footnoteSeparatorParagraph, settings?.footnoteContinuationSeparatorParagraph,
+    settings?.endnoteSeparatorParagraph]) {
     if (paragraph) yield* paragraphUsages({ ...paragraph, runs: [] }, collection);
   }
 }
