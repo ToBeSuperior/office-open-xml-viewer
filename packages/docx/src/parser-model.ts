@@ -1034,6 +1034,8 @@ function acquiredBodyParagraph(paragraph: DocParagraph, source: SourceRef) {
     keepLines: paragraph.keepLines === true,
     keepNext: paragraph.keepNext === true,
     widowControl: paragraph.widowControl !== false,
+    ...(paragraph.framePr?.vAnchor === 'text' && paragraph.framePr.dropCap === 'none'
+      ? { textFrameMember: true as const } : {}),
     spaceBeforePt: paragraph.spaceBefore ?? 0,
     spaceAfterPt: paragraph.spaceAfter ?? 0,
     contextualSpacing: paragraph.contextualSpacing === true,

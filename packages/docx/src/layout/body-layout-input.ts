@@ -133,6 +133,8 @@ export interface BodyParagraphSourceInput {
   readonly keepLines: boolean;
   readonly keepNext: boolean;
   readonly widowControl: boolean;
+  /** WORD_TEXT_FRAME_PRECEDING_TEXT_PUSH: detached from paragraph-gap flow. */
+  readonly textFrameMember?: true;
   readonly spaceBeforePt: number;
   readonly spaceAfterPt: number;
   readonly contextualSpacing: boolean;

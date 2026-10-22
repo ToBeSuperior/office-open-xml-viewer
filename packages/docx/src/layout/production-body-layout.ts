@@ -71,7 +71,7 @@ import type {
   BodyLayoutSession,
   BodyParagraphAcquisitionInput,
 } from './body-layout-kernel.js';
-import { NoteCapacityExceededError } from './body-layout-kernel.js';
+import { NoteCapacityExceededError, noteBandKey } from './body-layout-kernel.js';
 import { NoteStack } from './note-stack.js';
 import { FlowCapacityExceededError } from './flow.js';
 import { projectBodyOccurrence } from './occurrence-projection.js';
@@ -1453,6 +1453,11 @@ function measureBodyParagraphEntry(
     if (!frameGroup) {
       throw new Error('Body frame acquisition requires an indexed adjacency group');
     }
+    const frameKey = `frame:${frameGroup.id}`;
+    // WORD_TEXT_FRAME_PRECEDING_TEXT_PUSH applies to text-anchored frames;
+    // drop caps sit in their anchor paragraph instead.
+    const pushesPrecedingText = request.input.textFrameMember === true;
+    const frozen = pushesPrecedingText ? state.frozenAnchorFrames?.get(frameKey) : undefined;
     const box = resolveFrameBox(
       paragraph,
       frameGroup,
@@ -1462,6 +1467,7 @@ function measureBodyParagraphEntry(
         onAcquired: (acquired) => {
           acquiredGroup = acquired;
         },
+        ...(frozen ? { frozenYPt: frozen.yPt } : {}),
       },
     );
     if (!acquiredGroup) throw new Error('Body frame acquisition omitted its retained group');
@@ -1523,7 +1529,21 @@ function measureBodyParagraphEntry(
             relocationBlockExtentPt: Math.max(0, box.y + box.h - request.location.cursorPt.yPt),
           }
         : {}),
-      ...(box.registerExclusion === false
+      ...(paragraph === frameGroup.owner && pushesPrecedingText
+        ? {
+            frameCarry: Object.freeze({
+              key: frameKey,
+              runKey: `frame-run:${frameRunStartIndex(source.blocks.body, frameGroup.sourceIndices[0]!)}`,
+              paragraphSource: request.input.source,
+              frozen: frozen !== undefined,
+              bounds: frameEntry.bounds,
+              exclusionBounds: frameEntry.exclusionBounds,
+              exclusionMode: frameWrapExclusionMode(frameGroup.framePr),
+            }),
+          }
+        : {}),
+      // A carried frame's exclusion was registered at its page start.
+      ...(box.registerExclusion === false || frozen
         ? {}
         : {
             flowRegistryDelta: Object.freeze({
@@ -1658,7 +1678,9 @@ function layoutBodyNotes(
     const leading = first && reservedDefinitions
       ? acquireReservedNoteSeparator(context, request, reservedDefinitions[
         request.continuing === true ? 'continuationSeparator' : 'separator'
-      ], noteTopPt, `${request.kind}:${id}:page:${request.pageIndex}:separator`)
+      ], noteTopPt, request.container.id.includes(':band:')
+        ? `${request.kind}:${id}:${request.container.id}:separator`
+        : `${request.kind}:${id}:page:${request.pageIndex}:separator`)
       : undefined;
     // An ordinary DOCX formatted listed story (§17.11.9) replaces only the
     // scalar band height of its role with its own acquired paragraph advance
@@ -1698,7 +1720,7 @@ function layoutBodyNotes(
       },
     };
     // A planned page-final top moves this note's flow top there.
-    const plannedTopPt = request.plannedTopsPt?.[id];
+    const plannedTopPt = request.plannedTopsPt?.[noteBandKey(request.container.id, id)];
     const bandTranslationPt = request.bandTranslationPt
       ?? (plannedTopPt === undefined ? undefined : { xPt: 0, yPt: plannedTopPt - noteTopPt });
     let story: StoryLayout;
@@ -1771,7 +1793,11 @@ function layoutBodyNotes(
     });
     const note: NoteLayout = Object.freeze({
       kind: 'note',
-      id: `${request.kind}:${id}:page:${request.pageIndex}`,
+      // A column band (WORD_PER_COLUMN_FOOTNOTE_BANDS) can hold a later part
+      // of a note continued from an earlier column of the same page.
+      id: request.container.id.includes(':band:')
+        ? `${request.kind}:${id}:${request.container.id}`
+        : `${request.kind}:${id}:page:${request.pageIndex}`,
       source,
       flowDomainId: request.container.id,
       ordinaryFlow: true,
@@ -2077,6 +2103,25 @@ function prescanBodyPageAnchors(
     return paragraphIds.get(key)!;
   };
   const entries = request.anchors.flatMap((anchor): readonly FloatRegistryEntryPt[] => {
+    if (anchor.kind === 'frame') {
+      // WORD_TEXT_FRAME_PRECEDING_TEXT_PUSH: earlier text of the page wraps
+      // around the frame's first-placement exclusion; the frame paragraph
+      // keeps that position when it is reached.
+      const { carry } = anchor;
+      if (!state.frozenAnchorFrames) state.frozenAnchorFrames = new Map();
+      state.frozenAnchorFrames.set(anchor.occurrenceId, Object.freeze({ ...carry.bounds }));
+      return [
+        Object.freeze({
+          kind: 'frame' as const,
+          occurrenceId: anchor.occurrenceId,
+          exclusionId: anchor.occurrenceId,
+          paragraphId: paragraphIdFor(anchor.paragraphSource),
+          exclusionMode: carry.exclusionMode,
+          bounds: carry.bounds,
+          exclusionBounds: carry.exclusionBounds,
+        }),
+      ];
+    }
     if (anchor.kind === 'host-drawing') {
       // WORD_LATER_ANCHOR_EARLIER_LINE_WRAP: register the first-placement
       // geometry at page start; the anchor paragraph keeps the same frame.
@@ -3247,6 +3292,22 @@ function acquireTableColumnInput(
  * non-frame paragraph; falls back to the frame paragraph's own single-line
  * height when none follows (a degenerate trailing frame).
  */
+/** Source index of the first paragraph of the run of consecutive framed
+ * paragraphs (any frame groups) containing `index`: the frames sharing one
+ * preceding text block (WORD_TEXT_FRAME_PRECEDING_TEXT_PUSH). */
+function frameRunStartIndex(
+  elements: readonly LayoutStoryBlock[],
+  index: number,
+): number {
+  let start = index;
+  while (start > 0) {
+    const previous = elements[start - 1];
+    if (previous?.type !== 'paragraph' || !previous.framePr) break;
+    start -= 1;
+  }
+  return start;
+}
+
 // Historical name retained while this renderer helper remains on the C3
 // migration inventory; the returned value is now canonical points.
 function frameAnchorLineHeightPx(
@@ -3315,6 +3376,8 @@ type FrameBoxAcquisitionOptions = Readonly<{
   borderEdgesFor?: (
     paragraph: LayoutParagraphBlock,
   ) => ReturnType<typeof bodyParagraphBorderEdgesFor>;
+  /** Carried first-placement top (WORD_TEXT_FRAME_PRECEDING_TEXT_PUSH). */
+  frozenYPt?: number;
 }>;
 
 function resolveFrameBox(
@@ -3355,6 +3418,7 @@ function resolveFrameBox(
       pointPlacement.pageHeightPt,
       pointPlacement.yPt,
       pointPlacement.anchorLineHeightPt,
+      acquisition.frozenYPt ?? null,
       state.pageWidth,
       state.marginLeft,
       state.marginRight,
@@ -3362,7 +3426,7 @@ function resolveFrameBox(
       state.marginBottom,
     ].join('|'),
     place: (contentWidthPt, contentHeightPt) => {
-      const box = computeFrameBox(
+      const resolved = computeFrameBox(
         group.framePr,
         state,
         pointPlacement.yPt,
@@ -3370,6 +3434,16 @@ function resolveFrameBox(
         contentHeightPt,
         pointPlacement.anchorLineHeightPt,
       );
+      // WORD_TEXT_FRAME_PRECEDING_TEXT_PUSH: a frame carried to this page keeps
+      // the vertical position of its first placement; its size and horizontal
+      // position do not depend on the flow cursor.
+      const frozenYPt = acquisition.frozenYPt;
+      const box = frozenYPt === undefined ? resolved : {
+        ...resolved,
+        y: frozenYPt,
+        exTop: resolved.exTop + frozenYPt - resolved.y,
+        exBottom: resolved.exBottom + frozenYPt - resolved.y,
+      };
       return Object.freeze({
         bounds: Object.freeze({
           xPt: box.x,

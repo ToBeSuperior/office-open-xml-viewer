@@ -10,9 +10,10 @@ import type {
   BodyLayoutSession,
   BodyTableContinuationCursor,
   CarriedHostAnchor,
+  FrameCarryObservation,
   PageAnchorPrescanInput,
 } from './body-layout-kernel.js';
-import { NoteCapacityExceededError } from './body-layout-kernel.js';
+import { NoteCapacityExceededError, noteBandKey } from './body-layout-kernel.js';
 import { NoteStack } from './note-stack.js';
 import { createFloatLineBandPredicate, type FloatRect } from './float-wrap.js';
 import {
@@ -20,6 +21,7 @@ import {
   createBodyPaginationState,
   createCanonicalPageDraft,
   addPageFootnoteReserves,
+  setBodyFootnoteReserve,
   setBodyBalanceTarget,
   type BodyPageTransitionFactory,
   type BodyPaginationState,
@@ -113,6 +115,7 @@ import {
   wordFlowNeutralPreBreakAnchorParagraph,
   wordPreBreakHostAnchorExtentPt,
   wordPreBreakInlineDrawingResource,
+  wordPerColumnFootnoteBandsApply,
 } from './body-pagination-compatibility.js';
 import {
   wordContinuousSectionRestartDisplayNumber,
@@ -697,6 +700,63 @@ function acceptNode(
   });
 }
 
+/** The wrap geometry the page registry derives from a frame exclusion. */
+function frameExclusionFloatRect(carry: FrameCarryObservation): FloatRect {
+  const bounds = carry.exclusionBounds;
+  return {
+    kind: 'frame',
+    mode: carry.exclusionMode,
+    imageKey: carry.key,
+    imageX: carry.bounds.xPt,
+    imageY: carry.bounds.yPt,
+    imageW: carry.bounds.widthPt,
+    imageH: carry.bounds.heightPt,
+    xLeft: bounds.xPt,
+    xRight: bounds.xPt + bounds.widthPt,
+    yTop: bounds.yPt,
+    yBottom: bounds.yPt + bounds.heightPt,
+    side: 'bothSides',
+    distLeft: 0, distRight: 0, distTop: 0, distBottom: 0,
+    paraId: 0,
+  };
+}
+
+/**
+ * WORD_TEXT_FRAME_PRECEDING_TEXT_PUSH: whether a frame's exclusion meets the
+ * line bands of ordinary content (paragraph lines, tables) accepted earlier in
+ * its flow domain on the active page. Frames themselves never push frames.
+ */
+function frameMeetsEarlierFlowContent(
+  state: BodyPaginationState,
+  flowDomainId: string,
+  carry: FrameCarryObservation,
+): boolean {
+  const page = state.pages.at(-1);
+  if (!page || page.kind !== 'content') return false;
+  // A line occupies its whole column band (its ink extent is not what wraps).
+  const column = acquisitionLocation(state).availableBounds;
+  const left = carry.exclusionBounds.xPt;
+  const right = left + carry.exclusionBounds.widthPt;
+  if (column.xPt >= right || column.xPt + column.widthPt <= left) return false;
+  const meets = createFloatLineBandPredicate(frameExclusionFloatRect(carry));
+  const crosses = (bounds: LayoutRect) => meets(bounds.yPt, bounds.heightPt);
+  for (const entry of page.accumulator.paint) {
+    if (entry.layer !== 'body') continue;
+    const node = entry.node;
+    if (node.kind !== 'paragraph' && node.kind !== 'table') continue;
+    if (node.flowDomainId !== flowDomainId) continue;
+    if (node.kind === 'paragraph') {
+      if (!node.ordinaryFlow) continue;
+      const bands = node.lines.length > 0 ? node.lines.map((line) => line.bounds) : [node.flowBounds];
+      if (bands.some(crosses)) return true;
+      continue;
+    }
+    if (node.ordinaryFlow === false) continue;
+    if (crosses(node.flowBounds)) return true;
+  }
+  return false;
+}
+
 function paragraphFragmentStartKey(cursor: ParagraphFragmentCursor): string {
   return cursor.boundary === null
     ? 'root'
@@ -843,6 +903,10 @@ export type BodyPaginationPassResult = Readonly<{
   anchorInputs: readonly PageAnchorInputEvent[];
   /** `anchorInputs` serialized for exact comparison between passes. */
   serializedAnchorInputs: readonly string[];
+  /** Text-anchored frame groups accepted in this pass, in acceptance order
+   * (WORD_TEXT_FRAME_PRECEDING_TEXT_PUSH). */
+  frameObservations: readonly PlacedFrameObservation[];
+  frameAnchorObservations: readonly FrameAnchorObservation[];
 }>;
 
 interface BodyPaginationPassObserver {
@@ -924,12 +988,16 @@ function paginationPassResult(
   terminalDiagnostic: LayoutDiagnostic | null,
   anchorInputs: readonly PageAnchorInputEvent[] = [],
   serializedAnchorInputs: readonly string[] = [],
+  frameObservations: readonly PlacedFrameObservation[] = [],
+  frameAnchorObservations: readonly FrameAnchorObservation[] = [],
 ): BodyPaginationPassResult {
   const { layout, pageStoryContexts } = finalize(state, owners);
   const retainedPageIndexes = new Set(layout.pages.map((page) => page.pageIndex));
   const retainedNodeIds = new Set(layout.pages.flatMap((page) => (
     pageLayerNodes(page).map(({ node }) => node.id)
   )));
+  // Retained node ids extend their body occurrence key (projectBodyOccurrence).
+  const retainedOccurrenceIds = new Set([...retainedNodeIds].map((id) => id.split('/node/')[0]!));
   return Object.freeze({
     layout,
     session,
@@ -947,6 +1015,11 @@ function paginationPassResult(
     terminalDiagnostic,
     anchorInputs: Object.freeze([...anchorInputs]),
     serializedAnchorInputs: Object.freeze([...serializedAnchorInputs]),
+    // An acceptance a later transaction replaced leaves no retained node.
+    frameObservations: Object.freeze(frameObservations.filter((observation) => (
+      retainedOccurrenceIds.has(observation.nodeId)
+    ))),
+    frameAnchorObservations: Object.freeze([...frameAnchorObservations]),
   });
 }
 
@@ -995,6 +1068,43 @@ type PageWrapDestination = Readonly<{
   pageIndex: number;
   flowDomainId: string;
   carry: CarriedHostAnchor;
+}> | Readonly<{
+  kind: 'frame';
+  occurrenceId: string;
+  paragraphSource: SourceRef;
+  pageIndex: number;
+  flowDomainId: string;
+  carry: FrameCarryObservation;
+}> | Readonly<{
+  /** WORD_TEXT_FRAME_PRECEDING_TEXT_PUSH: the frames of `runKey` may not be
+   * placed in this flow domain, because their anchor paragraph started in a
+   * later one. Never prescanned. */
+  kind: 'frame-deferral';
+  occurrenceId: string;
+  runKey: string;
+  pageIndex: number;
+  flowDomainId: string;
+}>;
+
+/** Where the anchor paragraph of a frame run started, against its frames. */
+type FrameAnchorObservation = Readonly<{
+  runKey: string;
+  framesPageIndex: number;
+  framesFlowDomainId: string;
+  /** The frames' flow domain held earlier content, so moving them can help. */
+  framesAfterContent: boolean;
+  anchorPageIndex: number;
+  anchorFlowDomainId: string;
+}>;
+
+/** A text-anchored frame group as accepted in one pass, with whether its
+ * exclusion meets text laid out before it in its flow domain on that page. */
+type PlacedFrameObservation = Readonly<{
+  nodeId: string;
+  pageIndex: number;
+  flowDomainId: string;
+  meetsEarlierContent: boolean;
+  carry: FrameCarryObservation;
 }>;
 
 function* paginateBodyPassSteps(
@@ -1148,6 +1258,16 @@ function* paginateBodyPassSteps(
   // proves an anchor-line deferral against these reads, and the progressive
   // observer bounds stable pages with them.
   const anchorInputs: PageAnchorInputEvent[] = [];
+  const frameObservations: PlacedFrameObservation[] = [];
+  const frameAnchorObservations: FrameAnchorObservation[] = [];
+  // The frame run whose anchor paragraph has not been accepted yet.
+  let pendingFrameRun = null as Omit<FrameAnchorObservation, 'anchorPageIndex' | 'anchorFlowDomainId'> | null;
+  const frameRunDeferred = (runKey: string): boolean => {
+    if (!anchorDestinations) return false;
+    const at = acquisitionLocation(state);
+    const deferral = anchorDestinations.get(frameDeferralKey(runKey, at.pageIndex, at.flowDomainId));
+    return deferral?.kind === 'frame-deferral';
+  };
   const serializedAnchorInputs: string[] = [];
   const recordAnchorInput = (event: PageAnchorInputEvent) => {
     anchorInputs.push(event);
@@ -1247,6 +1367,7 @@ function* paginateBodyPassSteps(
       throw new Error(`Document page budget exceeded (${MAX_BODY_LAYOUT_PAGES} pages)`);
     }
     const previousPageIndex = state.flow.pageIndex;
+    const previousFlowDomainId = acquisitionLocation(state).flowDomainId;
     const opensAutomaticPage = transition.events.some((event) => (
       event.type === 'next-page' && event.reason === 'overflow'
     ));
@@ -1268,6 +1389,13 @@ function* paginateBodyPassSteps(
     } else {
       const nextLocation = acquisitionLocation(state);
       session.moveAcquisitionCursor(nextLocation);
+      // WORD_PER_COLUMN_FOOTNOTE_BANDS: a new column owns its own note band;
+      // continuations of the previous column's notes open it.
+      if (nextLocation.flowDomainId !== previousFlowDomainId
+        && (perColumnFootnoteBands() || pageHasColumnFootnoteBands(state.flow.pageIndex))) {
+        state = setBodyFootnoteReserve(state, footnoteReserveForActiveBand());
+        if (perColumnFootnoteBands()) placePendingFootnoteContinuations();
+      }
       // §17.18.77 keeps the physical page but opens a distinct flow domain.
       // The outgoing source scan intentionally stopped at the section mark, so
       // acquire incoming page-owned wrap authority before its first paragraph.
@@ -1283,6 +1411,39 @@ function* paginateBodyPassSteps(
   // (FootnotePartition.hostShiftPt; footnoteBandPlan).
   const footnoteHostShiftsByPage = new Map<number, Map<string, number>>();
   const pendingFootnoteContinuations = new Map<string, FootnoteCursor>();
+  // WORD_PER_COLUMN_FOOTNOTE_BANDS: below compatibility mode 15 each column of
+  // a multi-column region owns the note band of the references it paints;
+  // otherwise the page owns one band. Band ids double as note containers.
+  const footnoteIdsByBand = new Map<string, Set<string>>();
+  const footnoteReserveByBand = new Map<string, number>();
+  const pageFootnoteBandId = (pageIndex: number) => `notes:page:${pageIndex}`;
+  const perColumnFootnoteBands = (): boolean => wordPerColumnFootnoteBandsApply(
+    input.compatibilityMode,
+    activeRegion(state).columns.length,
+  );
+  const activeFootnoteBandId = (): string => {
+    const pageBand = pageFootnoteBandId(state.flow.pageIndex);
+    return perColumnFootnoteBands()
+      ? `${pageBand}:band:${activeRegion(state).id}:${state.flow.columnIndex}`
+      : pageBand;
+  };
+  // Column band reserves by page, so a flow-domain change reads only its page.
+  const columnBandReservesByPage = new Map<number, Map<string, number>>();
+  const pageHasColumnFootnoteBands = (pageIndex: number): boolean =>
+    columnBandReservesByPage.has(pageIndex);
+  /** The reserve of the active flow domain: the page band plus its own
+   * column band, or for a page-wide domain below column bands, the deepest. */
+  const footnoteReserveForActiveBand = (): number => {
+    const pageBand = pageFootnoteBandId(state.flow.pageIndex);
+    const wide = footnoteReserveByBand.get(pageBand) ?? 0;
+    if (perColumnFootnoteBands()) return wide + (footnoteReserveByBand.get(activeFootnoteBandId()) ?? 0);
+    let deepest = 0;
+    for (const reservePt of columnBandReservesByPage.get(state.flow.pageIndex)?.values() ?? []) {
+      deepest = Math.max(deepest, reservePt);
+    }
+    return wide + deepest;
+  };
+  const bandHasFootnotes = (band: string): boolean => (footnoteIdsByBand.get(band)?.size ?? 0) > 0;
   // Pages whose note band opens with a committed incoming tail: real
   // retained lines of a note continued from an earlier page, placed before
   // any body (placePendingFootnoteContinuations). Not a newly referenced note,
@@ -1303,7 +1464,10 @@ function* paginateBodyPassSteps(
     // in an earlier reference-line plan of the fragment being admitted)
     // lends it to the new band-final note at commit instead of charging a
     // second reserve.
-    if (footnoteLayoutsByPage.get(state.flow.pageIndex)?.some((note) => note.trailing)) return undefined;
+    // A column band (WORD_PER_COLUMN_FOOTNOTE_BANDS) owns its own notice.
+    const band = activeFootnoteBandId();
+    if (footnoteLayoutsByPage.get(state.flow.pageIndex)
+      ?.some((note) => note.trailing && note.flowDomainId === band)) return undefined;
     if (pendingCarriesNotice) return undefined;
     return () => {
       if (!session.layoutStory) throw new Error('A footnote continuation notice requires story layout');
@@ -1362,6 +1526,7 @@ function* paginateBodyPassSteps(
       throw new Error('Footnote layout requires a note-capable layout session');
     }
     const plannedTopsPt = reserves[state.flow.pageIndex]?.footnoteTopsPt;
+    const band = activeFootnoteBandId();
     const layouts = ids.length === 0 ? Object.freeze([]) : session.layoutNotes!({
       kind: 'footnote',
       referenceIds: Object.freeze(ids),
@@ -1369,7 +1534,7 @@ function* paginateBodyPassSteps(
       section: location.section,
       ...(plannedTopsPt ? { plannedTopsPt } : {}),
       container: {
-        id: `notes:page:${state.flow.pageIndex}`,
+        id: band,
         kind: 'footnote',
         bounds: {
           xPt: location.availableBounds.xPt,
@@ -1378,7 +1543,7 @@ function* paginateBodyPassSteps(
           heightPt: location.section.geometry.pageHeight,
         },
       },
-      firstOnPage: committed.size === 0 && pendingIds.size === 0,
+      firstOnPage: !bandHasFootnotes(band) && pendingIds.size === 0,
     });
     const continuations: Array<Readonly<{ id: string; cursor: FootnoteCursor }>> = [];
     const admittedLayouts = layouts.map((note, index) => {
@@ -1412,6 +1577,10 @@ function* paginateBodyPassSteps(
       footnoteIdsByPage.set(state.flow.pageIndex, retained);
     }
     ids.forEach((id) => retained!.add(id));
+    const band = activeFootnoteBandId();
+    let bandIds = footnoteIdsByBand.get(band);
+    if (!bandIds) footnoteIdsByBand.set(band, bandIds = new Set<string>());
+    ids.forEach((id) => bandIds!.add(id));
     const retainedLayouts = footnoteLayoutsByPage.get(state.flow.pageIndex) ?? [];
     // Reusable full-note acquisition may have first been requested during a
     // rejected admission on another page. Intact notes need destination
@@ -1434,10 +1603,12 @@ function* paginateBodyPassSteps(
     // §17.18.33: the page's one continuation notice ends its note band. A note
     // committed after the carrier takes the already-reserved notice; a later
     // continuing partition on this page reserves none (continuationNoticeFor).
-    const carriers = retainedLayouts.flatMap((note, index) => note.trailing ? [index] : []);
+    // The notice and its reserve stay inside the band that reserved them.
+    const bandIndexes = retainedLayouts.flatMap((note, index) => note.flowDomainId === band ? [index] : []);
+    const carriers = bandIndexes.filter((index) => retainedLayouts[index]!.trailing);
     if (carriers.length > 1) throw new Error('A page note band owns exactly one continuation notice');
     const carrierIndex = carriers[0];
-    const lastIndex = retainedLayouts.length - 1;
+    const lastIndex = bandIndexes.at(-1)!;
     if (carrierIndex !== undefined && carrierIndex !== lastIndex) {
       const moved = moveContinuationNotice(retainedLayouts[carrierIndex]!, retainedLayouts[lastIndex]!);
       retainedLayouts[carrierIndex] = moved.carrier;
@@ -1448,12 +1619,27 @@ function* paginateBodyPassSteps(
     // Adding independently summed reference groups changes floating-point
     // association and can disagree with that exact geometry authority.
     state = addPageFootnoteReserves(state, layouts.map(note => note.advancePt));
-    footnoteReserveByPage.set(
-      state.flow.pageIndex,
-      state.footnoteReservePt,
-    );
+    let bandReservePt = footnoteReserveByBand.get(band) ?? 0;
+    let pageReservePt = footnoteReserveByPage.get(state.flow.pageIndex) ?? 0;
+    for (const note of layouts) {
+      bandReservePt += note.advancePt;
+      pageReservePt += note.advancePt;
+    }
+    footnoteReserveByBand.set(band, bandReservePt);
+    if (band !== pageFootnoteBandId(state.flow.pageIndex)) {
+      let pageBands = columnBandReservesByPage.get(state.flow.pageIndex);
+      if (!pageBands) columnBandReservesByPage.set(state.flow.pageIndex, pageBands = new Map());
+      pageBands.set(band, bandReservePt);
+    }
+    // The page's retained note advances in commit order (the page invariant).
+    footnoteReserveByPage.set(state.flow.pageIndex, pageReservePt);
     continuations.forEach(({ id, cursor }) => pendingFootnoteContinuations.set(id, cursor));
   };
+  /** The deepest committed content a growing note band must not cover: the
+   * active column alone for a column band, every column for a page band. */
+  const committedFootnoteContentEndPt = (): number => (
+    perColumnFootnoteBands() ? state.flow.cursorBlockPt : state.flow.deepestColumnBlockPt
+  );
   placePendingFootnoteContinuations = () => {
     if (pendingFootnoteContinuations.size === 0) return;
     const pending = [...pendingFootnoteContinuations];
@@ -1471,7 +1657,7 @@ function* paginateBodyPassSteps(
         section: location.section,
         ...(plannedTopsPt ? { plannedTopsPt } : {}),
         container: {
-          id: `notes:page:${state.flow.pageIndex}`,
+          id: activeFootnoteBandId(),
           kind: 'footnote',
           bounds: {
             xPt: location.availableBounds.xPt,
@@ -1480,12 +1666,14 @@ function* paginateBodyPassSteps(
             heightPt: location.section.geometry.pageHeight,
           },
         },
-        firstOnPage: !hasFootnoteReferenceOnPage(state.flow.pageIndex),
+        firstOnPage: perColumnFootnoteBands()
+          ? !bandHasFootnotes(activeFootnoteBandId())
+          : !hasFootnoteReferenceOnPage(state.flow.pageIndex),
         continuing: true,
       });
       if (!acquired) continue;
       const capacityPt = Math.max(0, activeBlockEndPt(state)
-        - state.footnoteReservePt - state.flow.deepestColumnBlockPt);
+        - state.footnoteReservePt - committedFootnoteContentEndPt());
       const partition = partitionFootnote(acquired, cursor, capacityPt,
         continuationNoticeFor(location, location.availableBounds.widthPt));
       if (!partition) {
@@ -1510,7 +1698,7 @@ function* paginateBodyPassSteps(
       if (partition.hostShiftPt !== 0) {
         let shifts = footnoteHostShiftsByPage.get(state.flow.pageIndex);
         if (!shifts) footnoteHostShiftsByPage.set(state.flow.pageIndex, shifts = new Map());
-        shifts.set(id, partition.hostShiftPt);
+        shifts.set(noteBandKey(partition.fragment.flowDomainId, id), partition.hostShiftPt);
       }
       // The partitioner also carries a line-free paragraph on its own (an
       // empty paragraph keeps its spacing, ownership and cursor), so a
@@ -1529,7 +1717,7 @@ function* paginateBodyPassSteps(
     0,
     activeBlockEndPt(state)
       - state.footnoteReservePt
-      - state.flow.deepestColumnBlockPt,
+      - committedFootnoteContentEndPt(),
   );
   const footnoteReserveInvadesCommittedPageContent = (reservePt: number): boolean => (
     reservePt > additionalFootnoteReserveCapacityPt()
@@ -1767,6 +1955,7 @@ function* paginateBodyPassSteps(
           // only); the real plan may still continue the note within whatever
           // that minimum left.
           wholeNoteFitsOnlyWithoutTrailingAfter: false,
+          columnBand: perColumnFootnoteBands(),
           // Unlike the after-only class this permission needs no capacity,
           // so the legal minimum uses it like the text/break permissions:
           // the later note's first real line, with any notice in the union.
@@ -1842,6 +2031,7 @@ function* paginateBodyPassSteps(
             && !textAfter && !laterEvent && noteContinuationBeforeHardBreak(options.entryIndex),
           wholeNoteFitsOnlyWithoutTrailingAfter,
           pageOpensWithIncomingTail,
+          columnBand: perColumnFootnoteBands(),
         });
         chosen = mayPartition
           ? footnoteAdmissionForIds(event.ids, inlineExtentPt, Math.max(0, Math.min(
@@ -1914,6 +2104,9 @@ function* paginateBodyPassSteps(
         footnoteLayoutsByPage,
         footnoteHostShiftsByPage,
         terminalDiagnostic,
+        [],
+        [],
+        frameObservations,
       ), entryIndex);
     }
     const entry = input.sequence[entryIndex]!;
@@ -2027,7 +2220,10 @@ function* paginateBodyPassSteps(
       const spacingOverlap = block.continuousSectionRole === 'drop-previous-after'
         ? previousAfterPt
         : spacing.overlap;
-      if (spacingOverlap > 0) {
+      // WORD_TEXT_FRAME_PRECEDING_TEXT_PUSH: the preceding in-flow cursor,
+      // including its space after, anchors every frame member. Only the next
+      // in-flow paragraph consumes that after/before overlap, once.
+      if (!block.textFrameMember && spacingOverlap > 0) {
         state = Object.freeze({
           ...state,
           flow: Object.freeze({
@@ -2040,6 +2236,9 @@ function* paginateBodyPassSteps(
         });
       }
       let cursor: ParagraphFragmentCursor | null = Object.freeze({ boundary: null });
+      // A text-anchored frame takes no flow space, so the next in-flow
+      // paragraph collapses its spacing against the text before the frames
+      // (WORD_TEXT_FRAME_PRECEDING_TEXT_PUSH).
       while (cursor) {
         const fragmentStartKey = paragraphFragmentStartKey(cursor);
         let location = acquisitionLocation(state);
@@ -2116,6 +2315,30 @@ function* paginateBodyPassSteps(
               entryIndex,
             );
             continue;
+          }
+          if (acquired.frameCarry && frameRunDeferred(acquired.frameCarry.runKey)) {
+            yield* commitTransition(advanceColumnOrPage(state.flow, 'overflow'), entryIndex);
+            continue;
+          }
+          if (acquired.frameCarry) {
+            const frameDomainId = acquisitionLocation(state).flowDomainId;
+            if (pendingFrameRun?.runKey !== acquired.frameCarry.runKey) {
+              pendingFrameRun = Object.freeze({
+                runKey: acquired.frameCarry.runKey,
+                framesPageIndex: state.flow.pageIndex,
+                framesFlowDomainId: frameDomainId,
+                framesAfterContent: state.flow.pageHasContent,
+              });
+            }
+            frameObservations.push(Object.freeze({
+              nodeId: bodyOccurrenceKey(block.source, frameDomainId, fragmentStartKey),
+              pageIndex: state.flow.pageIndex,
+              flowDomainId: frameDomainId,
+              meetsEarlierContent: frameMeetsEarlierFlowContent(
+                state, frameDomainId, acquired.frameCarry,
+              ),
+              carry: acquired.frameCarry,
+            }));
           }
           // A placed frame still paints its retained references despite a zero flow
           // charge, so note ownership is committed with the accepted occurrence.
@@ -2390,6 +2613,15 @@ function* paginateBodyPassSteps(
         // against the pre-acceptance page state; plans of rejected later
         // reference lines are never committed.
         const plannedNotes = notePlans?.admissionThrough(selected.fragment.lines.length);
+        if (pendingFrameRun && cursor.boundary === null) {
+          const at = acquisitionLocation(state);
+          frameAnchorObservations.push(Object.freeze({
+            ...pendingFrameRun,
+            anchorPageIndex: at.pageIndex,
+            anchorFlowDomainId: at.flowDomainId,
+          }));
+          pendingFrameRun = null;
+        }
         state = acceptNode(
           state,
           selected.fragment,
@@ -2429,9 +2661,11 @@ function* paginateBodyPassSteps(
         location = acquisitionLocation(state);
         session.moveAcquisitionCursor(location);
       }
-      previousParagraph = block;
+      if (!block.textFrameMember) previousParagraph = block;
     } else {
       previousParagraph = null;
+      // Only a paragraph anchors a frame run (ECMA-376 §17.3.1.11).
+      pendingFrameRun = null;
       if (block.kind === 'table') {
         const tableKey = `table:${sourceKey(block.source)}`;
         const minimumPage = minimumTablePageBySource?.get(tableKey);
@@ -2699,7 +2933,11 @@ function* paginateBodyPassSteps(
   // physical-page transition commits and the pending line cursor advances.
   while (pendingFootnoteContinuations.size > 0) {
     yield* commitTransition(
-      advanceToPage(state.flow, state.flow.section, 'overflow'),
+      // A column band continues in the next column of the page first
+      // (WORD_PER_COLUMN_FOOTNOTE_BANDS).
+      perColumnFootnoteBands()
+        ? advanceColumnOrPage(state.flow, 'overflow')
+        : advanceToPage(state.flow, state.flow.section, 'overflow'),
       input.sequence.length,
     );
     // Text-only tail transitions have no anchor prescan to suspend them.
@@ -2734,6 +2972,8 @@ function* paginateBodyPassSteps(
     terminalDiagnostic,
     anchorInputs,
     serializedAnchorInputs,
+    frameObservations,
+    frameAnchorObservations,
   );
 }
 
@@ -2802,17 +3042,39 @@ function footnoteStack(
   page: LayoutPage,
   notes: readonly NoteLayout[],
 ): Readonly<{ advancePt: number; targetTopPt: number; topsPt: readonly number[] }> {
-  const stack = new NoteStack();
-  notes.forEach((note) => stack.append(note.advancePt));
-  const advancePt = stack.advancePt;
   // ECMA-376 §17.11.21 defaults footnotes to the current page's bottom.
   const blockEndPt = page.sectionRegions.at(-1)?.blockEndPt
     ?? Math.max(
       0,
       page.section.geometry.pageHeight - Math.abs(page.section.geometry.marginBottom),
     );
-  const targetTopPt = blockEndPt - advancePt;
-  const topsPt = notes.map((_, index) => stack.topAt(targetTopPt, index));
+  // Each note band (its container, WORD_PER_COLUMN_FOOTNOTE_BANDS) stacks on
+  // its own from the body bottom; a page band carries every column band.
+  const bands = new Map<string, number[]>();
+  notes.forEach((note, index) => {
+    const members = bands.get(note.flowDomainId);
+    if (members) members.push(index);
+    else bands.set(note.flowDomainId, [index]);
+  });
+  const pageBand = [...bands.keys()].find((band) => !band.includes(':band:'));
+  const pageStack = new NoteStack();
+  (pageBand === undefined ? [] : bands.get(pageBand)!).forEach((index) => (
+    pageStack.append(notes[index]!.advancePt)));
+  const pageTopPt = blockEndPt - pageStack.advancePt;
+  const topsPt = new Array<number>(notes.length);
+  let targetTopPt = pageTopPt;
+  for (const [band, members] of bands) {
+    const isPageBand = band === pageBand;
+    const stack = isPageBand ? pageStack : new NoteStack();
+    if (!isPageBand) members.forEach((index) => stack.append(notes[index]!.advancePt));
+    const bottomPt = isPageBand ? blockEndPt : pageTopPt;
+    const topPt = bottomPt - stack.advancePt;
+    targetTopPt = Math.min(targetTopPt, topPt);
+    members.forEach((index, order) => { topsPt[index] = stack.topAt(topPt, order); });
+  }
+  const advancePt = bands.size === 1 && pageBand !== undefined
+    ? pageStack.advancePt
+    : blockEndPt - targetTopPt;
   return { advancePt, targetTopPt, topsPt };
 }
 
@@ -2834,7 +3096,8 @@ function footnoteStack(
  * A continued tail is projected from its whole-note acquisition by its
  * source cut (FootnotePartition.hostShiftPt), so its content reaches the
  * page through the composed top and that shift together. The plan is that
- * sum: the page position of the acquisition's flow top, the band its next
+ * sum, keyed by band and note together because a continuation can share a
+ * physical page with its head: the acquisition's flow top, the band its next
  * acquisition is given. A box story in the tail then resolves its page
  * frames through the translation its anchor paragraph finally receives, so a
  * §17.4.57 page-anchored table in it lands on the authored page frame while
@@ -2849,8 +3112,8 @@ function footnoteBandPlan(
   const { topsPt } = footnoteStack(page, notes);
   const plan: Record<string, number> = {};
   notes.forEach((note, index) => {
-    const id = note.source.storyInstance;
-    if (note.story.bandDependent) plan[id] = topsPt[index]! + (hostShifts?.get(id) ?? 0);
+    const key = noteBandKey(note.flowDomainId, note.source.storyInstance);
+    if (note.story.bandDependent) plan[key] = topsPt[index]! + (hostShifts?.get(key) ?? 0);
   });
   return Object.freeze(plan);
 }
@@ -3070,13 +3333,35 @@ function composePageStories(
           heightPt: header.advancePt,
         }),
       })] : []),
-      ...(notes.length > 0 ? [Object.freeze({
-        id: `notes:page:${page.pageIndex}`,
-        kind: 'footnote' as const,
-        ...(noteRegion ? { sectionRegionId: noteRegion.id } : {}),
-        logicalBounds: noteLogicalBounds,
-        physicalBounds: notePhysicalBounds,
-      })] : []),
+      ...(notes.length > 0 && notes.every((note) => note.flowDomainId === `notes:page:${page.pageIndex}`)
+        ? [Object.freeze({
+          id: `notes:page:${page.pageIndex}`,
+          kind: 'footnote' as const,
+          ...(noteRegion ? { sectionRegionId: noteRegion.id } : {}),
+          logicalBounds: noteLogicalBounds,
+          physicalBounds: notePhysicalBounds,
+        })]
+        // WORD_PER_COLUMN_FOOTNOTE_BANDS: one story domain per note band.
+        : [...new Set(notes.map((note) => note.flowDomainId))].map((bandId) => {
+          const members = notes.filter((note) => note.flowDomainId === bandId);
+          const left = Math.min(...members.map((note) => note.flowBounds.xPt));
+          const top = Math.min(...members.map((note) => note.flowBounds.yPt));
+          const logicalBounds = Object.freeze({
+            xPt: left,
+            yPt: top,
+            widthPt: Math.max(...members.map((note) => note.flowBounds.xPt + note.flowBounds.widthPt)) - left,
+            heightPt: Math.max(...members.map((note) => note.flowBounds.yPt + note.flowBounds.heightPt)) - top,
+          });
+          return Object.freeze({
+            id: bandId,
+            kind: 'footnote' as const,
+            ...(noteRegion ? { sectionRegionId: noteRegion.id } : {}),
+            logicalBounds,
+            physicalBounds: noteRegion
+              ? Object.freeze(transformRect(noteRegion.coordinateSpace.logicalToPhysical, logicalBounds))
+              : logicalBounds,
+          });
+        })),
       ...(footer ? [Object.freeze({
         id: `story:footer:page:${page.pageIndex}`,
         kind: 'footer' as const,
@@ -3179,13 +3464,10 @@ function composeDocumentEndnotes(
   const bodyNodes = page.layers.body.filter((node) => (
     node.ordinaryFlow && domains.get(node.flowDomainId)?.kind === 'body'
   ));
-  const terminalBody = bodyNodes.reduce<PaintNode | null>((latest, node) => (
-    latest === null
-      || node.flowBounds.yPt + node.flowBounds.heightPt
-        > latest.flowBounds.yPt + latest.flowBounds.heightPt
-      ? node
-      : latest
-  ), null);
+  // The text ends with the last node of the flow, which in a later column of
+  // a multi-column region can end above a deeper earlier column
+  // (WORD_PER_COLUMN_FOOTNOTE_BANDS: endnotes follow the text in its column).
+  const terminalBody = bodyNodes.at(-1) ?? null;
   const bodyDomain = terminalBody
     ? domains.get(terminalBody.flowDomainId)
     : [...page.flowDomains].reverse().find((domain) => domain.kind === 'body');
@@ -3205,8 +3487,13 @@ function composeDocumentEndnotes(
   const blockStartPt = terminalBody
     ? terminalBody.flowBounds.yPt + terminalBody.flowBounds.heightPt
     : bodyDomain.logicalBounds.yPt;
+  // A column band (WORD_PER_COLUMN_FOOTNOTE_BANDS) limits only its column.
+  const bodyLeftPt = bodyDomain.logicalBounds.xPt;
+  const bodyRightPt = bodyLeftPt + bodyDomain.logicalBounds.widthPt;
   const pageFootnoteTopPt = page.layers.notes
-    .filter((node) => node.kind === 'note' && node.source.story === 'footnote')
+    .filter((node) => node.kind === 'note' && node.source.story === 'footnote'
+      && (!node.flowDomainId.includes(':band:')
+        || (node.flowBounds.xPt < bodyRightPt && node.flowBounds.xPt + node.flowBounds.widthPt > bodyLeftPt)))
     .reduce(
       (top, note) => Math.min(top, note.flowBounds.yPt),
       bodyDomain.logicalBounds.yPt + bodyDomain.logicalBounds.heightPt,
@@ -3420,8 +3707,9 @@ function plannedPageStartAnchors(
   flowDomainId: string,
 ): PageStartAnchors {
   return Object.freeze([...plan.values()]
-    .filter((destination) => (
-      destination.pageIndex === pageIndex && destination.flowDomainId === flowDomainId
+    .filter((destination): destination is Exclude<PageWrapDestination, { kind: 'frame-deferral' }> => (
+      destination.kind !== 'frame-deferral'
+      && destination.pageIndex === pageIndex && destination.flowDomainId === flowDomainId
     ))
     .map((destination) => destination.kind === 'drawing'
       ? Object.freeze({
@@ -3432,6 +3720,13 @@ function plannedPageStartAnchors(
       : destination.kind === 'host-drawing'
         ? Object.freeze({
             kind: 'host-drawing' as const,
+            occurrenceId: destination.occurrenceId,
+            paragraphSource: destination.paragraphSource,
+            carry: destination.carry,
+          })
+        : destination.kind === 'frame'
+        ? Object.freeze({
+            kind: 'frame' as const,
             occurrenceId: destination.occurrenceId,
             paragraphSource: destination.paragraphSource,
             carry: destination.carry,
@@ -3449,6 +3744,8 @@ function pageStartAnchorsIdentity(anchors: PageStartAnchors): string {
     ? `drawing|${anchor.occurrenceId}|${sourceKey(anchor.paragraphSource)}`
     : anchor.kind === 'host-drawing'
       ? `host|${anchor.occurrenceId}|${sourceKey(anchor.paragraphSource)}|${JSON.stringify(anchor.carry)}`
+      : anchor.kind === 'frame'
+      ? `frame|${anchor.occurrenceId}|${sourceKey(anchor.paragraphSource)}|${JSON.stringify(anchor.carry)}`
       : `table|${anchor.occurrenceId}|${sourceKey(anchor.tableSource)}|${anchor.bounds.xPt}|${
         anchor.bounds.yPt}|${anchor.bounds.widthPt}|${anchor.bounds.heightPt}`)).join('\n');
 }
@@ -3941,8 +4238,13 @@ function* paginateBodyWithAnchorConvergenceSteps(
   let anchorPassLimit = ANCHOR_PASS_BASE_LIMIT + 4 * pageOwnedAnchorCount;
   // A carry-free pass may change from the first page that holds a carried
   // paragraph-relative drawing (WORD_LATER_ANCHOR_EARLIER_LINE_WRAP).
+  // WORD_TEXT_FRAME_PRECEDING_TEXT_PUSH carries likewise change their page.
   const carryBounded = (limit: (pass: BodyPaginationPassResult) => number) =>
-    (pass: BodyPaginationPassResult) => Math.min(limit(pass), firstHostCarryPage(pass.layout));
+    (pass: BodyPaginationPassResult) => Math.min(
+      limit(pass),
+      firstHostCarryPage(pass.layout),
+      firstFrameCarryPage(pass),
+    );
   // Every anchor pass may publish, but only the leading pages
   // `anchorStablePageLimit` proves every later pass of this run reproduces. A
   // seeded run never publishes: it can be abandoned for an unseeded retry,
@@ -4105,6 +4407,9 @@ function* paginateBodyWithAnchorConvergenceSteps(
       }),
     });
   }
+  // The plan the most recent converge step observed; at a fixed point it is
+  // the plan its returned pass applied.
+  let convergedPlan: ReadonlyMap<string, PageWrapDestination> = new Map();
   const converge = function* (
     // `null` throughout, matching the solver's first-pass `previous`: an
     // unseeded run has no applied plan, which is not an omitted argument.
@@ -4168,6 +4473,9 @@ function* paginateBodyWithAnchorConvergenceSteps(
             for (const [key, destination] of keptHostAnchorCarries(appliedPlan, pass.layout)) {
               observed.set(key, destination);
             }
+            for (const [key, destination] of keptFrameCarries(appliedPlan, pass)) {
+              observed.set(key, destination);
+            }
             // The unseeded pass registers source-order estimates, not anchor
             // lines that reached their page, so it proves nothing about them.
             const lineTests = appliedPlan === null
@@ -4204,6 +4512,7 @@ function* paginateBodyWithAnchorConvergenceSteps(
               settledFloors.set(key, floor);
               minimumTablePageBySource.set(key, floor);
             }
+            convergedPlan = lineTests.plan;
             latest.carry = Object.freeze({
               plan: lineTests.plan,
               minimumTablePageBySource,
@@ -4304,22 +4613,155 @@ function* paginateBodyWithAnchorConvergenceSteps(
   };
   const settled = yield* carryFree();
   if (settled.terminalDiagnostic !== null) return settled;
+  const settledPlan = convergedPlan;
   // WORD_LATER_ANCHOR_EARLIER_LINE_WRAP: carry each qualifying
   // paragraph-relative drawing, with the geometry of its first placement, to
   // the start of its page so earlier lines wrap around it. A carried drawing
   // whose paragraph then lands elsewhere is dropped, so the carried set only
   // shrinks and the run terminates.
   const hostPlan = hostAnchorCarryPlan(settled.layout);
-  if (hostPlan.size === 0) return settled;
-  const carriedPlan = new Map<string, PageWrapDestination>(pageAnchorDestinationPlan(settled.layout));
-  for (const [key, destination] of hostPlan) carriedPlan.set(key, destination);
-  anchorPassLimit = ANCHOR_PASS_BASE_LIMIT + 4 * (pageOwnedAnchorCount + hostPlan.size);
-  try {
-    return yield* converge(carriedPlan, false);
-  } catch (error) {
-    if (!(error instanceof ExactConvergenceError)) throw error;
-    return settled;
+  let carried = settled;
+  if (hostPlan.size > 0) {
+    const carriedPlan = new Map<string, PageWrapDestination>(pageAnchorDestinationPlan(settled.layout));
+    for (const [key, destination] of hostPlan) carriedPlan.set(key, destination);
+    anchorPassLimit = ANCHOR_PASS_BASE_LIMIT + 4 * (pageOwnedAnchorCount + hostPlan.size);
+    try {
+      carried = yield* converge(carriedPlan, false);
+    } catch (error) {
+      if (!(error instanceof ExactConvergenceError)) throw error;
+      convergedPlan = settledPlan;
+      carried = settled;
+    }
   }
+  // WORD_TEXT_FRAME_PRECEDING_TEXT_PUSH: frames are carried one pusher per
+  // frame run and pass, in source order, because each push moves the text the
+  // later frames of that run are placed from. A frame that once lost its carry
+  // is never carried again, so every round adds a frame group and the rounds
+  // are bounded by the frame groups of the document.
+  const everCarried = new Set<string>();
+  let applied = convergedPlan;
+  // Every round adds a plan entry (a carry or a frame-run deferral) that is
+  // never re-added; the cap is an operational guard against an unbounded run
+  // of deferrals, reported like the anchor solver's own pass limit.
+  const roundLimit = ANCHOR_PASS_BASE_LIMIT + 4 * carried.frameObservations.length;
+  for (let round = 0; ; round += 1) {
+    const next = frameCarryPlan(carried, applied, everCarried);
+    if (next === null) return carried;
+    if (round >= roundLimit) {
+      throw new LayoutInvariantError(
+        'NON_CONVERGENCE',
+        `Text-frame carry reached the operational round limit ${roundLimit}`,
+      );
+    }
+    const frameEntries = [...next.values()]
+      .filter((destination) => destination.kind === 'frame' || destination.kind === 'frame-deferral').length;
+    anchorPassLimit = ANCHOR_PASS_BASE_LIMIT
+      + 4 * (pageOwnedAnchorCount + hostPlan.size + frameEntries);
+    try {
+      carried = yield* converge(next, false);
+      applied = convergedPlan;
+    } catch (error) {
+      if (!(error instanceof ExactConvergenceError)) throw error;
+      // Never return a pass without a push it requires.
+      throw new LayoutInvariantError(
+        'NON_CONVERGENCE',
+        error.reason === 'cycle'
+          ? 'Text-frame carry repeated an exact-state cycle'
+          : `Text-frame carry reached the operational pass limit ${anchorPassLimit}`,
+      );
+    }
+  }
+}
+
+/** The carried frames of `applied` that were placed at their carried
+ * position on their carried page and flow domain in `pass`. */
+function keptFrameCarries(
+  applied: ReadonlyMap<string, PageWrapDestination> | null,
+  pass: BodyPaginationPassResult,
+): Map<string, PageWrapDestination> {
+  const kept = new Map<string, PageWrapDestination>();
+  if (!applied) return kept;
+  for (const [key, destination] of applied) {
+    if (destination.kind === 'frame-deferral') {
+      kept.set(key, destination);
+      continue;
+    }
+    if (destination.kind !== 'frame') continue;
+    const observed = pass.frameObservations.find((observation) => observation.carry.key === key);
+    if (observed?.carry.frozen === true
+      && observed.pageIndex === destination.pageIndex
+      && observed.flowDomainId === destination.flowDomainId) {
+      kept.set(key, destination);
+    }
+  }
+  return kept;
+}
+
+/** `applied` plus the first uncarried frame of each frame run whose exclusion
+ * meets earlier content of its page in `pass`, or null when there is none. */
+function frameCarryPlan(
+  pass: BodyPaginationPassResult,
+  applied: ReadonlyMap<string, PageWrapDestination>,
+  everCarried: Set<string>,
+): Map<string, PageWrapDestination> | null {
+  const plan = new Map(applied);
+  const kept = keptFrameCarries(applied, pass);
+  for (const [key, destination] of applied) {
+    if (destination.kind === 'frame' && !kept.has(key)) plan.delete(key);
+  }
+  const runs = new Set<string>();
+  let added = false;
+  for (const observation of pass.frameObservations) {
+    const { carry } = observation;
+    if (carry.frozen || !observation.meetsEarlierContent || runs.has(carry.runKey)) continue;
+    runs.add(carry.runKey);
+    if (everCarried.has(carry.key)) continue;
+    everCarried.add(carry.key);
+    plan.set(carry.key, Object.freeze({
+      kind: 'frame',
+      occurrenceId: carry.key,
+      paragraphSource: carry.paragraphSource,
+      pageIndex: observation.pageIndex,
+      flowDomainId: observation.flowDomainId,
+      carry: Object.freeze({ ...carry, frozen: false }),
+    }));
+    added = true;
+  }
+  // A frame run lands in the flow domain of its anchor paragraph: when the
+  // anchor started in a later one, the frames move on from where they were.
+  for (const observation of pass.frameAnchorObservations) {
+    if (!observation.framesAfterContent
+      || (observation.anchorPageIndex === observation.framesPageIndex
+        && observation.anchorFlowDomainId === observation.framesFlowDomainId)) continue;
+    const key = frameDeferralKey(
+      observation.runKey, observation.framesPageIndex, observation.framesFlowDomainId,
+    );
+    if (plan.has(key)) continue;
+    plan.set(key, Object.freeze({
+      kind: 'frame-deferral',
+      occurrenceId: key,
+      runKey: observation.runKey,
+      pageIndex: observation.framesPageIndex,
+      flowDomainId: observation.framesFlowDomainId,
+    }));
+    added = true;
+  }
+  return added ? plan : null;
+}
+
+function frameDeferralKey(runKey: string, pageIndex: number, flowDomainId: string): string {
+  return `frame-deferral|${runKey}|${pageIndex}|${flowDomainId}`;
+}
+
+/** Lowest page index holding a frame a carry would move text on. */
+function firstFrameCarryPage(pass: BodyPaginationPassResult): number {
+  let first = Number.POSITIVE_INFINITY;
+  for (const observation of pass.frameObservations) {
+    if (!observation.carry.frozen && observation.meetsEarlierContent) {
+      first = Math.min(first, observation.pageIndex);
+    }
+  }
+  return first;
 }
 
 function continuousBalanceBoundaries(input: BodyLayoutInput): readonly Readonly<{
