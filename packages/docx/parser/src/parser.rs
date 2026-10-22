@@ -1959,7 +1959,6 @@ fn finish_document(
         settings.footnote_separator_paragraph = footnote_stories.separator_paragraph;
         settings.footnote_continuation_separator_paragraph =
             footnote_stories.continuation_separator_paragraph;
-        settings.endnote_separator_paragraph = endnote_stories.separator_paragraph;
     }
 
     Ok(Document {
@@ -2312,25 +2311,32 @@ fn parse_notes(
         // Observed Word behavior: an explicitly empty story prints without the
         // default rule; a missing reserved story still uses it. Limit the
         // empty case to a single bare paragraph, as observed in Word controls.
-        // Every supported selected story keeps its effective paragraph for
-        // line measurement, including bare stories with inherited properties.
+        // Every supported selected footnote story keeps its effective paragraph
+        // for line measurement, including bare stories with inherited properties.
         // §17.11.3/.9 selected separators are paragraph stories even when
         // they author no pPr: their line height still inherits from styles.
         // Prefer retained paragraph metrics over the absent-story scalar fallback.
         let mut story = || {
-            selected_note_separator_paragraph(
-                n,
-                style_map,
-                num_map,
-                &local_media_map,
-                &local_chart_map,
-                &local_rel_map,
-                theme,
-            )
-            .map_or_else(
-                || (reserved_note_separator_mark(n), None),
-                |(mark, paragraph)| (Some(mark), Some(Box::new(paragraph))),
-            )
+            if element_name == "footnote" {
+                selected_note_separator_paragraph(
+                    n,
+                    style_map,
+                    num_map,
+                    &local_media_map,
+                    &local_chart_map,
+                    &local_rel_map,
+                    theme,
+                )
+                .map_or_else(
+                    || (reserved_note_separator_mark(n), None),
+                    |(mark, paragraph)| (Some(mark), Some(Box::new(paragraph))),
+                )
+            } else {
+                // Endnote separator metrics must accompany their overflow/
+                // continuation support. Keeping the prior fallback avoids
+                // dropping a terminal note solely because its band grows.
+                (reserved_note_separator_mark(n), None)
+            }
         };
         if selected && note_type.as_deref() == Some("continuationSeparator") {
             (
@@ -2739,15 +2745,6 @@ mod note_separator_tests {
         assert_eq!(
             empty
                 .footnote_separator_paragraph
-                .unwrap()
-                .line_spacing
-                .unwrap()
-                .value,
-            12.0
-        );
-        assert_eq!(
-            empty
-                .endnote_separator_paragraph
                 .unwrap()
                 .line_spacing
                 .unwrap()
@@ -3274,7 +3271,6 @@ fn parse_note_layout_settings(
         footnote_continuation_separator: None,
         footnote_separator_paragraph: None,
         footnote_continuation_separator_paragraph: None,
-        endnote_separator_paragraph: None,
         reserved_separators: None,
     };
     if result.footnote_position.is_none()

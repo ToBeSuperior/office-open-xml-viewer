@@ -220,18 +220,18 @@ it.each([
 });
 
 // Parser tests establish that a bare selected story retains its inherited
-// exact 12pt paragraph. Both note kinds use that retained paragraph here.
-it.each(['footnote', 'endnote'] as const)('measures bare selected %s stories with and without rule ink', (kind) => {
+// exact 12pt paragraph. The footnote pipeline uses that retained paragraph here.
+it('measures bare selected footnote stories with and without rule ink', () => {
   for (const mark of ['short', 'none'] as const) {
     const reference = paragraph(['B01'], [['1']]);
     reference.runs = reference.runs.map(run => 'noteRef' in run
-      ? { ...run, noteRef: { kind, id: '1' } } : run);
+      ? { ...run, noteRef: { kind: 'footnote', id: '1' } } : run);
     const document = {
       ...model(324, [reference], paragraph(['N01']), {}),
-      [kind === 'footnote' ? 'footnotes' : 'endnotes']: [{ id: '1', content: [paragraph(['N01'])] }],
+      footnotes: [{ id: '1', content: [paragraph(['N01'])] }],
       __noteLayoutSettings: {
-        [kind === 'footnote' ? 'footnoteSeparator' : 'endnoteSeparator']: mark,
-        [kind === 'footnote' ? 'footnoteSeparatorParagraph' : 'endnoteSeparatorParagraph']: story(12),
+        footnoteSeparator: mark,
+        footnoteSeparatorParagraph: story(12),
       },
     } as unknown as DocxDocumentModel;
     const [note] = notesOnPage(render(document).pages[0]!);

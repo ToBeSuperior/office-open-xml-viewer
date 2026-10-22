@@ -101,12 +101,12 @@ export interface ReservedNoteSeparatorRolesInput {
   readonly endnote?: ReservedNoteSeparatorDefinitionsInput;
 }
 
-/** Ordinary DOCX listed separator story roles that can retain an effective
+/** Ordinary DOCX listed footnote story roles that can retain a formatted
  * paragraph. DOCX continuation notices keep no story geometry. */
 export type SelectedNoteSeparatorRole = 'separator' | 'continuationSeparator';
 
-/** Raw parser-boundary effective paragraphs of document-listed (§17.11.3/.9)
- * separator stories. The source-model adapter replaces them
+/** Raw parser-boundary effective paragraphs of document-listed (§17.11.9)
+ * formatted footnote separator stories. The source-model adapter replaces them
  * with {@link SelectedNoteSeparatorDefinitionsInput} before sealing. */
 export type SelectedNoteSeparatorParagraphsInput = Readonly<
   Partial<Record<SelectedNoteSeparatorRole, DeepReadonly<DocParagraph>>>
@@ -223,11 +223,9 @@ export interface BodyLayoutInput {
     footnoteContinuationSeparator?: NoteSeparatorInput;
     /** Parser-boundary only; rejected by the sealed layout source. */
     footnoteSeparatorParagraphs?: SelectedNoteSeparatorParagraphsInput;
-    endnoteSeparatorParagraphs?: SelectedNoteSeparatorParagraphsInput;
     /** Canonical ordinary DOCX formatted story definitions; each replaces
      * only the scalar band height of its role, never its mark. */
     footnoteSeparatorStories?: SelectedNoteSeparatorDefinitionsInput;
-    endnoteSeparatorStories?: SelectedNoteSeparatorDefinitionsInput;
     /** Parser-boundary only; rejected by the sealed layout source. */
     reservedSeparators?: ReservedNoteSeparatorsInput;
     /** Canonical reserved separator definitions; they replace the scalar
@@ -259,7 +257,6 @@ export interface BodyLayoutAcquisitionInput {
     endnoteSeparator?: NoteSeparatorInput;
     footnoteContinuationSeparator?: NoteSeparatorInput;
     footnoteSeparatorParagraphs?: SelectedNoteSeparatorParagraphsInput;
-    endnoteSeparatorParagraphs?: SelectedNoteSeparatorParagraphsInput;
     reservedSeparators?: ReservedNoteSeparatorsInput;
   }>;
   readonly pageLayoutSettings: Readonly<{
