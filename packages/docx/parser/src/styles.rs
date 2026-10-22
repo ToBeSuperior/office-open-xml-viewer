@@ -329,8 +329,21 @@ impl FramePrFacts {
             };
         }
         take!(
-            anchor_lock, drop_cap, lines, wrap, h_anchor, v_anchor, h_rule, h_space,
-            v_space, w, h, x, y, x_align, y_align
+            anchor_lock,
+            drop_cap,
+            lines,
+            wrap,
+            h_anchor,
+            v_anchor,
+            h_rule,
+            h_space,
+            v_space,
+            w,
+            h,
+            x,
+            y,
+            x_align,
+            y_align
         );
     }
 
@@ -3115,12 +3128,18 @@ mod tests {
         let mut cascade = para_fmt_from(
             r#"<w:framePr w:w="9360" w:vSpace="187" w:wrap="around" w:vAnchor="text" w:hAnchor="page" w:xAlign="center" w:y="1" w:anchorLock="1"/>"#,
         );
-        apply_para(&mut cascade, &para_fmt_from(r#"<w:framePr w:wrap="notBeside"/>"#));
+        apply_para(
+            &mut cascade,
+            &para_fmt_from(r#"<w:framePr w:wrap="notBeside"/>"#),
+        );
         let frame = cascade.frame_pr.expect("framePr inherits").resolve();
         assert_eq!(frame.wrap, "notBeside");
         assert_eq!(frame.w, Some(468.0));
         assert_eq!(frame.x_align.as_deref(), Some("center"));
-        assert_eq!((frame.h_anchor.as_str(), frame.v_anchor.as_str()), ("page", "text"));
+        assert_eq!(
+            (frame.h_anchor.as_str(), frame.v_anchor.as_str()),
+            ("page", "text")
+        );
         assert_eq!((frame.y, frame.v_space), (Some(0.05), 9.35));
         assert!(frame.anchor_lock);
 
@@ -3130,9 +3149,15 @@ mod tests {
             .frame_pr
             .unwrap()
             .resolve();
-        assert_eq!((bare.h_anchor.as_str(), bare.v_anchor.as_str()), ("text", "text"));
+        assert_eq!(
+            (bare.h_anchor.as_str(), bare.v_anchor.as_str()),
+            ("text", "text")
+        );
         assert_eq!((bare.h, bare.h_rule.as_str()), (None, "auto"));
-        let sized = para_fmt_from(r#"<w:framePr w:h="720"/>"#).frame_pr.unwrap().resolve();
+        let sized = para_fmt_from(r#"<w:framePr w:h="720"/>"#)
+            .frame_pr
+            .unwrap()
+            .resolve();
         assert_eq!((sized.h, sized.h_rule.as_str()), (Some(36.0), "atLeast"));
     }
 
