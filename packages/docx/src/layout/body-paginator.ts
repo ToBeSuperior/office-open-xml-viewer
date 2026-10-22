@@ -13,7 +13,7 @@ import type {
   FrameCarryObservation,
   PageAnchorPrescanInput,
 } from './body-layout-kernel.js';
-import { NoteCapacityExceededError } from './body-layout-kernel.js';
+import { NoteCapacityExceededError, noteBandKey } from './body-layout-kernel.js';
 import { NoteStack } from './note-stack.js';
 import { createFloatLineBandPredicate, type FloatRect } from './float-wrap.js';
 import {
@@ -1698,7 +1698,7 @@ function* paginateBodyPassSteps(
       if (partition.hostShiftPt !== 0) {
         let shifts = footnoteHostShiftsByPage.get(state.flow.pageIndex);
         if (!shifts) footnoteHostShiftsByPage.set(state.flow.pageIndex, shifts = new Map());
-        shifts.set(id, partition.hostShiftPt);
+        shifts.set(noteBandKey(partition.fragment.flowDomainId, id), partition.hostShiftPt);
       }
       // The partitioner also carries a line-free paragraph on its own (an
       // empty paragraph keeps its spacing, ownership and cursor), so a
@@ -2220,7 +2220,10 @@ function* paginateBodyPassSteps(
       const spacingOverlap = block.continuousSectionRole === 'drop-previous-after'
         ? previousAfterPt
         : spacing.overlap;
-      if (spacingOverlap > 0) {
+      // WORD_TEXT_FRAME_PRECEDING_TEXT_PUSH: the preceding in-flow cursor,
+      // including its space after, anchors every frame member. Only the next
+      // in-flow paragraph consumes that after/before overlap, once.
+      if (!block.textFrameMember && spacingOverlap > 0) {
         state = Object.freeze({
           ...state,
           flow: Object.freeze({
@@ -2236,7 +2239,6 @@ function* paginateBodyPassSteps(
       // A text-anchored frame takes no flow space, so the next in-flow
       // paragraph collapses its spacing against the text before the frames
       // (WORD_TEXT_FRAME_PRECEDING_TEXT_PUSH).
-      let acceptedTextFrame = false;
       while (cursor) {
         const fragmentStartKey = paragraphFragmentStartKey(cursor);
         let location = acquisitionLocation(state);
@@ -2318,7 +2320,6 @@ function* paginateBodyPassSteps(
             yield* commitTransition(advanceColumnOrPage(state.flow, 'overflow'), entryIndex);
             continue;
           }
-          if (acquired.textFrameMember) acceptedTextFrame = true;
           if (acquired.frameCarry) {
             const frameDomainId = acquisitionLocation(state).flowDomainId;
             if (pendingFrameRun?.runKey !== acquired.frameCarry.runKey) {
@@ -2660,7 +2661,7 @@ function* paginateBodyPassSteps(
         location = acquisitionLocation(state);
         session.moveAcquisitionCursor(location);
       }
-      if (!acceptedTextFrame) previousParagraph = block;
+      if (!block.textFrameMember) previousParagraph = block;
     } else {
       previousParagraph = null;
       // Only a paragraph anchors a frame run (ECMA-376 §17.3.1.11).
@@ -3095,7 +3096,8 @@ function footnoteStack(
  * A continued tail is projected from its whole-note acquisition by its
  * source cut (FootnotePartition.hostShiftPt), so its content reaches the
  * page through the composed top and that shift together. The plan is that
- * sum: the page position of the acquisition's flow top, the band its next
+ * sum, keyed by band and note together because a continuation can share a
+ * physical page with its head: the acquisition's flow top, the band its next
  * acquisition is given. A box story in the tail then resolves its page
  * frames through the translation its anchor paragraph finally receives, so a
  * §17.4.57 page-anchored table in it lands on the authored page frame while
@@ -3110,8 +3112,8 @@ function footnoteBandPlan(
   const { topsPt } = footnoteStack(page, notes);
   const plan: Record<string, number> = {};
   notes.forEach((note, index) => {
-    const id = note.source.storyInstance;
-    if (note.story.bandDependent) plan[id] = topsPt[index]! + (hostShifts?.get(id) ?? 0);
+    const key = noteBandKey(note.flowDomainId, note.source.storyInstance);
+    if (note.story.bandDependent) plan[key] = topsPt[index]! + (hostShifts?.get(key) ?? 0);
   });
   return Object.freeze(plan);
 }

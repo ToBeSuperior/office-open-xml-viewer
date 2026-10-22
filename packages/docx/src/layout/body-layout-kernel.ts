@@ -5,7 +5,7 @@ import type {
   ParagraphFragmentCursor,
 } from './paragraph-pagination.js';
 import type { TableFragmentCursor } from './table-pagination.js';
-import type { BodyAdjacentTableGroupInput } from './body-layout-input.js';
+import type { BodyAdjacentTableGroupInput, BodyParagraphSourceInput } from './body-layout-input.js';
 import type {
   BodyFlowRegistryDeltaPt,
   BodyFlowRegistrySnapshotPt,
@@ -20,6 +20,11 @@ import type {
   NoteLayout,
   TableLayout,
 } from './types.js';
+
+/** A note can occur in multiple column bands of one physical page. */
+export function noteBandKey(bandId: string, noteId: string): string {
+  return JSON.stringify([bandId, noteId]);
+}
 
 export class NoteCapacityExceededError extends Error {
   readonly code = 'NOTE_CAPACITY_EXCEEDED' as const;
@@ -52,7 +57,7 @@ export interface BodyLayoutSessionInput {
 }
 
 export interface BodyParagraphAcquisitionInput {
-  readonly input: Readonly<{ kind: 'paragraph'; source: SourceRef }>;
+  readonly input: Pick<BodyParagraphSourceInput, 'kind' | 'source' | 'textFrameMember'>;
   readonly location: BodyAcquisitionLocation;
   readonly availableInlineExtentPt: number;
   readonly suppressSpaceBefore: boolean;
@@ -126,9 +131,6 @@ export interface AcquiredParagraphBlock {
   /** Owner of a text-anchored frame group: the facts the paginator needs to
    * carry the frame to its page start (WORD_TEXT_FRAME_PRECEDING_TEXT_PUSH). */
   readonly frameCarry?: FrameCarryObservation;
-  /** Any member of a text-anchored frame group: takes no flow space, so the
-   * next in-flow paragraph's spacing ignores it. */
-  readonly textFrameMember?: true;
 }
 
 /** One text-anchored frame group as placed in a pass. */
@@ -220,7 +222,7 @@ export interface NoteLayoutAcquisitionInput {
   readonly bandTranslationPt?: Readonly<{ xPt: number; yPt: number }>;
   /**
    * Footnotes: the page-final flow top a previous pass composed for a note
-   * whose story is band dependent (header-footer-reserve.ts
+   * whose story is band dependent, keyed by noteBandKey (header-footer-reserve.ts
    * `footnoteTopsPt`; for a continued tail, moved by its source cut). That
    * note's story is laid out with the band that moves its flow top there,
    * the translation composition then applies to its retained content.

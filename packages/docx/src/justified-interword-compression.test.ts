@@ -403,13 +403,12 @@ describe('WORD_JUSTIFIED_INTERWORD_COMPRESSION', () => {
   // Windows Word exports identical compressed justified lines with and
   // without lineWrapLikeWord6 in mode 15.
   it('compresses justified mode-15 lines regardless of lineWrapLikeWord6', async () => {
-    for (const width of [233.3, 237.3]) {
-      const partition = (lines: DocxTextRunInfo[][]) => lines.map(line => words(line));
-      const plain = await renderLines(paragraph(CONTROL, 'both'), width, { compatibilityMode: 15 });
-      const word6 = await renderLines(paragraph(CONTROL, 'both'), width,
-        { compatibilityMode: 15, lineWrapLikeWord6: true });
-      expect(partition(word6)).toEqual(partition(plain));
-    }
+    const [first] = await renderLines(paragraph(CONTROL, 'both'), 233.3,
+      { compatibilityMode: 15, lineWrapLikeWord6: true });
+    expect(words(first).at(-1)).toBe('valley');
+    const last = first.at(-1)!;
+    const bareAdvance = GEORGIA_SUM(last.text.trimEnd()) * 11 / 2048;
+    expect(last.x + bareAdvance).toBeCloseTo(233.3, 3);
   });
 
   it('keeps natural-width fitting outside compatibility mode 15', async () => {

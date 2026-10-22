@@ -71,7 +71,7 @@ import type {
   BodyLayoutSession,
   BodyParagraphAcquisitionInput,
 } from './body-layout-kernel.js';
-import { NoteCapacityExceededError } from './body-layout-kernel.js';
+import { NoteCapacityExceededError, noteBandKey } from './body-layout-kernel.js';
 import { NoteStack } from './note-stack.js';
 import { FlowCapacityExceededError } from './flow.js';
 import { projectBodyOccurrence } from './occurrence-projection.js';
@@ -1456,8 +1456,7 @@ function measureBodyParagraphEntry(
     const frameKey = `frame:${frameGroup.id}`;
     // WORD_TEXT_FRAME_PRECEDING_TEXT_PUSH applies to text-anchored frames;
     // drop caps sit in their anchor paragraph instead.
-    const pushesPrecedingText = frameGroup.framePr.vAnchor === 'text'
-      && frameGroup.framePr.dropCap === 'none';
+    const pushesPrecedingText = request.input.textFrameMember === true;
     const frozen = pushesPrecedingText ? state.frozenAnchorFrames?.get(frameKey) : undefined;
     const box = resolveFrameBox(
       paragraph,
@@ -1530,7 +1529,6 @@ function measureBodyParagraphEntry(
             relocationBlockExtentPt: Math.max(0, box.y + box.h - request.location.cursorPt.yPt),
           }
         : {}),
-      ...(pushesPrecedingText ? { textFrameMember: true as const } : {}),
       ...(paragraph === frameGroup.owner && pushesPrecedingText
         ? {
             frameCarry: Object.freeze({
@@ -1722,7 +1720,7 @@ function layoutBodyNotes(
       },
     };
     // A planned page-final top moves this note's flow top there.
-    const plannedTopPt = request.plannedTopsPt?.[id];
+    const plannedTopPt = request.plannedTopsPt?.[noteBandKey(request.container.id, id)];
     const bandTranslationPt = request.bandTranslationPt
       ?? (plannedTopPt === undefined ? undefined : { xPt: 0, yPt: plannedTopPt - noteTopPt });
     let story: StoryLayout;
