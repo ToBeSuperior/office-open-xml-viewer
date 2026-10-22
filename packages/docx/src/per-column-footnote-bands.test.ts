@@ -185,3 +185,54 @@ it('limits a column-2 endnote only by column 2 footnotes', () => {
     .filter((node): node is NoteLayout => node.kind === 'note' && node.source.story === 'endnote');
   expect(endnotes.map((note) => note.story.blocks.map(text).join(''))).toEqual(['E1-01']);
 });
+
+it('rewraps a continued note from its source cut in a wider column without losing text', () => {
+  const document = model(11, { 3: '1' }, { 1: 1 }, 3);
+  const content = Array.from({ length: 30 }, (_, index) => `word${index}`).join(' ');
+  document.section.columns = { count: 2, spacePt: 20, equalWidth: false, sep: false,
+    cols: [{ widthPt: 40, spacePt: 20 }, { widthPt: 120, spacePt: 0 }] };
+  document.footnotes![0]!.content = [paragraph(content) as unknown as BodyElement];
+  const layout = render(document);
+  const painted = layout.pages.flatMap(page => page.layers.notes)
+    .filter((node): node is NoteLayout => node.kind === 'note')
+    .flatMap(note => note.story.blocks.map(text)).join('');
+  expect(painted.replace(/\s/g, '')).toBe(content.replace(/\s/g, ''));
+});
+
+
+it('flows document-end notes through remaining columns and pages without omitting their suffix', () => {
+  const document = model(11, {}, {}, 14);
+  const body = document.body as unknown as DocParagraph[];
+  body[2] = { ...body[2]!, runs: [...body[2]!.runs,
+    textRun('e', { noteRef: { kind: 'endnote', id: '1' } })] } as DocParagraph;
+  body[8] = { ...body[8]!, runs: [...body[8]!.runs,
+    textRun('e', { noteRef: { kind: 'endnote', id: '2' } })] } as DocParagraph;
+  const expected = Array.from({ length: 20 }, (_, index) => label('E', index + 1));
+  (document as unknown as { endnotes: unknown }).endnotes = [{ id: '1', content: expected.map(value => paragraph(value)) },
+    { id: '2', content: [paragraph('E-second-note')] }];
+  const layout = render(document);
+  expect(layout.diagnostics).toEqual([]);
+  const groups = layout.pages.map(page => page.layers.notes
+    .filter((node): node is NoteLayout => node.kind === 'note' && node.source.story === 'endnote')
+    .map(note => note.story.blocks.map(text)));
+  expect(groups.map(page => page.map(note => note.length))).toEqual([[5], [9, 6, 1]]);
+  expect(groups.flat(2)).toEqual([...expected, 'E-second-note']);
+});
+
+it('balances mode-15 body columns above a common document-end note area', () => {
+  const document = model(15, {}, {}, 14);
+  const body = document.body as unknown as DocParagraph[];
+  body[2] = { ...body[2]!, runs: [...body[2]!.runs,
+    textRun('e', { noteRef: { kind: 'endnote', id: '1' } })] } as DocParagraph;
+  (document as unknown as { endnotes: unknown }).endnotes = [{ id: '1',
+    content: Array.from({ length: 4 }, (_, index) => paragraph(label('E', index + 1))) }];
+  const layout = render(document);
+  expect(layout.pages).toHaveLength(1);
+  expect(columns(layout)).toEqual([
+    { body: 'L01..L07', notes: ['E01', 'E02'] },
+    { body: 'L08..L14', notes: ['E03', 'E04'] },
+  ]);
+  const notes = layout.pages[0]!.layers.notes.filter((node): node is NoteLayout => node.kind === 'note');
+  expect(notes.map(note => note.flowBounds.yPt)).toEqual([142, 142]);
+  expect(notes.map(note => note.separator.length)).toEqual([1, 0]);
+});

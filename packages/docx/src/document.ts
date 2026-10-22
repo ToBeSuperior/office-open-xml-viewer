@@ -120,7 +120,7 @@ export interface LoadOptions extends CoreLoadOptions {
    * the library's default display policy, chosen to follow Word's page
    * allocation in finite controls rather than as a normative ECMA-376 rule.
    * Pass `false` to keep the previous whole-note pagination. With continuation,
-   * table splitting, width changes and changed source cuts can reject layout,
+   * table splitting and changed source cuts can reject layout,
    * and full-note acquisition is subject to the library source/page budgets. */
   allowFootnoteContinuation?: boolean;
   /**

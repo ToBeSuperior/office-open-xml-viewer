@@ -705,9 +705,10 @@ function acquireBodyStoryLayout(
   // Other continued stories are page-local and must not retain a full copy
   // for every destination page in this session cache.
   const continuedNote = reservedRole === undefined
-    && services.allowFootnoteContinuation === true
-    && request.source.story === 'footnote';
-  const workBudget = continuedNote || (reservedRole !== undefined && services.allowFootnoteContinuation === true)
+    && (request.source.story === 'endnote'
+      || (services.allowFootnoteContinuation === true && request.source.story === 'footnote'));
+  const workBudget = continuedNote || (reservedRole !== undefined
+    && (request.source.story === 'endnote' || services.allowFootnoteContinuation === true))
     ? footnoteAcquisitionWorkBudgetOf(services) : undefined;
   if (continuedNote && !workBudget) throw new Error('Footnote acquisition requires a pagination work budget');
   let reusableNote = continuedNote && dependencies.noteSourceReuse.get(root);
@@ -729,6 +730,7 @@ function acquireBodyStoryLayout(
     container: pageIndependent ? { ...request.container, id: null } : request.container,
     band: pageIndependent ? null : request.bandTranslationPt ?? null,
     pageFrames: pageIndependent ? null : request.pageFrames ?? null,
+    sourceStart: request.sourceStart ?? null,
   });
   const pageStoryCache = (request.source.story === 'header' || request.source.story === 'footer')
     ? headerFooterLayoutCacheOf(services) : undefined;
@@ -777,7 +779,10 @@ function acquireBodyStoryLayout(
       && (request.bandTranslationPt !== undefined || request.pageFrames !== undefined),
     // Replace, never accumulate, a separator root's context; never retain a
     // destination-dependent full continued note once per page.
-    retention: reservedRole !== undefined
+    // Reflow candidates replace their prior suffix rather than retaining a
+    // full suffix for every source cut. Equal-width whole-note acquisitions
+    // keep their existing shared cache; width-changing cuts retain one latest.
+    retention: reservedRole !== undefined || request.sourceStart !== undefined
       ? 'latest'
       : continuedNote && !reusableNote ? 'none' : 'session',
   }, () => {
@@ -799,6 +804,12 @@ function layoutBodyStory(
   separatorRoot: boolean,
 ): StoryLayout {
   const { source, state, services, publicAnchorBridge } = dependencies;
+  const start = request.sourceStart;
+  if (start && (separatorRoot || (request.source.story !== 'footnote' && request.source.story !== 'endnote')
+    || !Number.isSafeInteger(start.blockIndex) || start.blockIndex < 0
+    || root[start.blockIndex]?.type !== 'paragraph')) {
+    throw new Error('A note continuation must name an original root paragraph');
+  }
   const noteReferenceNumber =
     !separatorRoot
       && (request.source.story === 'footnote' || request.source.story === 'endnote')
@@ -842,7 +853,7 @@ function layoutBodyStory(
       lineNumberingEligible: false,
     },
   };
-  preRegisterPageFloats(root, 0, candidate);
+  preRegisterPageFloats(root, request.sourceStart?.blockIndex ?? 0, candidate);
   const storyServices = createLayoutServicesRuntimeView(services, request.container.quarterTurnMath
     ? { math: quarterTurnMathMetadataService(services.math) } : {});
   candidate.layoutServices = storyServices;
@@ -897,6 +908,7 @@ function layoutBodyStory(
   const storyTableAcquisitions = new Map<string, RetainedTableAcquisition>();
   let bandDependent = false;
   const blockInputs: StoryBlockInput[] = root.flatMap((element, index): StoryBlockInput[] => {
+    if (request.sourceStart && index < request.sourceStart.blockIndex) return [];
     const source: SourceRef = {
       story: request.source.story,
       storyInstance: request.source.storyInstance,
@@ -1025,6 +1037,9 @@ function layoutBodyStory(
           nextCursor: placement.cursor,
         };
       }
+      const continuation = request.sourceStart?.blockIndex === sourceIndex
+        ? request.sourceStart.paragraph : undefined;
+      const continuing = continuation?.boundary != null;
       const previousCandidate = sourceIndex > 0 ? root[sourceIndex - 1] : undefined;
       const previous: LayoutParagraphBlock | null =
         previousCandidate?.type === 'paragraph' ? previousCandidate : null;
@@ -1061,7 +1076,8 @@ function layoutBodyStory(
         context,
         paragraph,
         borderEdges.top,
-        spacing.suppressBefore,
+        spacing.suppressBefore || continuing,
+        continuing,
       );
       const result = acquireRegisteredParagraph(candidate, paragraph, {
         id: `${block.source.story}:${block.source.storyInstance}:${block.source.path.join('.')}`,
@@ -1090,7 +1106,8 @@ function layoutBodyStory(
           context.spaceAfterPt,
           borderEdges.bottom === 'none' ? 0 : bottomBorderExtentPt(paragraph.borders),
         ),
-        continuesFromPrevious: false,
+        continuesFromPrevious: continuing,
+        ...(continuation?.sourceRangeStart === undefined ? {} : { sourceRangeStart: continuation.sourceRangeStart }),
         anchorFrames: bodyAnchorReferenceFrames(candidate),
         // Nested text boxes in this story take the story's own section,
         // page and frame, not the body's current location.
@@ -1102,11 +1119,19 @@ function layoutBodyStory(
         // (no page band reaches the story) they get no page frames.
         ...(request.bandTranslationPt ? { hostFlowPageTranslationPt: request.bandTranslationPt } : {}),
         ...textBoxStoryHostOptions(candidate, { xPt: 0, yPt: 0 }),
-      });
+      }, undefined, continuing ? { boundary: continuation!.boundary! } : undefined);
+      const retained = (request.source.story === 'footnote' || request.source.story === 'endnote')
+        && !result.measured.markOnly
+        ? deepFreezePlainDataWithFrozenAliases({
+            ...result.layout,
+            noteLineEndBoundaries: paragraphSourceBoundaries(result.measured),
+            ...(continuation ? { noteSourceStart: continuation } : {}),
+          }, result.layout)
+        : result.layout;
       previousParagraph = paragraph;
       const nextCursor = {
         xPt: placement.cursor.xPt,
-        yPt: startYPt + result.layout.advancePt,
+        yPt: startYPt + retained.advancePt,
       };
       candidate.y = nextCursor.yPt;
       // Trailing space-after is allocation, not occupied flow (as in body
@@ -1114,18 +1139,18 @@ function layoutBodyStory(
       // the previous space-after, which would otherwise report a false
       // FLOW_OVERLAP. The origin stays at the allocation start so story
       // positioning and anchor extents keep their leading-spacing arithmetic.
-      const contentOwned = result.layout.ordinaryFlow
+      const contentOwned = retained.ordinaryFlow
         ? deepFreezePlainDataWithFrozenAliases({
-            ...result.layout,
+            ...retained,
             flowBounds: Object.freeze({
-              ...result.layout.flowBounds,
+              ...retained.flowBounds,
               heightPt: Math.max(
                 0,
-                result.layout.flowBounds.heightPt - result.layout.spacing.afterPt,
+                retained.flowBounds.heightPt - retained.spacing.afterPt,
               ),
             }),
-          }, result.layout)
-        : result.layout;
+          }, retained)
+        : retained;
       return { layout: contentOwned, nextCursor };
     },
     layoutTable(block, placement) {
@@ -1429,6 +1454,17 @@ interface BodySessionDependencies {
   readonly effectiveTablePositioning: typeof effectiveTablePositioning;
 }
 
+/** Fold wrapped fragments of one physical line into its single source cut. */
+function paragraphSourceBoundaries(measured: ReturnType<typeof acquireParagraphResult>['measured']) {
+  return Object.freeze(measured.lines.flatMap((line, index) => {
+    if (line.layout.physicalLineIndex !== undefined
+      && measured.lines[index + 1]?.layout.physicalLineIndex === line.layout.physicalLineIndex) return [];
+    const boundary = line.layout.consumedEnd;
+    if (!boundary) throw new Error('Measured line omitted its source boundary');
+    return [boundary];
+  }));
+}
+
 function measureBodyParagraphEntry(
   context: BodySessionDependencies,
   request: Parameters<NonNullable<BodyLayoutSession['measureParagraph']>>[0],
@@ -1585,13 +1621,7 @@ function measureBodyParagraphEntry(
   const { measured, layout } = acquired;
   const markOnLineGrid =
     measured.markOnly && resolveBodyParagraphLayoutContext(candidate, paragraph).lineGrid.active;
-  const allBoundaries = measured.lines.flatMap((line, index) => {
-    if (line.layout.physicalLineIndex !== undefined
-      && measured.lines[index + 1]?.layout.physicalLineIndex === line.layout.physicalLineIndex) return [];
-    const boundary = line.layout.consumedEnd;
-    if (!boundary) throw new Error('Measured line omitted its source boundary');
-    return [boundary];
-  });
+  const allBoundaries = paragraphSourceBoundaries(measured);
   const retainedFloats = retainedBodyParagraphFloatEntries(sessionState, layout);
   const floatEntries = Object.freeze([...publicFloats, ...retainedFloats]);
   // This accepted-collision path is intentionally parser-owned. Hand-built
@@ -1704,7 +1734,7 @@ function layoutBodyNotes(
       ...request.container,
       // Acquire the source once before page partitioning; this is a resource
       // acquisition container, not permission for retained note ink to overflow.
-      ...(services.allowFootnoteContinuation === true && request.kind === 'footnote'
+      ...((services.allowFootnoteContinuation === true && request.kind === 'footnote') || request.kind === 'endnote'
         ? { capacity: 'unbounded' as const } : {}),
       id: `${request.container.id}:${request.kind}:${id}`,
       bounds: {
@@ -1730,6 +1760,7 @@ function layoutBodyNotes(
         pageIndex: request.pageIndex,
         section: request.section,
         container: storyContainer,
+        ...(request.sourceStart ? { sourceStart: request.sourceStart } : {}),
         ...(bandTranslationPt ? { bandTranslationPt } : {}),
       });
     } catch (error) {
@@ -1738,7 +1769,7 @@ function layoutBodyNotes(
       }
       throw error;
     }
-    if (services.allowFootnoteContinuation === true && request.kind === 'footnote'
+    if (((services.allowFootnoteContinuation === true && request.kind === 'footnote') || request.kind === 'endnote')
       && story.advancePt > request.section.geometry.pageHeight * MAX_BODY_LAYOUT_PAGES) {
       // Match the paginator's physical-page budget before retaining a source
       // that cannot finish within it. This is resource policy, not Office fit.
@@ -1793,6 +1824,7 @@ function layoutBodyNotes(
     });
     const note: NoteLayout = Object.freeze({
       kind: 'note',
+      ...(request.sourceStart ? { acquisitionSourceStart: request.sourceStart } : {}),
       // A column band (WORD_PER_COLUMN_FOOTNOTE_BANDS) can hold a later part
       // of a note continued from an earlier column of the same page.
       id: request.container.id.includes(':band:')

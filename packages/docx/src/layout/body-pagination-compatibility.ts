@@ -557,3 +557,16 @@ export function wordPerColumnFootnoteBandsApply(
 ): boolean {
   return compatibilityMode !== undefined && compatibilityMode < 15 && regionColumnCount > 1;
 }
+
+
+export const WORD_PAGE_WIDE_ENDNOTE_AREA = defineCompatibilityRule({
+  id: 'word-page-wide-endnote-area',
+  evidence: {
+    kind: 'office-observation',
+    syntheticFixtureId: 'mode15-endnote-area-controls',
+    application: 'Microsoft Word',
+    version: 'Microsoft 365',
+    platform: 'Windows (ExportAsFixedFormat)',
+  },
+  description: 'Windows Word controls with compatibility mode 15, two equal columns, exact 12pt body lines and exact 10pt note lines balance the final body columns before document-end notes. The endnotes start below their common body edge, flow through the section columns in source order and continue on subsequent pages. The smallest common height retaining the selected note prefix balances the area; only its first separator occurrence paints ink. Thirty- and hundred-line body controls with multiple endnotes, plus a combined footnote/endnote control, bound the observation. Earlier modes retain sequential endnote column flow; absent modes are not inferred.',
+});
