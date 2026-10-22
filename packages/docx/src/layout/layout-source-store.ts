@@ -196,7 +196,8 @@ function validateReservedNoteSeparatorRoles(
       if (role !== 'separator' && role !== 'continuationSeparator') {
         throw new TypeError(`Invalid note separator story definition: ${role}`);
       }
-      const mode = kind === 'endnote' ? settings?.endnoteSeparator
+      const mode = kind === 'endnote'
+        ? role === 'separator' ? settings?.endnoteSeparator : settings?.endnoteContinuationSeparator
         : role === 'separator' ? settings?.footnoteSeparator : settings?.footnoteContinuationSeparator;
       const root = selectedNoteSeparatorSource(role, [], kind);
       if (!definition || definition.role !== role || sourceKey(definition.root) !== sourceKey(root)

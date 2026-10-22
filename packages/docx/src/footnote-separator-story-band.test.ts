@@ -260,3 +260,18 @@ it.each([false, true])('uses the continued endnote area story even at a new-note
   expect(band(layout, 0)).toEqual({ heightPt: 24, ruleOffsetPt: 12, ruleWidthPt: 60 });
   expect(band(layout, 1)).toEqual({ heightPt: 12, ruleOffsetPt: 6, ruleWidthPt: 180 });
 });
+
+it('admits a listed endnote continuation story when the ordinary separator is absent', () => {
+  const base = model(324, [paragraph(['B01'])], paragraph([]), {});
+  const body = paragraph(['B01']);
+  body.runs.push(textRun('e', { noteRef: { kind: 'endnote', id: '1' } }) as DocParagraph['runs'][number]);
+  const document = { ...base, body: [body], footnotes: [],
+    endnotes: [{ id: '1', content: [paragraph(lines('E', 30))] }],
+    __noteLayoutSettings: { endnoteContinuationSeparator: 'full', endnoteContinuationSeparatorParagraph: story(12) },
+  } as unknown as DocxDocumentModel;
+  const layout = render(document);
+  expect(pages(layout).map(page => page.notes.join(''))).toEqual([
+    lines('E', 16).join(''), lines('E', 30).slice(16).join(''),
+  ]);
+  expect(band(layout, 1)).toEqual({ heightPt: 12, ruleOffsetPt: 6, ruleWidthPt: 180 });
+});
