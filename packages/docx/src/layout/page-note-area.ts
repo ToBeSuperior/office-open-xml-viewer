@@ -5,11 +5,15 @@ import type { NoteLayout } from './types.js';
 export interface PageNoteSource {
   readonly id: string;
   readonly cursor: FootnoteCursor | null;
+  /** Single-column owners retain the existing reference-line permission for
+   * physical-page splitting; a column change alone does not grant it. */
+  readonly allowPartial?: boolean;
 }
 
 export interface PageNoteChunk {
   readonly columnIndex: number;
   readonly offsetPt: number;
+  readonly hostShiftPt: number;
   readonly layout: NoteLayout;
 }
 
@@ -48,7 +52,7 @@ export function flowPageNoteArea(input: PageNoteAreaInput): PageNoteFlow {
     let firstInColumn = true;
     while (sourceIndex < input.sources.length) {
       const source = input.sources[sourceIndex]!;
-      const partition = input.acquire({ id: source.id, cursor }, columnIndex,
+      const partition = input.acquire({ ...source, cursor }, columnIndex,
         firstInColumn, Math.max(0, input.capacityPt - offsetPt), offsetPt);
       if (!partition) break;
       const note = partition.fragment;
@@ -61,7 +65,7 @@ export function flowPageNoteArea(input: PageNoteAreaInput): PageNoteFlow {
           flowBounds: note.leading.flowBounds, advancePt: note.leading.advancePt,
         }) } : {}),
       }) : note;
-      chunks.push(Object.freeze({ columnIndex, offsetPt, layout }));
+      chunks.push(Object.freeze({ columnIndex, offsetPt, layout, hostShiftPt: partition.hostShiftPt }));
       offsetPt += note.advancePt;
       if (!Number.isFinite(offsetPt)) throw new RangeError('Invalid page note area advance');
       heightPt = Math.max(heightPt, offsetPt);
@@ -73,7 +77,7 @@ export function flowPageNoteArea(input: PageNoteAreaInput): PageNoteFlow {
     }
   }
   const remaining = input.sources.slice(sourceIndex).map((source, index) => index === 0
-    ? Object.freeze({ id: source.id, cursor }) : source);
+    ? Object.freeze({ ...source, cursor }) : source);
   return Object.freeze({ chunks: Object.freeze(chunks), heightPt,
     remaining: Object.freeze(remaining), progress: Object.freeze({ sourceIndex, cursor }) });
 }

@@ -209,6 +209,10 @@ export interface StoryLayoutAcquisitionInput {
 }
 
 export interface NoteLayoutAcquisitionInput {
+  /** Page-wide area only: the first column's measured separator advance,
+   * retained as a blank top band in another column. No separator is acquired
+   * or painted there; its text width must not change the shared top edge. */
+  readonly blankLeadingAdvancePt?: number;
   readonly sourceStart?: NoteSourceContinuation;
   readonly kind: 'footnote' | 'endnote';
   readonly referenceIds: readonly string[];

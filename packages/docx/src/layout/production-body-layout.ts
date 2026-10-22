@@ -706,7 +706,8 @@ function acquireBodyStoryLayout(
   // for every destination page in this session cache.
   const continuedNote = reservedRole === undefined
     && (request.source.story === 'endnote'
-      || (services.allowFootnoteContinuation === true && request.source.story === 'footnote'));
+      || (request.source.story === 'footnote'
+        && (services.allowFootnoteContinuation === true || request.container.capacity === 'unbounded')));
   const workBudget = continuedNote || (reservedRole !== undefined
     && (request.source.story === 'endnote' || services.allowFootnoteContinuation === true))
     ? footnoteAcquisitionWorkBudgetOf(services) : undefined;
@@ -1120,11 +1121,10 @@ function layoutBodyStory(
         ...(request.bandTranslationPt ? { hostFlowPageTranslationPt: request.bandTranslationPt } : {}),
         ...textBoxStoryHostOptions(candidate, { xPt: 0, yPt: 0 }),
       }, undefined, continuing ? { boundary: continuation!.boundary! } : undefined);
-      const retained = (request.source.story === 'footnote' || request.source.story === 'endnote')
-        && !result.measured.markOnly
+      const retained = request.source.story === 'footnote' || request.source.story === 'endnote'
         ? deepFreezePlainDataWithFrozenAliases({
             ...result.layout,
-            noteLineEndBoundaries: paragraphSourceBoundaries(result.measured),
+            noteLineEndBoundaries: result.measured.markOnly ? Object.freeze([]) : paragraphSourceBoundaries(result.measured),
             ...(continuation ? { noteSourceStart: continuation } : {}),
           }, result.layout)
         : result.layout;
@@ -1687,6 +1687,10 @@ function layoutBodyNotes(
     endnotesById,
     storyAcquisitionContext,
   } = context;
+  if (request.blankLeadingAdvancePt !== undefined
+    && (!request.firstOnPage || !Number.isFinite(request.blankLeadingAdvancePt) || request.blankLeadingAdvancePt < 0)) {
+    throw new RangeError('Invalid shared note separator advance');
+  }
   const notes: NoteLayout[] = [];
   const stack = new NoteStack();
   let first = request.firstOnPage;
@@ -1705,30 +1709,31 @@ function layoutBodyNotes(
     // (ordinary versus continuing) selects the definition, whose own mark
     // selects Short/Full.
     const reservedDefinitions = noteSettings?.reservedSeparatorRoles?.[request.kind];
-    const leading = first && reservedDefinitions
+    const leading = first && reservedDefinitions && request.blankLeadingAdvancePt === undefined
       ? acquireReservedNoteSeparator(context, request, reservedDefinitions[
         request.continuing === true ? 'continuationSeparator' : 'separator'
       ], noteTopPt, request.container.id.includes(':band:')
         ? `${request.kind}:${id}:${request.container.id}:separator`
         : `${request.kind}:${id}:page:${request.pageIndex}:separator`)
       : undefined;
-    // An ordinary DOCX listed footnote story (§17.11.9) replaces only the
+    // An ordinary DOCX listed note story (§17.11.3/.9) replaces only the
     // scalar band height of its role with its own acquired paragraph advance
     // (inherited/authored spacing and line rule). Its mark kind and rule width keep the
     // scalar policy below; the rule sits at the midpoint of the story's mark
     // line box, not in its spacing. Bare selected stories keep that line box;
     // only absent stories use the scalar fallback.
-    const selectedDefinition = first && !reservedDefinitions && request.kind === 'footnote'
-      ? noteSettings?.footnoteSeparatorStories?.[
+    const selectedDefinition = first && !reservedDefinitions
+      && request.blankLeadingAdvancePt === undefined
+      ? (request.kind === 'footnote' ? noteSettings?.footnoteSeparatorStories : noteSettings?.endnoteSeparatorStories)?.[
         request.continuing === true ? 'continuationSeparator' : 'separator'
       ]
       : undefined;
     const selectedBand = selectedDefinition
       ? acquireSelectedNoteSeparatorBand(context, request, selectedDefinition, noteTopPt)
       : undefined;
-    const separatorHeightPt = reservedDefinitions
+    const separatorHeightPt = (first ? request.blankLeadingAdvancePt : undefined) ?? (reservedDefinitions
       ? leading?.advancePt ?? 0
-      : selectedBand?.advancePt ?? (first ? FOOTNOTE_SEPARATOR_GAP_PT : 0);
+      : selectedBand?.advancePt ?? (first ? FOOTNOTE_SEPARATOR_GAP_PT : 0));
     const ruleYPt = noteTopPt + (selectedBand?.ruleOffsetPt ?? separatorHeightPt / 2);
     const storyContainer = {
       ...request.container,
@@ -1779,8 +1784,9 @@ function layoutBodyNotes(
     // suppresses rule ink while retaining the existing note band gap.
     const separatorMode = request.kind === 'footnote'
       ? request.continuing ? noteSettings?.footnoteContinuationSeparator : noteSettings?.footnoteSeparator
-      : noteSettings?.endnoteSeparator;
+      : request.continuing ? noteSettings?.endnoteContinuationSeparator : noteSettings?.endnoteSeparator;
     const separator = first && !reservedDefinitions && separatorMode !== 'none'
+      && request.blankLeadingAdvancePt === undefined
       ? Object.freeze([
           Object.freeze({
             edge: 'top' as const,

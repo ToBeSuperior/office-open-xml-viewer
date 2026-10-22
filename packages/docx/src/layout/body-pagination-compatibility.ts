@@ -547,7 +547,7 @@ export const WORD_PER_COLUMN_FOOTNOTE_BANDS = defineCompatibilityRule({
     version: 'Microsoft 365',
     platform: 'Windows (ExportAsFixedFormat)',
   },
-  description: 'ECMA-376 §17.11.21 puts pageBottom footnotes at the bottom of the page without defining multi-column note geometry. In Windows Word controls of two- and three-column sections (equal and 144/288pt columns, exact 12pt body and 10pt note lines), compatibility modes 11, 12 and 14 give each column its own note band, independent of footnoteLayoutLikeWW8 and the other legacy compatibility flags: a column\'s band holds the notes referenced in that column, wraps them at that column\'s width, starts with its own one-line separator band (also for an empty separator story) and ends at the body bottom, even when a column break ends the column early; a column without references keeps its full height. A note that does not fit continues at the top of the next column\'s band, before that column\'s own notes, and then on the next page; the reference line stays with as much of the note as fits, even when the whole note would fit the next column or a fresh page with nothing after the reference (one-line paragraphs closed by the reference, 10- and 20-line notes), unlike the single-column fallback of WORD_PARAGRAPH_FOOTNOTE_CONTINUATION. Endnotes follow the text in the column flow. Compatibility mode 15 (with or without footnoteLayoutLikeWW8) instead flows one page-wide note area through the columns; that rule is not implemented and mode 15 keeps the page band. An omitted compatibility mode and a reference in a one-column region of a page whose later region has columns are not measured and keep the page band.',
+  description: 'ECMA-376 §17.11.21 puts pageBottom footnotes at the bottom of the page without defining multi-column note geometry. In Windows Word controls of two- and three-column sections (equal and 144/288pt columns, exact 12pt body and 10pt note lines), compatibility modes 11, 12 and 14 give each column its own note band, independent of footnoteLayoutLikeWW8 and the other legacy compatibility flags: a column\'s band holds the notes referenced in that column, wraps them at that column\'s width, starts with its own one-line separator band (also for an empty separator story) and ends at the body bottom, even when a column break ends the column early; a column without references keeps its full height. A note that does not fit continues at the top of the next column\'s band, before that column\'s own notes, and then on the next page; the reference line stays with as much of the note as fits, even when the whole note would fit the next column or a fresh page with nothing after the reference (one-line paragraphs closed by the reference, 10- and 20-line notes), unlike the single-column fallback of WORD_PARAGRAPH_FOOTNOTE_CONTINUATION. Endnotes follow the text in the column flow. Compatibility mode 15 (with or without footnoteLayoutLikeWW8) instead flows one page-wide note area through the columns; see WORD_PAGE_WIDE_FOOTNOTE_AREA. An omitted compatibility mode keeps the page band.',
 });
 
 /** Gate of {@link WORD_PER_COLUMN_FOOTNOTE_BANDS} for the active region. */
@@ -557,6 +557,19 @@ export function wordPerColumnFootnoteBandsApply(
 ): boolean {
   return compatibilityMode !== undefined && compatibilityMode < 15 && regionColumnCount > 1;
 }
+
+
+export const WORD_PAGE_WIDE_FOOTNOTE_AREA = defineCompatibilityRule({
+  id: 'word-page-wide-footnote-area',
+  evidence: {
+    kind: 'office-observation',
+    syntheticFixtureId: 'mode15-footnote-area-controls',
+    application: 'Microsoft Word',
+    version: 'Microsoft 365',
+    platform: 'Windows (ExportAsFixedFormat)',
+  },
+  description: 'ECMA-376 §17.11.21 does not define multi-column pageBottom geometry. Windows mode15 controls with two and three columns, equal and unequal widths, exact12pt body and exact10pt notes flow a source-ordered note prefix through one common-height area. Every body column is shortened by that height; later references can reflow earlier body columns. The largest prefix compatible with its retained references is selected, then the smallest common height retaining that prefix balances the area. Each destination wraps its source suffix at its own width. Only the first separator paints ink; the other columns reserve its measured advance. One-to-two and two-to-one continuous-section controls, including references on both sides, retain the first reference section as area owner. Compatibility flags do not change this mode15 observation. Omitted modes retain the page band. Single-column owners retain the independently measured physical-page split policy of WORD_PARAGRAPH_FOOTNOTE_CONTINUATION.',
+});
 
 
 export const WORD_PAGE_WIDE_ENDNOTE_AREA = defineCompatibilityRule({
@@ -570,3 +583,24 @@ export const WORD_PAGE_WIDE_ENDNOTE_AREA = defineCompatibilityRule({
   },
   description: 'Windows Word controls with compatibility mode 15, two equal columns, exact 12pt body lines and exact 10pt note lines balance the final body columns before document-end notes. The endnotes start below their common body edge, flow through the section columns in source order and continue on subsequent pages. The smallest common height retaining the selected note prefix balances the area; only its first separator occurrence paints ink. Thirty- and hundred-line body controls with multiple endnotes, plus a combined footnote/endnote control, bound the observation. Earlier modes retain sequential endnote column flow; absent modes are not inferred.',
 });
+
+
+export const WORD_CONTINUOUS_SECTION_FOOTNOTE_PAGE = defineCompatibilityRule({
+  id: 'word-continuous-section-footnote-page',
+  evidence: {
+    kind: 'office-observation',
+    syntheticFixtureId: 'continuous-section-footnote-controls',
+    application: 'Microsoft Word',
+    version: 'Microsoft 365',
+    platform: 'Windows (ExportAsFixedFormat)',
+  },
+  description: 'ECMA-376 Part4 section14.8.3.20 allows reference-free paragraphs after a continuous section break on a page containing earlier footnotes when footnoteLayoutLikeWW8 is true. Windows controls of exact12pt single-column sections keep the following section on the same page in mode15, with or without the flag, and in mode11 with the flag; mode11 without the flag starts another page. Mode15 also keeps one-to-two and two-to-one column transitions on the page, including a later reference. A mode11 two-to-one control with a column-owned footnote band starts another page despite the flag, so that observed column-band class retains its physical-page boundary. With the normative legacy flag, a later new reference starts another page; mode15 is the separately observed exception.',
+});
+
+export function wordContinuousSectionMayShareFootnotePage(
+  compatibilityMode: number | undefined,
+  footnoteLayoutLikeWW8: boolean | undefined,
+  hasColumnBands: boolean,
+): boolean {
+  return compatibilityMode === 15 || (footnoteLayoutLikeWW8 === true && !hasColumnBands);
+}

@@ -195,7 +195,7 @@ function partitionIndexedFootnote(acquired: NoteLayout, cursor: FootnoteCursor |
   // A cursor counts shaped lines, so continuing it in a different text width
   // could silently skip or repeat source text. The caller must reacquire the
   // source suffix and start a fresh line cursor before changing widths.
-  if (cursor && Math.abs(cursor.inlineExtentPt - acquired.flowBounds.widthPt) > 1e-6) {
+  if (cursor && cursor.inlineExtentPt !== acquired.flowBounds.widthPt) {
     throw new Error('Footnote continuation across different text widths is unsupported');
   }
   if (cursor) {

@@ -1069,6 +1069,8 @@ export interface NoteSeparatorLayout {
 }
 
 export interface NoteLayout extends LayoutNodeBase {
+  /** One page-wide area: a common reserve and this column chunk's top offset. */
+  readonly pageArea?: Readonly<{ heightPt: number; offsetPt: number }>;
   /** Acquisition origin for reusing equal-width shaped suffixes. */
   readonly acquisitionSourceStart?: NoteSourceContinuation;
   readonly kind: 'note';
