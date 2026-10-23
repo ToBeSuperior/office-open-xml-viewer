@@ -1682,12 +1682,12 @@ function layoutBodyNotes(
         ? `${request.kind}:${id}:${request.container.id}:separator`
         : `${request.kind}:${id}:page:${request.pageIndex}:separator`)
       : undefined;
-    // An ordinary DOCX formatted listed story (§17.11.9) replaces only the
+    // An ordinary DOCX listed footnote story (§17.11.9) replaces only the
     // scalar band height of its role with its own acquired paragraph advance
-    // (authored spacing and line rule). Its mark kind and rule width keep the
+    // (inherited/authored spacing and line rule). Its mark kind and rule width keep the
     // scalar policy below; the rule sits at the midpoint of the story's mark
-    // line box, not in its spacing. Bare and missing stories keep the scalar
-    // band, whose rule stays at the band midpoint.
+    // line box, not in its spacing. Bare selected stories keep that line box;
+    // only absent stories use the scalar fallback.
     const selectedDefinition = first && !reservedDefinitions && request.kind === 'footnote'
       ? noteSettings?.footnoteSeparatorStories?.[
         request.continuing === true ? 'continuationSeparator' : 'separator'

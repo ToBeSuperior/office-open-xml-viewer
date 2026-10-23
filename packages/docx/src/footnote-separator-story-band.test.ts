@@ -218,3 +218,24 @@ it.each([
   } as unknown as DocxDocumentModel;
   expect(() => render(document)).toThrow(/note separator story/);
 });
+
+// Parser tests establish that a bare selected story retains its inherited
+// exact 12pt paragraph. The footnote pipeline uses that retained paragraph here.
+it('measures bare selected footnote stories with and without rule ink', () => {
+  for (const mark of ['short', 'none'] as const) {
+    const reference = paragraph(['B01'], [['1']]);
+    reference.runs = reference.runs.map(run => 'noteRef' in run
+      ? { ...run, noteRef: { kind: 'footnote', id: '1' } } : run);
+    const document = {
+      ...model(324, [reference], paragraph(['N01']), {}),
+      footnotes: [{ id: '1', content: [paragraph(['N01'])] }],
+      __noteLayoutSettings: {
+        footnoteSeparator: mark,
+        footnoteSeparatorParagraph: story(12),
+      },
+    } as unknown as DocxDocumentModel;
+    const [note] = notesOnPage(render(document).pages[0]!);
+    expect(note!.flowBounds.heightPt - note!.story.advancePt).toBe(12);
+    expect(note!.separator).toHaveLength(mark === 'none' ? 0 : 1);
+  }
+});

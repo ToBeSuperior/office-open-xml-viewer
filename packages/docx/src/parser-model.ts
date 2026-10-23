@@ -392,8 +392,8 @@ function reservedNoteSeparatorsInput(
     ? value : { ...value, footnote, endnote } };
 }
 
-/** Ordinary DOCX formatted separator paragraphs (footnote kind). Each enters
- * only beside its own Short/Full mark; the closed shape is validated once at
+/** Ordinary DOCX effective separator paragraphs (footnote kind). Each enters
+ * only beside its own Short/Full/None mark; the closed shape is validated once at
  * normalization (layout/selected-note-separators). Automatic paragraph spacing
  * resolves here with the same document setting as every other story. */
 function selectedNoteSeparatorParagraphsInput(
@@ -402,7 +402,7 @@ function selectedNoteSeparatorParagraphsInput(
 ): Readonly<{ footnoteSeparatorParagraphs?: SelectedNoteSeparatorParagraphsInput }> {
   const resolve = (paragraph: DocParagraph | undefined, mark: unknown): DocParagraph | undefined => {
     if (paragraph === undefined) return undefined;
-    if (mark !== 'short' && mark !== 'full') throw new Error('Unsupported note separator story paragraph');
+    if (mark !== 'short' && mark !== 'full' && mark !== 'none') throw new Error('Unsupported note separator story paragraph');
     if (paragraph.beforeAutospacing !== true && paragraph.afterAutospacing !== true) return paragraph;
     return {
       ...paragraph,

@@ -9,9 +9,9 @@ import type { DeepReadonly, SourceRef } from './types.js';
 import type { DocParagraph } from '../types.js';
 
 /**
- * Ordinary DOCX selected footnote separator stories of the formatted class:
+ * Ordinary DOCX selected footnote separator stories:
  * a document-listed (ECMA-376 §17.11.9) `separator` or `continuationSeparator`
- * story whose one paragraph formats its single §17.11.23/§17.11.1 mark run.
+ * story whose one paragraph holds its single §17.11.23/§17.11.1 mark run or is bare and empty.
  *
  * Identity: one canonical `selected:*` root per role inside the `footnote`
  * story kind. These are library identities, distinct from producer-supplied
@@ -20,8 +20,11 @@ import type { DocParagraph } from '../types.js';
  *
  * Geometry: the story paragraph's acquired advance replaces only the scalar
  * band height of its role; the mark (Short/Full) and rule ink keep the
- * existing scalar policy. Bare, missing and endnote stories keep the scalar
- * band. The parser admits only a mark run whose rPr equals its paragraph
+ * existing scalar policy. A bare selected paragraph keeps its inherited
+ * §17.3.1.33 spacing and line box; None suppresses only rule ink. Missing and
+ * endnote stories keep the fallback. Endnote metric retention must accompany
+ * their currently unsupported overflow/continuation before it can be admitted.
+ * The parser admits only a mark run whose rPr equals its paragraph
  * mark's, so the run-free paragraph line box is the mark's line box.
  */
 
@@ -90,7 +93,7 @@ export function normalizeSelectedNoteSeparators(
     const paragraph = raw[role];
     if (paragraph === undefined) continue;
     const mark = marks[role];
-    if (mark !== 'short' && mark !== 'full') reject(`${role} paragraph has no Short/Full mark`);
+    if (mark !== 'short' && mark !== 'full' && mark !== 'none') reject(`${role} paragraph has no selected mark`);
     // The closed shape the parser admits: no runs besides the omitted mark,
     // and no paragraph ink, numbering, frame or hidden mark.
     if ((paragraph.runs ?? []).length !== 0) reject(`${role} paragraph carries runs`);

@@ -198,7 +198,7 @@ function validateReservedNoteSeparatorRoles(
     const root = selectedNoteSeparatorSource(role);
     if (!definition || definition.role !== role || sourceKey(definition.root) !== sourceKey(root)
       || sourceKey(definition.paragraph) !== sourceKey({ ...root, path: [0] })
-      || (mode !== 'short' && mode !== 'full')) {
+      || (mode !== 'short' && mode !== 'full' && mode !== 'none')) {
       throw new TypeError(`Invalid note separator story definition: footnote:${role}`);
     }
     defined.add(sourceKey(root));

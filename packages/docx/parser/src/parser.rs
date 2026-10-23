@@ -2311,23 +2311,32 @@ fn parse_notes(
         // Observed Word behavior: an explicitly empty story prints without the
         // default rule; a missing reserved story still uses it. Limit the
         // empty case to a single bare paragraph, as observed in Word controls.
-        // A formatted footnote story also keeps its effective paragraph; the
-        // endnote formatted class stays unsupported (absent).
-        let mut story = || match reserved_note_separator_mark(n) {
-            Some(mark) => (Some(mark), None),
-            None if element_name == "footnote" => formatted_note_separator_paragraph(
-                n,
-                style_map,
-                num_map,
-                &local_media_map,
-                &local_chart_map,
-                &local_rel_map,
-                theme,
-            )
-            .map_or((None, None), |(mark, paragraph)| {
-                (Some(mark), Some(Box::new(paragraph)))
-            }),
-            None => (None, None),
+        // Every supported selected footnote story keeps its effective paragraph
+        // for line measurement, including bare stories with inherited properties.
+        // §17.11.3/.9 selected separators are paragraph stories even when
+        // they author no pPr: their line height still inherits from styles.
+        // Prefer retained paragraph metrics over the absent-story scalar fallback.
+        let mut story = || {
+            if element_name == "footnote" {
+                selected_note_separator_paragraph(
+                    n,
+                    style_map,
+                    num_map,
+                    &local_media_map,
+                    &local_chart_map,
+                    &local_rel_map,
+                    theme,
+                )
+                .map_or_else(
+                    || (reserved_note_separator_mark(n), None),
+                    |(mark, paragraph)| (Some(mark), Some(Box::new(paragraph))),
+                )
+            } else {
+                // Endnote separator metrics must accompany their overflow/
+                // continuation support. Keeping the prior fallback avoids
+                // dropping a terminal note solely because its band grows.
+                (reserved_note_separator_mark(n), None)
+            }
         };
         if selected && note_type.as_deref() == Some("continuationSeparator") {
             (
@@ -2366,8 +2375,8 @@ fn parse_notes(
     (out, selected_stories)
 }
 
-/// Selected special story facts of one note part. Paragraphs are retained
-/// only for the formatted footnote class.
+/// Selected special story facts of one note part. A supported single
+/// paragraph is retained even when all its properties are inherited.
 #[derive(Default)]
 struct SelectedNoteSeparators {
     separator: Option<crate::types::NoteSeparatorMark>,
@@ -2376,8 +2385,9 @@ struct SelectedNoteSeparators {
     continuation_separator_paragraph: Option<Box<DocParagraph>>,
 }
 
-/// The formatted class of a listed story (§17.11.9): one `w:p` holding an
-/// optional `w:pPr` and one run of an optional `w:rPr` plus one
+/// The closed single-paragraph class of a listed story (§17.11.3/.9):
+/// a bare empty `w:p`, or a paragraph holding optional `w:pPr` and one run
+/// of optional `w:rPr` plus one
 /// §17.11.23/§17.11.1 mark. Its effective paragraph (style cascade, §17.3.1.33
 /// spacing, line rule) is kept so layout measures the band from these facts
 /// instead of a mark-only scalar.
@@ -2386,7 +2396,7 @@ struct SelectedNoteSeparators {
 /// child. Paragraph ink, numbering, frames, a hidden mark and authored text are
 /// not represented here either; those stories stay unsupported (absent).
 #[allow(clippy::too_many_arguments)]
-fn formatted_note_separator_paragraph(
+fn selected_note_separator_paragraph(
     note: roxmltree::Node<'_, '_>,
     style_map: &StyleMap,
     num_map: &mut NumberingMap,
@@ -2409,25 +2419,32 @@ fn formatted_note_separator_paragraph(
         .filter(|child| child.is_element())
         .peekable();
     let properties = children.next_if(|child| is_w(*child, "pPr"));
-    let run = children.next()?;
-    if !is_w(run, "r") || children.next().is_some() {
+    let mark = if let Some(run) = children.next() {
+        if !is_w(run, "r") || children.next().is_some() {
+            return None;
+        }
+        let mut run_children = run.children().filter(|child| child.is_element()).peekable();
+        let run_properties = run_children.next_if(|child| is_w(*child, "rPr"));
+        let marker = run_children.next()?;
+        if run_children.next().is_some() || !is_w_ns(marker.tag_name().namespace()) {
+            return None;
+        }
+        let mark = match marker.tag_name().name() {
+            "separator" => NoteSeparatorMark::Short,
+            "continuationSeparator" => NoteSeparatorMark::Full,
+            _ => return None,
+        };
+        let mark_properties = properties.and_then(|node| child_w(node, "rPr"));
+        if !same_xml_element(mark_properties, run_properties) {
+            return None;
+        }
+        mark
+    } else if properties.is_none() {
+        // Bare empty stories suppress rule ink but keep their inherited line box.
+        NoteSeparatorMark::None
+    } else {
         return None;
-    }
-    let mut run_children = run.children().filter(|child| child.is_element()).peekable();
-    let run_properties = run_children.next_if(|child| is_w(*child, "rPr"));
-    let marker = run_children.next()?;
-    if run_children.next().is_some() || !is_w_ns(marker.tag_name().namespace()) {
-        return None;
-    }
-    let mark = match marker.tag_name().name() {
-        "separator" => NoteSeparatorMark::Short,
-        "continuationSeparator" => NoteSeparatorMark::Full,
-        _ => return None,
     };
-    let mark_properties = properties.and_then(|node| child_w(node, "rPr"));
-    if !same_xml_element(mark_properties, run_properties) {
-        return None;
-    }
     let parsed = parse_paragraph_with_diagnostics(
         paragraph,
         style_map,
@@ -2571,6 +2588,7 @@ mod note_separator_tests {
             let mut writer = zip::ZipWriter::new(Cursor::new(&mut bytes));
             write_test_content_types(&mut writer);
             let mut parts = vec![
+                ("word/styles.xml", format!(r#"<w:styles xmlns:w="{namespace}"><w:docDefaults><w:rPrDefault><w:rPr><w:sz w:val="24"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:line="240" w:lineRule="exact"/></w:pPr></w:pPrDefault></w:docDefaults></w:styles>"#)),
                 ("word/document.xml", format!(r#"<w:document xmlns:w="{namespace}"><w:body><w:p><w:r><w:footnoteReference w:id="1"/><w:endnoteReference w:id="1"/></w:r></w:p></w:body></w:document>"#)),
                 ("word/_rels/document.xml.rels", r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="f" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footnotes" Target="footnotes.xml"/><Relationship Id="e" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/endnotes" Target="endnotes.xml"/></Relationships>"#.to_string()),
                 ("word/footnotes.xml", format!(r#"<w:footnotes xmlns:w="{namespace}" xmlns:x="urn:foreign">{special_story}<w:footnote w:type="continuationSeparator" w:id="0"><w:p><w:r><w:continuationSeparator/></w:r></w:p></w:footnote><w:footnote w:id="1"><w:p><w:r><w:t>footnote</w:t></w:r></w:p></w:footnote></w:footnotes>"#)),
@@ -2688,8 +2706,8 @@ mod note_separator_tests {
             .expect("formatted continuation paragraph");
         assert_eq!(continuation.line_spacing.as_ref().unwrap().value, 6.0);
 
-        // Bare stories keep the scalar contract; formatting this boundary does
-        // not represent (differing marker rPr, paragraph ink, authored text)
+        // Bare stories inherit their paragraph metrics. Formatting this boundary
+        // does not represent (differing marker rPr, paragraph ink, authored text)
         // stays the existing unsupported class: no mark and no paragraph.
         let bare = selected_note_package(
             Some(r#"<w:footnotePr><w:footnote w:id="42"/><w:footnote w:id="0"/></w:footnotePr>"#),
@@ -2706,8 +2724,33 @@ mod note_separator_tests {
             ),
             (Some(Short), Some(Full))
         );
-        assert!(bare.footnote_separator_paragraph.is_none());
-        assert!(bare.footnote_continuation_separator_paragraph.is_none());
+        for paragraph in [
+            bare.footnote_separator_paragraph,
+            bare.footnote_continuation_separator_paragraph,
+        ] {
+            let paragraph =
+                paragraph.expect("bare selected story retains inherited paragraph metrics");
+            assert_eq!(paragraph.line_spacing.as_ref().unwrap().value, 12.0);
+            assert!(paragraph.runs.is_empty());
+        }
+        let empty = selected_note_package(
+            Some(r#"<w:footnotePr><w:footnote w:id="42"/></w:footnotePr><w:endnotePr><w:endnote w:id="42"/></w:endnotePr>"#),
+            crate::xml_util::W_NS, "42",
+            Some(r#"<w:footnote w:type="separator" w:id="42"><w:p/></w:footnote>"#),
+        ).note_layout_settings.unwrap();
+        assert_eq!(
+            empty.footnote_separator,
+            Some(crate::types::NoteSeparatorMark::None)
+        );
+        assert_eq!(
+            empty
+                .footnote_separator_paragraph
+                .unwrap()
+                .line_spacing
+                .unwrap()
+                .value,
+            12.0
+        );
         for paragraph in [
             formatted("separator", "480", "", &arial),
             formatted(
