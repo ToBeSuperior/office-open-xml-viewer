@@ -180,8 +180,15 @@ export function measureParagraph(
   // text lines. This matters when the mark's design height crosses a grid-cell
   // boundary: a 16pt East Asian mark on an 18pt grid occupies two cells even
   // when the document contains no literal CJK code point.
+  // Keep that compatibility projection inside the active line grid. Part 4
+  // §14.8.3.50 does not select an East Asian font for an otherwise Latin mark;
+  // §17.3.2.26's explicit mark hint remains authoritative without a grid.
+  // Windows Word controls with useFELayout and no grid retain the Latin
+  // single-line box (Times New Roman 10pt footnote separators; Ubuntu 12pt
+  // body marks and footnote/endnote separators),
+  // including when the inherited East Asian font slot names a different face.
   const markUsesEastAsianGrid = environment.documentHasEastAsianText === true
-    || environment.useFeLayout === true;
+    || (environment.useFeLayout === true && context.lineGrid.active);
   // WORD_PICTURE_BULLET_LINE_PARTICIPATION: a picture bullet stands on its
   // paragraph's first baseline and takes part in that line's box, except
   // under exact spacing, whose box and baseline it leaves unchanged (the
