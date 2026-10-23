@@ -5,6 +5,21 @@ semantic versioning. While the major version is zero, minor releases may contain
 explicitly documented breaking changes; patch releases remain compatible with
 the corresponding minor release.
 
+## 0.89.3 — 2026-10-24
+
+Compatible patch release. No migration is required.
+
+- **Word pagination:** multi-column documents place footnotes, document-end
+  endnotes and their separators more faithfully. Paragraph endnotes continue
+  across pages, and list markers no longer add excess line height in affected
+  compatibility modes (#1921, #1932, #1933, #1935).
+- **Word frames and wrapping:** paragraph text frames retain inherited spacing
+  and placement, and zero-size drawing anchors preserve authored text wrapping
+  (#1921, #1931).
+- **Smaller downloads:** shrink parser downloads for DOCX, XLSX and PPTX and
+  reduce JavaScript build overhead, while preserving public APIs and loading
+  behavior (#1914, #1936).
+
 ## 0.89.2 — 2026-10-21
 
 Compatible patch release. No migration is required.

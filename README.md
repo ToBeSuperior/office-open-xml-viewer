@@ -753,7 +753,7 @@ owns the layout, paint and type primitives shared by DOCX, XLSX and PPTX.
 | `packages/docx/parser/src/lib.rs` | Rust WASM parser — DOCX ZIP → `Document` JSON |
 | `packages/xlsx/parser/src/lib.rs` | Rust WASM parser — XLSX ZIP → `Workbook` JSON |
 | `packages/pptx/parser/src/lib.rs` | Rust WASM parser — PPTX ZIP → `Presentation` JSON |
-| `packages/docx/src/renderer.ts` | DOCX Canvas 2D rendering and text layout |
+| `packages/docx/src/renderer.ts` | DOCX Canvas 2D paint from retained page geometry |
 | `packages/xlsx/src/renderer.ts` | XLSX Canvas 2D viewport rendering |
 | `packages/pptx/src/renderer.ts` | PPTX Canvas 2D rendering |
 | `packages/*/src/worker.ts` | Main-mode parser Worker entry |
@@ -823,10 +823,11 @@ file without uploading it.
 | | SVG images (`asvg:svgBlip` MS-2016 extension — vector drawn from the embedded `.svg`, raster fallback) | ✅ |
 | | Text boxes / drawing shapes (inline and anchored `wps:wsp` / `wps:txbx`, including solid, gradient, and image fills; `a:prstGeom` — 186 preset geometries via the shared engine; connector arrow heads `headEnd` / `tailEnd` (§20.1.8.3) and `prstDash` dash patterns (§20.1.8.48)). Text-box paragraphs run through the **same line-layout engine as body text**, so kinsoku 行頭/行末禁則 (§17.15.1.58–60), UAX#9 bidi (`w:bidi`, §17.3.1.6), justification (§17.18.44) and tab stops (§17.3.1.37) all apply inside a box | ✅ |
 | | WMF **and EMF** metafile images (legacy vector, incl. inside text boxes) — rasterized via a built-in player: window→viewport mapping (MS-EMF map modes, world transform), pens/brushes, poly/rect/ellipse, text-out, path clipping, and embedded DIB blits | ✅ |
+| | Paragraph text frames (`w:framePr`) — inherited positioning and spacing, with surrounding text wrap | ✅ |
 | | Legacy VML content — positioned shapes, text boxes, image previews, and authored text wrapping | ✅ |
 | | OLE embedded objects (`w:object` — the baked VML `v:imagedata` preview is drawn; the embedded app is not run) | ✅ |
-| **Advanced** | Footnotes — reference markers + bottom-of-page bodies with separator rule, numbered (`w:footnoteReference` / `w:footnoteRef`, §17.11) | ✅ |
-| | Endnotes — reference markers + bodies at document end (`w:endnoteReference`, §17.11) | ✅ |
+| **Advanced** | Footnotes — numbered markers, authored separators and paragraph continuation across pages; column placement follows document compatibility settings (`w:footnoteReference` / `w:footnoteRef`, §17.11) | ✅ |
+| | Endnotes — reference markers + document-end bodies, including paragraph continuation across pages (`w:endnoteReference`, §17.11) | ✅ |
 | | Page-number formats (`w:pgNumType` restart / format §17.6.12; PAGE `\*` switches — decimal / roman / letter / hex / ordinal-dash / hebrew2 / koreanLegal, §17.18.59) | ✅ |
 | | Field date/time pictures (`TIME` / `DATE` field `\@` format, §17.16.5.72 / .16) | ✅ |
 | | `w:snapToGrid` opt-out of the document grid (§17.3.1.32) | ✅ |
