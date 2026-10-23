@@ -1258,6 +1258,7 @@ type DocRunContent = ({
     type: 'ptab';
 } & PTabRun);
 export interface DocSettings {
+    footnoteLayoutLikeWW8?: boolean;
     doNotUseHtmlParagraphAutoSpacing?: boolean;
     kinsoku?: boolean;
     noLineBreaksBefore?: string;

@@ -1949,16 +1949,21 @@ fn finish_document(
     if footnote_stories.separator.is_some()
         || endnote_stories.separator.is_some()
         || footnote_stories.continuation_separator.is_some()
+        || endnote_stories.continuation_separator.is_some()
     {
         let settings = environment
             .note_layout_settings
             .get_or_insert_with(Default::default);
         settings.footnote_separator = footnote_stories.separator;
         settings.endnote_separator = endnote_stories.separator;
+        settings.endnote_continuation_separator = endnote_stories.continuation_separator;
         settings.footnote_continuation_separator = footnote_stories.continuation_separator;
         settings.footnote_separator_paragraph = footnote_stories.separator_paragraph;
         settings.footnote_continuation_separator_paragraph =
             footnote_stories.continuation_separator_paragraph;
+        settings.endnote_separator_paragraph = endnote_stories.separator_paragraph;
+        settings.endnote_continuation_separator_paragraph =
+            endnote_stories.continuation_separator_paragraph;
     }
 
     Ok(Document {
@@ -2311,32 +2316,25 @@ fn parse_notes(
         // Observed Word behavior: an explicitly empty story prints without the
         // default rule; a missing reserved story still uses it. Limit the
         // empty case to a single bare paragraph, as observed in Word controls.
-        // Every supported selected footnote story keeps its effective paragraph
-        // for line measurement, including bare stories with inherited properties.
+        // Every supported selected story keeps its effective paragraph for
+        // line measurement, including bare stories with inherited properties.
         // §17.11.3/.9 selected separators are paragraph stories even when
         // they author no pPr: their line height still inherits from styles.
         // Prefer retained paragraph metrics over the absent-story scalar fallback.
         let mut story = || {
-            if element_name == "footnote" {
-                selected_note_separator_paragraph(
-                    n,
-                    style_map,
-                    num_map,
-                    &local_media_map,
-                    &local_chart_map,
-                    &local_rel_map,
-                    theme,
-                )
-                .map_or_else(
-                    || (reserved_note_separator_mark(n), None),
-                    |(mark, paragraph)| (Some(mark), Some(Box::new(paragraph))),
-                )
-            } else {
-                // Endnote separator metrics must accompany their overflow/
-                // continuation support. Keeping the prior fallback avoids
-                // dropping a terminal note solely because its band grows.
-                (reserved_note_separator_mark(n), None)
-            }
+            selected_note_separator_paragraph(
+                n,
+                style_map,
+                num_map,
+                &local_media_map,
+                &local_chart_map,
+                &local_rel_map,
+                theme,
+            )
+            .map_or_else(
+                || (reserved_note_separator_mark(n), None),
+                |(mark, paragraph)| (Some(mark), Some(Box::new(paragraph))),
+            )
         };
         if selected && note_type.as_deref() == Some("continuationSeparator") {
             (
@@ -2592,7 +2590,7 @@ mod note_separator_tests {
                 ("word/document.xml", format!(r#"<w:document xmlns:w="{namespace}"><w:body><w:p><w:r><w:footnoteReference w:id="1"/><w:endnoteReference w:id="1"/></w:r></w:p></w:body></w:document>"#)),
                 ("word/_rels/document.xml.rels", r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="f" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footnotes" Target="footnotes.xml"/><Relationship Id="e" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/endnotes" Target="endnotes.xml"/></Relationships>"#.to_string()),
                 ("word/footnotes.xml", format!(r#"<w:footnotes xmlns:w="{namespace}" xmlns:x="urn:foreign">{special_story}<w:footnote w:type="continuationSeparator" w:id="0"><w:p><w:r><w:continuationSeparator/></w:r></w:p></w:footnote><w:footnote w:id="1"><w:p><w:r><w:t>footnote</w:t></w:r></w:p></w:footnote></w:footnotes>"#)),
-                ("word/endnotes.xml", format!(r#"<w:endnotes xmlns:w="{namespace}"><w:endnote w:type="separator" w:id="{special_id}"><w:p><w:r><w:continuationSeparator/></w:r></w:p></w:endnote><w:endnote w:id="1"><w:p><w:r><w:t>endnote</w:t></w:r></w:p></w:endnote></w:endnotes>"#)),
+                ("word/endnotes.xml", format!(r#"<w:endnotes xmlns:w="{namespace}"><w:endnote w:type="separator" w:id="{special_id}"><w:p><w:r><w:continuationSeparator/></w:r></w:p></w:endnote><w:endnote w:type="continuationSeparator" w:id="0"><w:p><w:r><w:separator/></w:r></w:p></w:endnote><w:endnote w:id="1"><w:p><w:r><w:t>endnote</w:t></w:r></w:p></w:endnote></w:endnotes>"#)),
             ];
             if let Some(properties) = properties {
                 parts.push(("word/settings.xml", format!(r#"<w:settings xmlns:w="{namespace}" xmlns:x="urn:foreign">{properties}</w:settings>"#)));
@@ -2706,6 +2704,28 @@ mod note_separator_tests {
             .expect("formatted continuation paragraph");
         assert_eq!(continuation.line_spacing.as_ref().unwrap().value, 6.0);
 
+        let continued_endnotes = selected_note_package(
+            Some(r#"<w:endnotePr><w:endnote w:id="0"/></w:endnotePr>"#),
+            crate::xml_util::W_NS,
+            "42",
+            None,
+        )
+        .note_layout_settings
+        .unwrap();
+        assert_eq!(
+            continued_endnotes.endnote_continuation_separator,
+            Some(Short)
+        );
+        assert_eq!(
+            continued_endnotes
+                .endnote_continuation_separator_paragraph
+                .unwrap()
+                .line_spacing
+                .unwrap()
+                .value,
+            12.0
+        );
+
         // Bare stories inherit their paragraph metrics. Formatting this boundary
         // does not represent (differing marker rPr, paragraph ink, authored text)
         // stays the existing unsupported class: no mark and no paragraph.
@@ -2745,6 +2765,15 @@ mod note_separator_tests {
         assert_eq!(
             empty
                 .footnote_separator_paragraph
+                .unwrap()
+                .line_spacing
+                .unwrap()
+                .value,
+            12.0
+        );
+        assert_eq!(
+            empty
+                .endnote_separator_paragraph
                 .unwrap()
                 .line_spacing
                 .unwrap()
@@ -3268,9 +3297,12 @@ fn parse_note_layout_settings(
         endnote_number_start: start("endnotePr"),
         footnote_separator: None,
         endnote_separator: None,
+        endnote_continuation_separator: None,
         footnote_continuation_separator: None,
         footnote_separator_paragraph: None,
         footnote_continuation_separator_paragraph: None,
+        endnote_separator_paragraph: None,
+        endnote_continuation_separator_paragraph: None,
         reserved_separators: None,
     };
     if result.footnote_position.is_none()
@@ -3451,6 +3483,9 @@ fn parse_document_settings(settings_xml: &str) -> Option<crate::types::DocumentS
         .find(|n| n.is_element() && n.tag_name().name() == "compat");
     let compat_bool = |name: &str| -> Option<bool> { bool_prop(compat?, name) };
     let line_wrap_like_word6 = compat_bool("lineWrapLikeWord6");
+    // ECMA-376 Part 4 §14.8.3.20: preserve absence and explicit false;
+    // paragraph/page placement consumes the flag after canonical projection.
+    let footnote_layout_like_ww8 = compat_bool("footnoteLayoutLikeWW8");
     let do_not_use_html_paragraph_auto_spacing = compat_bool("doNotUseHTMLParagraphAutoSpacing");
     // [MS-DOCX] §2.3.3: Office stores this as a named `compatSetting`, not a
     // direct `w:compat` boolean. The setting is off when absent.
@@ -3504,6 +3539,7 @@ fn parse_document_settings(settings_xml: &str) -> Option<crate::types::DocumentS
         && default_tab_stop.is_none()
         && character_spacing_control.is_none()
         && line_wrap_like_word6.is_none()
+        && footnote_layout_like_ww8.is_none()
         && do_not_use_html_paragraph_auto_spacing.is_none()
         && enable_open_type_features.is_none()
         && use_fe_layout.is_none()
@@ -3522,6 +3558,7 @@ fn parse_document_settings(settings_xml: &str) -> Option<crate::types::DocumentS
         default_tab_stop,
         character_spacing_control,
         line_wrap_like_word6,
+        footnote_layout_like_ww8,
         do_not_use_html_paragraph_auto_spacing,
         enable_open_type_features,
         use_fe_layout,
@@ -19541,6 +19578,26 @@ mod math_jc_tests {
         );
         let enabled = parse_document_settings(&enabled_xml).expect("enabled balance setting");
         assert_eq!(enabled.balance_single_byte_double_byte_width, Some(true));
+    }
+
+    #[test]
+    fn settings_footnote_layout_like_ww8_preserves_explicit_on_off_and_absence() {
+        for (element, expected) in [
+            ("<w:footnoteLayoutLikeWW8/>", Some(true)),
+            (r#"<w:footnoteLayoutLikeWW8 w:val="0"/>"#, Some(false)),
+            ("<w:useFELayout/>", None),
+        ] {
+            let xml = format!(
+                r#"<w:settings xmlns:w="{W_NS}"><w:compat>{element}</w:compat></w:settings>"#
+            );
+            let settings = parse_document_settings(&xml).expect("compat setting");
+            assert_eq!(settings.footnote_layout_like_ww8, expected);
+            let wire = serde_json::to_value(settings).unwrap();
+            assert_eq!(
+                wire.get("footnoteLayoutLikeWW8").and_then(|v| v.as_bool()),
+                expected
+            );
+        }
     }
 
     #[test]

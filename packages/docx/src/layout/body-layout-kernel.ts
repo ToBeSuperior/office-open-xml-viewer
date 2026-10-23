@@ -170,7 +170,14 @@ export interface AcquiredTableBlock {
   }>;
 }
 
+/** Immutable source cut, independent of a prior column's shaped line index. */
+export interface NoteSourceContinuation {
+  readonly blockIndex: number;
+  readonly paragraph: ParagraphFragmentCursor;
+}
+
 export interface StoryLayoutAcquisitionInput {
+  readonly sourceStart?: NoteSourceContinuation;
   /** Section occurrence selecting this header/footer. Direct root acquisition
    * defaults to source ownership; production page composers supply the section. */
   readonly pageStoryOwner?: string;
@@ -202,6 +209,11 @@ export interface StoryLayoutAcquisitionInput {
 }
 
 export interface NoteLayoutAcquisitionInput {
+  /** Page-wide area only: the first column's measured separator advance,
+   * retained as a blank top band in another column. No separator is acquired
+   * or painted there; its text width must not change the shared top edge. */
+  readonly blankLeadingAdvancePt?: number;
+  readonly sourceStart?: NoteSourceContinuation;
   readonly kind: 'footnote' | 'endnote';
   readonly referenceIds: readonly string[];
   readonly pageIndex: number;

@@ -15,6 +15,9 @@ import type {
 } from './body-layout-kernel.js';
 import { NoteCapacityExceededError, noteBandKey } from './body-layout-kernel.js';
 import { NoteStack } from './note-stack.js';
+import { PageNoteController, PageNoteReplay } from './page-note-controller.js';
+import { acquireNoteColumnPartition, destinationOwnedNote } from './note-column-acquisition.js';
+import { balancePageNoteArea, flowPageNoteArea, type PageNoteSource } from './page-note-area.js';
 import { createFloatLineBandPredicate, type FloatRect } from './float-wrap.js';
 import {
   commitPageFlowTransition,
@@ -116,6 +119,7 @@ import {
   wordPreBreakHostAnchorExtentPt,
   wordPreBreakInlineDrawingResource,
   wordPerColumnFootnoteBandsApply,
+  wordContinuousSectionMayShareFootnotePage,
 } from './body-pagination-compatibility.js';
 import {
   wordContinuousSectionRestartDisplayNumber,
@@ -894,6 +898,7 @@ export type BodyPaginationPassResult = Readonly<{
   /** Finalization resolves these with the same authority used at page opening. */
   pageStoryContexts: readonly PageStoryContext[];
   allocations: readonly BodyFlowAllocation[];
+  endnoteLayoutsByPage: ReadonlyMap<number, readonly NoteLayout[]>;
   footnoteReserveByPage: ReadonlyMap<number, number>;
   footnoteLayoutsByPage: ReadonlyMap<number, readonly NoteLayout[]>;
   /** Non-zero source-cut shifts of continued tails (FootnotePartition.hostShiftPt). */
@@ -990,6 +995,7 @@ function paginationPassResult(
   serializedAnchorInputs: readonly string[] = [],
   frameObservations: readonly PlacedFrameObservation[] = [],
   frameAnchorObservations: readonly FrameAnchorObservation[] = [],
+  endnoteLayoutsByPage: ReadonlyMap<number, readonly NoteLayout[]> = new Map(),
 ): BodyPaginationPassResult {
   const { layout, pageStoryContexts } = finalize(state, owners);
   const retainedPageIndexes = new Set(layout.pages.map((page) => page.pageIndex));
@@ -1005,6 +1011,8 @@ function paginationPassResult(
     allocations: Object.freeze(allocations.filter((allocation) => (
       retainedNodeIds.has(allocation.nodeId)
     ))),
+    endnoteLayoutsByPage: new Map([...endnoteLayoutsByPage]
+      .filter(([pageIndex]) => retainedPageIndexes.has(pageIndex))),
     footnoteReserveByPage: new Map([...footnoteReserveByPage]
       .filter(([pageIndex]) => retainedPageIndexes.has(pageIndex))),
     footnoteLayoutsByPage: new Map([...footnoteLayoutsByPage]
@@ -1121,6 +1129,10 @@ function* paginateBodyPassSteps(
   const kernel = bodyLayoutKernelOf(services);
   if (!kernel) throw new Error('Body layout kernel is not attached to the supplied services');
   const owners = ownerMap(input);
+  // WORD_PAGE_WIDE_FOOTNOTE_AREA: only the live page replays when its common area changes.
+  const pageLocalNotes = input.compatibilityMode === 15
+    && (input.initialSection.context.columns.length > 1 || input.sequence.some(entry =>
+      entry.kind === 'begin-section' && entry.section.context.columns.length > 1));
   const acceptedOccurrenceIds = new Set<string>();
   const allocations: BodyFlowAllocation[] = [];
   let reserveSession: BodyLayoutSession | undefined;
@@ -1269,10 +1281,19 @@ function* paginateBodyPassSteps(
     return deferral?.kind === 'frame-deferral';
   };
   const serializedAnchorInputs: string[] = [];
+  let observedAnchorInputs = 0;
+  const flushAnchorInputs = () => {
+    while (observedAnchorInputs < anchorInputs.length) {
+      const event = anchorInputs[observedAnchorInputs++]!;
+      observer?.onPageAnchorInput?.(event);
+    }
+  };
   const recordAnchorInput = (event: PageAnchorInputEvent) => {
     anchorInputs.push(event);
     serializedAnchorInputs.push(serializeAnchorInput(event, pageStartAnchorsIdentity));
-    observer?.onPageAnchorInput?.(event);
+    // Page-local note trials may replace their live page. External anchor
+    // observers receive only its accepted reads, immediately before closure.
+    if (!pageLocalNotes) flushAnchorInputs();
   };
   // Page-owned anchors registered on the current physical page.
   let registeredAnchorPage = -1;
@@ -1355,7 +1376,9 @@ function* paginateBodyPassSteps(
     }
     return undefined;
   };
-  yield* prescanPageAnchors(state, 0);
+  let capturePageCheckpoint: (entryIndex: number) => void = () => {};
+  let beforeNotePageClose = () => {};
+  let resetNotePage = () => {};
   let placePendingFootnoteContinuations: () => void = () => {};
   const commitTransition = function* (
     transition: ReturnType<typeof applyAuthoredBreak>,
@@ -1367,6 +1390,10 @@ function* paginateBodyPassSteps(
       throw new Error(`Document page budget exceeded (${MAX_BODY_LAYOUT_PAGES} pages)`);
     }
     const previousPageIndex = state.flow.pageIndex;
+    if (transition.state.pageIndex !== previousPageIndex) {
+      beforeNotePageClose();
+      flushAnchorInputs();
+    }
     const previousFlowDomainId = acquisitionLocation(state).flowDomainId;
     const opensAutomaticPage = transition.events.some((event) => (
       event.type === 'next-page' && event.reason === 'overflow'
@@ -1384,6 +1411,8 @@ function* paginateBodyPassSteps(
         : null;
       const nextLocation = acquisitionLocation(state);
       session.resetPageAcquisition(nextLocation);
+      resetNotePage();
+      capturePageCheckpoint(nextEntryIndex);
       if (!skipPageAnchorPrescan) yield* prescanPageAnchors(state, nextEntryIndex);
       placePendingFootnoteContinuations();
     } else {
@@ -1411,11 +1440,23 @@ function* paginateBodyPassSteps(
   // (FootnotePartition.hostShiftPt; footnoteBandPlan).
   const footnoteHostShiftsByPage = new Map<number, Map<string, number>>();
   const pendingFootnoteContinuations = new Map<string, FootnoteCursor>();
+  let noteController: PageNoteController | undefined;
+  let mode15NoteOwner: BodyAcquisitionLocation | undefined;
+  // The normative WW8 override keeps only reference-free following text on
+  // this physical page. Mode15 is the measured later-reference exception.
+  let continuousSectionNotePage: number | null = null;
+  let modernFootnoteAdmission: (ids: readonly string[], mandatoryUnit: boolean, allowPartial?: boolean) => boolean | undefined = () => undefined;
+  let openModernIncomingNotes: () => boolean = () => false;
   // WORD_PER_COLUMN_FOOTNOTE_BANDS: below compatibility mode 15 each column of
   // a multi-column region owns the note band of the references it paints;
   // otherwise the page owns one band. Band ids double as note containers.
   const footnoteIdsByBand = new Map<string, Set<string>>();
   const footnoteReserveByBand = new Map<string, number>();
+  let pageBandKeys = new Set<string>();
+  const retainBandReserve = (band: string, reservePt: number) => {
+    pageBandKeys.add(band);
+    footnoteReserveByBand.set(band, reservePt);
+  };
   const pageFootnoteBandId = (pageIndex: number) => `notes:page:${pageIndex}`;
   const perColumnFootnoteBands = (): boolean => wordPerColumnFootnoteBandsApply(
     input.compatibilityMode,
@@ -1458,6 +1499,7 @@ function* paginateBodyPassSteps(
     location: BodyAcquisitionLocation,
     inlineExtentPt: number,
     pendingCarriesNotice = false,
+    independentArea = false,
   ): ContinuationNoticeProvider | undefined => {
     if (!continuationNotice?.paragraph || continuationNotice.paragraph.hidden) return undefined;
     // One notice per page: a page that already reserved it (committed, or
@@ -1466,7 +1508,7 @@ function* paginateBodyPassSteps(
     // second reserve.
     // A column band (WORD_PER_COLUMN_FOOTNOTE_BANDS) owns its own notice.
     const band = activeFootnoteBandId();
-    if (footnoteLayoutsByPage.get(state.flow.pageIndex)
+    if (!independentArea && footnoteLayoutsByPage.get(state.flow.pageIndex)
       ?.some((note) => note.trailing && note.flowDomainId === band)) return undefined;
     if (pendingCarriesNotice) return undefined;
     return () => {
@@ -1497,15 +1539,21 @@ function* paginateBodyPassSteps(
   const hasFootnoteReferenceOnPage = (pageIndex: number): boolean => (
     (footnoteIdsByPage.get(pageIndex)?.size ?? 0) > 0
   );
+  const modernAdmissionResult = (ids: readonly string[], accepted: boolean): FootnoteAdmission => Object.freeze({
+    ids: Object.freeze([...ids]), layouts: Object.freeze([]), continuations: Object.freeze([]),
+    reservePt: accepted ? 0 : Number.MAX_VALUE,
+  });
   /** Whole-note admission for every reference in a slice (no partition). */
   const footnoteAdmission = (
     candidate: ParagraphLayout | TableLayout,
     inlineExtentPt: number,
     retainedReferenceIds?: readonly string[],
-  ): FootnoteAdmission => footnoteAdmissionForIds(
-    retainedReferenceIds ?? footnoteIdsInRetainedSlice(candidate),
-    inlineExtentPt,
-  );
+  ): FootnoteAdmission => {
+    const whole = footnoteAdmissionForIds(retainedReferenceIds ?? footnoteIdsInRetainedSlice(candidate), inlineExtentPt);
+    // Frames/tables/indivisible marks use their existing whole-note admission.
+    const modern = modernFootnoteAdmission(whole.ids, false, false);
+    return modern === undefined ? whole : modernAdmissionResult(whole.ids, modern);
+  };
   /** `pending` summarises earlier reference-line plans of the fragment being
    * admitted (maintained incrementally by their owner): their notes are not
    * re-acquired, and they already own the page's separator band and any
@@ -1522,25 +1570,37 @@ function* paginateBodyPassSteps(
     const ids = [...new Set(retainedReferenceIds)]
       .filter((id) => !committed.has(id) && !pendingIds.has(id));
     const location = acquisitionLocation(state);
+    if (ids.length > 0 && continuousSectionNotePage === state.flow.pageIndex) {
+      return Object.freeze({ ids: Object.freeze(ids), layouts: Object.freeze([]),
+        continuations: Object.freeze([]), reservePt: Number.MAX_VALUE });
+    }
+    if (ids.length > 0) {
+      const modern = modernFootnoteAdmission(ids, pending === LATER_UNIT_REFERENCE,
+        availableReservePt === undefined ? undefined : true);
+      if (modern !== undefined) return modernAdmissionResult(ids, modern);
+    }
     if (ids.length > 0 && !session.layoutNotes) {
       throw new Error('Footnote layout requires a note-capable layout session');
     }
     const plannedTopsPt = reserves[state.flow.pageIndex]?.footnoteTopsPt;
     const band = activeFootnoteBandId();
+    const noteLocation = mode15NoteOwner?.section.columns.length === 1 ? mode15NoteOwner : location;
+    const noteInlineExtentPt = mode15NoteOwner?.section.columns.length === 1
+      ? mode15NoteOwner.availableBounds.widthPt : inlineExtentPt;
     const layouts = ids.length === 0 ? Object.freeze([]) : session.layoutNotes!({
       kind: 'footnote',
       referenceIds: Object.freeze(ids),
       pageIndex: state.flow.pageIndex,
-      section: location.section,
+      section: noteLocation.section,
       ...(plannedTopsPt ? { plannedTopsPt } : {}),
       container: {
         id: band,
         kind: 'footnote',
         bounds: {
-          xPt: location.availableBounds.xPt,
+          xPt: noteLocation.availableBounds.xPt,
           yPt: 0,
-          widthPt: inlineExtentPt,
-          heightPt: location.section.geometry.pageHeight,
+          widthPt: noteInlineExtentPt,
+          heightPt: noteLocation.section.geometry.pageHeight,
         },
       },
       firstOnPage: !bandHasFootnotes(band) && pendingIds.size === 0,
@@ -1571,6 +1631,18 @@ function* paginateBodyPassSteps(
     layouts: readonly NoteLayout[],
     continuations: FootnoteAdmission['continuations'] = [],
   ) => {
+    if (noteController) {
+      let actual = footnoteIdsByPage.get(state.flow.pageIndex);
+      if (!actual) footnoteIdsByPage.set(state.flow.pageIndex, actual = new Set());
+      ids.forEach(id => actual!.add(id));
+      const band = pageFootnoteBandId(state.flow.pageIndex);
+      let bandIds = footnoteIdsByBand.get(band);
+      if (!bandIds) footnoteIdsByBand.set(band, bandIds = new Set());
+      ids.forEach(id => bandIds!.add(id));
+      pageBandKeys.add(band);
+      noteController.committed(ids);
+      return;
+    }
     let retained = footnoteIdsByPage.get(state.flow.pageIndex);
     if (!retained) {
       retained = new Set<string>();
@@ -1585,20 +1657,8 @@ function* paginateBodyPassSteps(
     // Reusable full-note acquisition may have first been requested during a
     // rejected admission on another page. Intact notes need destination
     // ownership too; fragmented notes already project only their admitted lines.
-    const ownedLayouts = services.allowFootnoteContinuation !== true ? layouts : layouts.map(note => {
-      const domain = `${note.flowDomainId}:footnote:${note.source.storyInstance}`;
-      if (note.story.blocks.every(block => block.flowDomainId === domain)) return note;
-      return Object.freeze({ ...note, story: Object.freeze({ ...note.story,
-        blocks: Object.freeze(note.story.blocks.map((block, index) => {
-          if (block.kind !== 'paragraph' && block.kind !== 'table') {
-            throw new Error('Unsupported retained footnote block');
-          }
-          return projectBodyOccurrence(block, { occurrenceId: `${note.id}:block:${index}`,
-            destination: { coordinateSpace: 'logical-page-points', flowDomainId: domain,
-              translation: { xPt: 0, yPt: 0 } } });
-        })),
-      }) });
-    });
+    const ownedLayouts = services.allowFootnoteContinuation !== true
+      ? layouts : layouts.map(destinationOwnedNote);
     retainedLayouts.push(...ownedLayouts);
     // §17.18.33: the page's one continuation notice ends its note band. A note
     // committed after the carrier takes the already-reserved notice; a later
@@ -1625,7 +1685,7 @@ function* paginateBodyPassSteps(
       bandReservePt += note.advancePt;
       pageReservePt += note.advancePt;
     }
-    footnoteReserveByBand.set(band, bandReservePt);
+    retainBandReserve(band, bandReservePt);
     if (band !== pageFootnoteBandId(state.flow.pageIndex)) {
       let pageBands = columnBandReservesByPage.get(state.flow.pageIndex);
       if (!pageBands) columnBandReservesByPage.set(state.flow.pageIndex, pageBands = new Map());
@@ -1642,6 +1702,7 @@ function* paginateBodyPassSteps(
   );
   placePendingFootnoteContinuations = () => {
     if (pendingFootnoteContinuations.size === 0) return;
+    if (openModernIncomingNotes()) return;
     const pending = [...pendingFootnoteContinuations];
     pendingFootnoteContinuations.clear();
     const location = acquisitionLocation(state);
@@ -1650,7 +1711,9 @@ function* paginateBodyPassSteps(
     const plannedTopsPt = reserves[state.flow.pageIndex]?.footnoteTopsPt;
     for (const [pendingIndex, [id, cursor]] of pending.entries()) {
       if (!session.layoutNotes) throw new Error('Footnote continuation requires note layout');
-      const [acquired] = session.layoutNotes({
+      const capacityPt = Math.max(0, activeBlockEndPt(state)
+        - state.footnoteReservePt - committedFootnoteContentEndPt());
+      const partition = acquireNoteColumnPartition(session, {
         kind: 'footnote',
         referenceIds: Object.freeze([id]),
         pageIndex: state.flow.pageIndex,
@@ -1670,11 +1733,7 @@ function* paginateBodyPassSteps(
           ? !bandHasFootnotes(activeFootnoteBandId())
           : !hasFootnoteReferenceOnPage(state.flow.pageIndex),
         continuing: true,
-      });
-      if (!acquired) continue;
-      const capacityPt = Math.max(0, activeBlockEndPt(state)
-        - state.footnoteReservePt - committedFootnoteContentEndPt());
-      const partition = partitionFootnote(acquired, cursor, capacityPt,
+      }, cursor, capacityPt, partitionFootnote,
         continuationNoticeFor(location, location.availableBounds.widthPt));
       if (!partition) {
         if (!hasFootnoteReferenceOnPage(state.flow.pageIndex)) {
@@ -1961,9 +2020,11 @@ function* paginateBodyPassSteps(
           // the later note's first real line, with any notice in the union.
           pageOpensWithIncomingTail,
         });
-        const minimum = mayPartition
+        let minimum = mayPartition
           ? footnoteAdmissionForIds(event.ids, inlineExtentPt, 0, LATER_UNIT_REFERENCE, 'minimum')
           : whole;
+        const modern = modernFootnoteAdmission(event.ids, true, mayPartition);
+        if (modern !== undefined) minimum = modernAdmissionResult(event.ids, modern);
         minimumPt.push(minimum.reservePt);
         minimumPrefixPt.push(minimumPrefixPt[index]! + minimum.reservePt);
         minimumContinuesPrefix.push(minimumContinuesPrefix[index]! + (minimum.continuations.length > 0 ? 1 : 0));
@@ -2040,6 +2101,8 @@ function* paginateBodyPassSteps(
             ) - plannedPt - laterPt), pending,
             later.noticePt > 0 ? 'largest-with-reserved-notice' : 'largest')
           : whole;
+        const modern = modernFootnoteAdmission(event.ids, false, mayPartition);
+        if (modern !== undefined) chosen = modernAdmissionResult(event.ids, modern);
         // The notice is charged once: either in the later reserve or, when
         // this plan carries it, in this plan's own advance.
         const sharedNoticePt = later.noticePt > 0 && chosen.layouts.some((note) => note.trailing)
@@ -2085,8 +2148,172 @@ function* paginateBodyPassSteps(
   };
   let previousParagraph: BodyParagraphSourceInput | null = null;
   let terminalDiagnostic: LayoutDiagnostic | null = null;
+  type PageEntryResume = Readonly<{ entryIndex: number }> & (
+    | Readonly<{ kind: 'entry' }>
+    | Readonly<{ kind: 'paragraph'; cursor: ParagraphFragmentCursor | null; suppressBefore: boolean }>
+    | Readonly<{ kind: 'table'; cursor: BodyTableContinuationCursor | undefined }>
+  );
+  let currentEntryResume: () => PageEntryResume = () => ({ kind: 'entry', entryIndex: 0 });
+  let resumeEntry: PageEntryResume | undefined;
+  let restartEntryIndex = 0;
+  let pageAcceptances: string[] = [];
+  let restorePageCheckpoint: () => PageEntryResume = () => { throw new Error('Missing page note checkpoint'); };
+  let installModernNoteArea = () => {};
+  const acceptPageNode = (...args: Parameters<typeof acceptNode>): BodyPaginationState => {
+    if (pageLocalNotes) pageAcceptances.push(bodyOccurrenceKey(args[2], acquisitionLocation(args[0]).flowDomainId, args[4]));
+    return acceptNode(...args);
+  };
+  capturePageCheckpoint = (nextEntryIndex) => {
+    if (!pageLocalNotes) return;
+    const current = currentEntryResume();
+    const resume: PageEntryResume = current.entryIndex === nextEntryIndex ? current
+      : { kind: 'entry', entryIndex: nextEntryIndex };
+    const savedState = state;
+    const savedPrevious = previousParagraph;
+    const savedPendingFrame = pendingFrameRun;
+    const savedAutomatic = automaticPageStartEntryIndex;
+    const savedHard = standaloneHardPageStartEntryIndex;
+    const savedContinuousNotePage = continuousSectionNotePage;
+    const allocationCount = allocations.length;
+    const anchorCount = anchorInputs.length;
+    const frameCount = frameObservations.length;
+    const frameAnchorCount = frameAnchorObservations.length;
+    const savedPendingNotes = [...pendingFootnoteContinuations];
+    pageAcceptances = [];
+    pageBandKeys = new Set();
+    // Registries below own only their active page; the following prescan
+    // reconstructs them through the canonical acquisition session.
+    registeredAnchorPage = -1; registeredAnchorKeys.clear();
+    deferralPage = -1; appliedDeferralKeys.clear();
+    restorePageCheckpoint = () => {
+      pageAcceptances.forEach(id => acceptedOccurrenceIds.delete(id));
+      pageAcceptances.length = 0;
+      allocations.length = allocationCount;
+      anchorInputs.length = anchorCount;
+      serializedAnchorInputs.length = anchorCount;
+      frameObservations.length = frameCount;
+      frameAnchorObservations.length = frameAnchorCount;
+      const page = savedState.flow.pageIndex;
+      footnoteIdsByPage.delete(page); footnoteReserveByPage.delete(page);
+      footnoteLayoutsByPage.delete(page); footnoteHostShiftsByPage.delete(page);
+      columnBandReservesByPage.delete(page); incomingTailPages.delete(page);
+      pageBandKeys.forEach(band => { footnoteIdsByBand.delete(band); footnoteReserveByBand.delete(band); });
+      pageBandKeys.clear();
+      pendingFootnoteContinuations.clear();
+      savedPendingNotes.forEach(([id, cursor]) => pendingFootnoteContinuations.set(id, cursor));
+      previousParagraph = savedPrevious;
+      pendingFrameRun = savedPendingFrame;
+      automaticPageStartEntryIndex = savedAutomatic;
+      standaloneHardPageStartEntryIndex = savedHard;
+      continuousSectionNotePage = savedContinuousNotePage;
+      registeredAnchorPage = -1; registeredAnchorKeys.clear();
+      deferralPage = -1; appliedDeferralKeys.clear();
+      terminalDiagnostic = null;
+      state = savedState;
+      return resume;
+    };
+  };
+  installModernNoteArea = () => {
+    if (!noteController) return;
+    const area = noteController.area;
+    const pageIndex = state.flow.pageIndex;
+    const layouts = area.chunks.map(chunk => Object.freeze({ ...chunk.layout,
+      pageArea: Object.freeze({ heightPt: area.heightPt, offsetPt: chunk.offsetPt }),
+    }));
+    footnoteLayoutsByPage.set(pageIndex, layouts);
+    footnoteIdsByPage.set(pageIndex, new Set(noteController.resetActual()));
+    footnoteReserveByPage.set(pageIndex, area.heightPt);
+    retainBandReserve(pageFootnoteBandId(pageIndex), area.heightPt);
+    state = setBodyFootnoteReserve(state, area.heightPt);
+    const shifts = new Map<string, number>();
+    area.chunks.forEach(chunk => {
+      if (chunk.hostShiftPt !== 0) shifts.set(noteBandKey(chunk.layout.flowDomainId,
+        chunk.layout.source.storyInstance), chunk.hostShiftPt);
+    });
+    if (shifts.size > 0) footnoteHostShiftsByPage.set(pageIndex, shifts);
+    pendingFootnoteContinuations.clear();
+    area.remaining.forEach(source => {
+      if (!source.cursor) throw new Error('A page note plan omitted a required note head');
+      pendingFootnoteContinuations.set(source.id, source.cursor);
+    });
+    if (area.chunks.some(chunk => incomingTailSourceIds.has(chunk.layout.source.storyInstance)
+      && chunk.layout.story.blocks.some(block => block.kind === 'paragraph' && block.lines.length > 0))) {
+      incomingTailPages.add(pageIndex);
+    }
+  };
+  let incomingTailSourceIds = new Set<string>();
+  const createModernController = (sources: readonly PageNoteSource[]) => {
+    const location = mode15NoteOwner ?? acquisitionLocation(state);
+    const pageIndex = state.flow.pageIndex;
+    const section = location.section;
+    const ownerRegion = state.pages.at(-1)!.accumulator.sectionRegions.find(region =>
+      region.section === section) ?? activeRegion(state);
+    const columns = ownerRegion.columnFlowDirection === 'rtl' ? [...section.columns].reverse() : section.columns;
+    const maximumPt = state.flow.pageContentEndBlockPt - state.flow.pageContentStartBlockPt;
+    const band = `${pageFootnoteBandId(pageIndex)}:band:${ownerRegion.id}:area`;
+    const continuingPage = sources[0]?.cursor != null;
+    incomingTailSourceIds = new Set(sources.map(source => source.id));
+    return new PageNoteController(sources, maximumPt, (queue, capacityPt, balanced) => {
+      let separatorAdvancePt: number | undefined;
+      const acquire = (source: PageNoteSource, columnIndex: number, firstInColumn: boolean, availablePt: number) => {
+        const column = columns[columnIndex]!;
+        const noteLocation = Object.freeze({ ...location, section,
+          availableBounds: Object.freeze({ ...location.availableBounds, xPt: column.xPt, widthPt: column.wPt }),
+        });
+        const result = acquireNoteColumnPartition(session, {
+          kind: 'footnote', referenceIds: Object.freeze([source.id]), pageIndex, section,
+          firstOnPage: firstInColumn, continuing: continuingPage,
+          ...(columnIndex > 0 && firstInColumn && separatorAdvancePt !== undefined
+            ? { blankLeadingAdvancePt: separatorAdvancePt } : {}),
+          ...(reserves[pageIndex]?.footnoteTopsPt ? { plannedTopsPt: reserves[pageIndex]!.footnoteTopsPt } : {}),
+          container: { id: `${band}:${columnIndex}`, kind: 'footnote', capacity: 'unbounded', bounds: {
+            xPt: column.xPt, yPt: 0, widthPt: column.wPt, heightPt: section.geometry.pageHeight,
+          } },
+        }, source.cursor, availablePt, partitionFootnote,
+        columnIndex === columns.length - 1
+          ? continuationNoticeFor(noteLocation, column.wPt, false, true) : undefined,
+        undefined, note => {
+          if (columnIndex === 0 && firstInColumn) separatorAdvancePt = note.leading?.advancePt ?? note.story.flowBounds.yPt - note.flowBounds.yPt;
+        });
+        return source.allowPartial === false && result?.nextCursor ? null : result;
+      };
+      const request = { sources: queue, columnCount: columns.length, capacityPt, acquire };
+      return balanced ? balancePageNoteArea(request) : flowPageNoteArea(request);
+    }, services.allowFootnoteContinuation === true);
+  };
+  modernFootnoteAdmission = (ids, mandatoryUnit, allowPartial) => {
+    if (!pageLocalNotes || ids.length === 0) return undefined;
+    mode15NoteOwner ??= acquisitionLocation(state);
+    // One-column owners keep the established reference-line permission for
+    // physical continuation. Whole-note queries resolve that permission before
+    // creating a plan; a later section's columns never replace this owner.
+    if (mode15NoteOwner.section.columns.length === 1 && allowPartial === undefined) return undefined;
+    noteController ??= createModernController(Object.freeze([]));
+    return noteController.discover(ids, mandatoryUnit, mode15NoteOwner.section.columns.length === 1 ? allowPartial : undefined);
+  };
+  openModernIncomingNotes = () => {
+    if (!pageLocalNotes || acquisitionLocation(state).section.columns.length < 2) return false;
+    const sources = Object.freeze([...pendingFootnoteContinuations]
+      .map(([id, cursor]) => Object.freeze({ id, cursor })));
+    mode15NoteOwner = acquisitionLocation(state);
+    noteController = createModernController(sources);
+    if (noteController.area.chunks.length === 0) {
+      throw new NoteCapacityExceededError('footnote', state.flow.pageIndex, pageFootnoteBandId(state.flow.pageIndex));
+    }
+    installModernNoteArea();
+    return true;
+  };
+  resetNotePage = () => { noteController = undefined; mode15NoteOwner = undefined; incomingTailSourceIds = new Set(); };
+  beforeNotePageClose = () => noteController?.beforePageClose();
+  capturePageCheckpoint(0);
+  yield* prescanPageAnchors(state, 0);
 
-  bodyEntries: for (let entryIndex = 0; entryIndex < input.sequence.length; entryIndex += 1) {
+  for (;;) {
+    try {
+  bodyEntries: for (let entryIndex = restartEntryIndex; entryIndex < input.sequence.length; entryIndex += 1) {
+    const resumed = resumeEntry?.entryIndex === entryIndex ? resumeEntry : undefined;
+    resumeEntry = undefined;
+    currentEntryResume = () => ({ kind: 'entry', entryIndex });
     // Suspension point. `state.pages.length` is the committed page count, which
     // is what a progressive driver reports; a synchronous driver discards it.
     observer?.onPageDrafts?.(state.pages);
@@ -2157,6 +2384,12 @@ function* paginateBodyPassSteps(
         state.flow.pageIndex,
         reserves[state.flow.pageIndex] ?? { top: 0, bottom: 0 },
       );
+      const notesBeforeBoundary = hasFootnoteReferenceOnPage(state.flow.pageIndex);
+      // WORD_CONTINUOUS_SECTION_FOOTNOTE_PAGE separates the mode15 observation
+      // from the normative WW8 compatibility flag and its later-reference limit.
+      const mayShareFootnotePage = wordContinuousSectionMayShareFootnotePage(
+        input.compatibilityMode, input.footnoteLayoutLikeWW8, pageHasColumnFootnoteBands(state.flow.pageIndex));
+      const boundaryPage = state.flow.pageIndex;
       try {
         yield* commitTransition(
           beginSection(
@@ -2164,13 +2397,17 @@ function* paginateBodyPassSteps(
             flowSection(entry.section, state.flow.pageIndex),
             effectiveStartType,
             {
-              hasFootnoteReferenceOnCurrentPage: hasFootnoteReferenceOnPage(state.flow.pageIndex),
+              hasFootnoteReferenceOnCurrentPage: notesBeforeBoundary && !mayShareFootnotePage,
               incomingPageContentStartBlockPt: incomingInterval.blockStartPt,
               incomingPageContentEndBlockPt: incomingInterval.blockEndPt,
             },
           ),
           entryIndex + 1,
         );
+        if (notesBeforeBoundary && mayShareFootnotePage && input.compatibilityMode !== 15
+          && effectiveStartType === 'continuous' && state.flow.pageIndex === boundaryPage) {
+          continuousSectionNotePage = boundaryPage;
+        }
       } catch (error) {
         // beginSection rejects this authored transition before mutating the
         // immutable flow state. Once at least one physical page is complete,
@@ -2204,26 +2441,24 @@ function* paginateBodyPassSteps(
       if (block.continuousSectionRole === 'collapse-mark') {
         continue;
       }
-      if (block.pageBreakBefore) {
+      if (block.pageBreakBefore && resumed?.kind !== 'paragraph') {
         yield* commitTransition(
           applyAuthoredBreak(state.flow, 'pageBreakBefore'),
           entryIndex,
         );
       }
       const previousAfterPt = previousParagraph?.spaceAfterPt ?? 0;
-      const spacing = paragraphGapAdjustment(
-        previousParagraph,
-        block,
-        previousAfterPt,
-        block.continuousSectionRole === 'suppress-before' ? 0 : block.spaceBeforePt,
-      );
+      const spacing = resumed?.kind === 'paragraph'
+        ? { suppressBefore: resumed.suppressBefore, overlap: 0 }
+        : paragraphGapAdjustment(previousParagraph, block, previousAfterPt,
+          block.continuousSectionRole === 'suppress-before' ? 0 : block.spaceBeforePt);
       const spacingOverlap = block.continuousSectionRole === 'drop-previous-after'
         ? previousAfterPt
         : spacing.overlap;
       // WORD_TEXT_FRAME_PRECEDING_TEXT_PUSH: the preceding in-flow cursor,
       // including its space after, anchors every frame member. Only the next
       // in-flow paragraph consumes that after/before overlap, once.
-      if (!block.textFrameMember && spacingOverlap > 0) {
+      if (resumed?.kind !== 'paragraph' && !block.textFrameMember && spacingOverlap > 0) {
         state = Object.freeze({
           ...state,
           flow: Object.freeze({
@@ -2235,7 +2470,9 @@ function* paginateBodyPassSteps(
           }),
         });
       }
-      let cursor: ParagraphFragmentCursor | null = Object.freeze({ boundary: null });
+      let cursor: ParagraphFragmentCursor | null = resumed?.kind === 'paragraph'
+        ? resumed.cursor : Object.freeze({ boundary: null });
+      currentEntryResume = () => ({ kind: 'paragraph', entryIndex, cursor, suppressBefore: spacing.suppressBefore });
       // A text-anchored frame takes no flow space, so the next in-flow
       // paragraph collapses its spacing against the text before the frames
       // (WORD_TEXT_FRAME_PRECEDING_TEXT_PUSH).
@@ -2342,7 +2579,7 @@ function* paginateBodyPassSteps(
           }
           // A placed frame still paints its retained references despite a zero flow
           // charge, so note ownership is committed with the accepted occurrence.
-          state = acceptNode(
+          state = acceptPageNode(
             state,
             acquired.layout,
             block.source,
@@ -2509,7 +2746,7 @@ function* paginateBodyPassSteps(
           // `word-pre-break-anchor-paragraph`
           const neutral = wordFlowNeutralPreBreakAnchorParagraph(acquired.layout);
           if (neutral !== null) {
-            state = acceptNode(
+            state = acceptPageNode(
               state,
               neutral,
               block.source,
@@ -2622,7 +2859,7 @@ function* paginateBodyPassSteps(
           }));
           pendingFrameRun = null;
         }
-        state = acceptNode(
+        state = acceptPageNode(
           state,
           selected.fragment,
           block.source,
@@ -2666,7 +2903,8 @@ function* paginateBodyPassSteps(
       previousParagraph = null;
       // Only a paragraph anchors a frame run (ECMA-376 §17.3.1.11).
       pendingFrameRun = null;
-      if (block.kind === 'table') {
+      currentEntryResume = () => ({ kind: 'table', entryIndex, cursor: undefined });
+      if (block.kind === 'table' && resumed?.kind !== 'table') {
         const tableKey = `table:${sourceKey(block.source)}`;
         const minimumPage = minimumTablePageBySource?.get(tableKey);
         if (block.pageOwnedFloatingTable === true || minimumPage !== undefined) {
@@ -2692,7 +2930,9 @@ function* paginateBodyPassSteps(
           }
         }
       }
-      let cursor: BodyTableContinuationCursor | undefined;
+      let cursor: BodyTableContinuationCursor | undefined = resumed?.kind === 'table' ? resumed.cursor : undefined;
+      const tableResume = (): PageEntryResume => ({ kind: 'table', entryIndex, cursor });
+      currentEntryResume = tableResume;
       // An owner segment pending at the end of a region starts the next one
       // as a fresh region (table-owner-runs.ts): every transition that leaves
       // the region with a same-region entry pending passes through here.
@@ -2858,7 +3098,7 @@ function* paginateBodyPassSteps(
           );
           continue;
         }
-        state = acceptNode(
+        state = acceptPageNode(
           state,
           acquired.layout,
           block.source,
@@ -2904,6 +3144,10 @@ function* paginateBodyPassSteps(
           if (state.flow.pageIndex + minimumContinuationPages >= MAX_BODY_LAYOUT_PAGES) {
             throw new Error(`Document page budget exceeded (${MAX_BODY_LAYOUT_PAGES} pages)`);
           }
+          // Only the final hidden-occupancy page can later receive a body
+          // reference and replay. Its source resumes after this accepted table,
+          // or at the table's retained source cursor if it still continues.
+          currentEntryResume = () => cursor ? tableResume() : { kind: 'entry', entryIndex: entryIndex + 1 };
           while (hiddenOverflowPt > 0) {
             const pageExtentPt = freshPageExtent(state);
             if (!Number.isFinite(pageExtentPt) || pageExtentPt <= 0) {
@@ -2919,6 +3163,7 @@ function* paginateBodyPassSteps(
             hiddenOverflowPt -= pageExtentPt;
           }
           cursor = enteringFreshRegion(cursor);
+          currentEntryResume = tableResume;
         } else if (cursor && cursor.ownerSegmentEntry !== 'same-region') {
           yield* commitTransition(
             advanceColumnOrPage(state.flow, 'overflow'),
@@ -2928,6 +3173,136 @@ function* paginateBodyPassSteps(
       }
     }
     session.moveAcquisitionCursor(acquisitionLocation(state));
+  }
+      if (terminalDiagnostic === null) beforeNotePageClose();
+      break;
+    } catch (error) {
+      if (!(error instanceof PageNoteReplay)) throw error;
+      resumeEntry = restorePageCheckpoint();
+      restartEntryIndex = resumeEntry.entryIndex;
+      session.resetPageAcquisition(acquisitionLocation(state));
+      yield* prescanPageAnchors(state, restartEntryIndex);
+      installModernNoteArea();
+    }
+  }
+  currentEntryResume = () => ({ kind: 'entry', entryIndex: input.sequence.length });
+  // ECMA-376 §17.11.22: document-end notes are flow following the main
+  // story, not decoration of its terminal page. Paginate them here through
+  // the same column/page transitions, before draining footnote tails, so
+  // incoming footnotes constrain each destination and NUMPAGES/header/footer
+  // convergence observes every note-only page. Composition only paints the
+  // already acquired occurrences below; it must never catch capacity and
+  // silently omit a note suffix.
+  const endnoteLayoutsByPage = new Map<number, NoteLayout[]>();
+  const retainedEndnoteIds = new Set(state.pages.flatMap(draft =>
+    draft.accumulator.paint.flatMap(({ layer, node }) => layer === 'body'
+      && (node.kind === 'paragraph' || node.kind === 'table')
+      ? endnoteIdsInRetainedSlice(node) : [])));
+  const endnoteIds = (input.endnoteIds ?? []).filter(id => retainedEndnoteIds.has(id));
+  if (endnoteIds.length > 0 && !session.layoutNotes) {
+    throw new Error('Document-end notes require a note-capable layout session');
+  }
+  // Continuation belongs to the endnote area, not just an individual note:
+  // §17.11.4 applies also when the next band starts with a new note.
+  let endnoteFlowStarted = false;
+  const modernEndnotes = input.compatibilityMode === 15 && activeRegion(state).columns.length > 1;
+  if (modernEndnotes) {
+    let pending: readonly PageNoteSource[] = endnoteIds.map(id => Object.freeze({ id, cursor: null }));
+    while (pending.length > 0) {
+      const region = activeRegion(state);
+      const section = region.section;
+      const columns = region.columnFlowDirection === 'rtl' ? [...section.columns].reverse() : section.columns;
+      const topPt = Math.max(state.flow.cursorBlockPt, state.flow.deepestColumnBlockPt);
+      const capacityPt = Math.max(0, region.blockEndPt - state.footnoteReservePt - topPt);
+      const band = `endnotes:page:${state.flow.pageIndex}:band:${region.id}`;
+      const continuingPage = endnoteFlowStarted;
+      // WORD_PAGE_WIDE_ENDNOTE_AREA: mode 15 flows a common area below
+      // balanced body columns, using each authored column's own width.
+      let separatorAdvancePt: number | undefined;
+      const area = balancePageNoteArea({ sources: pending, columnCount: columns.length, capacityPt,
+        acquire(source, columnIndex, firstInColumn, availablePt, offsetPt) {
+          const column = columns[columnIndex]!;
+          return acquireNoteColumnPartition(session, {
+            kind: 'endnote', referenceIds: [source.id], pageIndex: state.flow.pageIndex,
+            section, firstOnPage: firstInColumn, continuing: continuingPage,
+            ...(columnIndex > 0 && firstInColumn && separatorAdvancePt !== undefined
+              ? { blankLeadingAdvancePt: separatorAdvancePt } : {}),
+            bandTranslationPt: Object.freeze({ xPt: 0, yPt: topPt + offsetPt }),
+            container: { id: `${band}:${columnIndex}`, kind: 'endnote', capacity: 'unbounded', bounds: {
+              xPt: column.xPt, yPt: 0, widthPt: column.wPt, heightPt: section.geometry.pageHeight,
+            } },
+          }, source.cursor, availablePt, partitionFootnote, undefined, undefined, note => {
+            if (columnIndex === 0 && firstInColumn) separatorAdvancePt = note.leading?.advancePt ?? note.story.flowBounds.yPt - note.flowBounds.yPt;
+          });
+        },
+      });
+      if (area.chunks.length === 0) {
+        if (topPt === state.flow.regionStartBlockPt && state.footnoteReservePt === 0) {
+          throw new NoteCapacityExceededError('endnote', state.flow.pageIndex, band);
+        }
+      } else {
+        endnoteLayoutsByPage.set(state.flow.pageIndex, area.chunks.map(chunk => translateNoteLayout(chunk.layout,
+          { xPt: 0, yPt: topPt + chunk.offsetPt - chunk.layout.flowBounds.yPt })));
+        pending = area.remaining;
+        endnoteFlowStarted = true;
+        state = Object.freeze({ ...state, flow: Object.freeze({ ...state.flow,
+          pageHasContent: true, cursorBlockPt: topPt + area.heightPt,
+          deepestColumnBlockPt: topPt + area.heightPt,
+        }) });
+      }
+      if (pending.length > 0) {
+        yield* commitTransition(advanceToPage(state.flow, state.flow.section, 'overflow'), input.sequence.length);
+      }
+      observer?.onPageDrafts?.(state.pages);
+      yield state.pages.length;
+    }
+  }
+  let endnoteBand = '';
+  for (const id of modernEndnotes ? [] : endnoteIds) {
+    let cursor: FootnoteCursor | null = null;
+    let complete = false;
+    while (!complete) {
+      const location = acquisitionLocation(state);
+      const band = `endnotes:page:${state.flow.pageIndex}`
+        + (activeRegion(state).columns.length > 1 ? `:band:${activeRegion(state).id}:${state.flow.columnIndex}` : '');
+      const partition = acquireNoteColumnPartition(session, {
+        kind: 'endnote', referenceIds: Object.freeze([id]), pageIndex: state.flow.pageIndex,
+        section: location.section, firstOnPage: band !== endnoteBand,
+        bandTranslationPt: Object.freeze({ xPt: 0, yPt: state.flow.cursorBlockPt }),
+        continuing: endnoteFlowStarted,
+        container: { id: band, kind: 'endnote', capacity: 'unbounded', bounds: {
+          xPt: location.availableBounds.xPt, yPt: 0,
+          widthPt: location.availableBounds.widthPt, heightPt: location.section.geometry.pageHeight,
+        } },
+      }, cursor, location.availableBounds.heightPt, partitionFootnote);
+      if (!partition) {
+        if (state.flow.cursorBlockPt === state.flow.regionStartBlockPt && state.footnoteReservePt === 0) {
+          throw new NoteCapacityExceededError('endnote', state.flow.pageIndex, band);
+        }
+        yield* commitTransition(advanceColumnOrPage(state.flow, 'overflow'), input.sequence.length);
+        continue;
+      }
+      const placed = translateNoteLayout(partition.fragment, {
+        xPt: 0, yPt: state.flow.cursorBlockPt - partition.fragment.flowBounds.yPt,
+      });
+      const retained = endnoteLayoutsByPage.get(state.flow.pageIndex) ?? [];
+      retained.push(placed);
+      endnoteLayoutsByPage.set(state.flow.pageIndex, retained);
+      endnoteBand = band;
+      endnoteFlowStarted = true;
+      state = Object.freeze({ ...state, flow: placeFlowNode(state.flow, placed, placed.advancePt).state });
+      cursor = partition.nextCursor;
+      complete = cursor === null;
+      if (!complete) yield* commitTransition(advanceColumnOrPage(state.flow, 'overflow'), input.sequence.length);
+      observer?.onPageDrafts?.(state.pages);
+      yield state.pages.length;
+      if (observer?.shouldPublish(state.pages.length)) {
+        observer.publish(paginationPassResult(state, owners, session, allocations,
+          footnoteReserveByPage, footnoteLayoutsByPage, footnoteHostShiftsByPage,
+          terminalDiagnostic, anchorInputs, serializedAnchorInputs, frameObservations,
+          frameAnchorObservations, endnoteLayoutsByPage), input.sequence.length);
+      }
+    }
   }
   // A note may outlive the final body block; consume the generator so its
   // physical-page transition commits and the pending line cursor advances.
@@ -2952,8 +3327,9 @@ function* paginateBodyPassSteps(
   ]);
   for (const pageIndex of reservedPages) {
     const reservePt = footnoteReserveByPage.get(pageIndex) ?? 0;
-    const retainedAdvancePt = (footnoteLayoutsByPage.get(pageIndex) ?? [])
-      .reduce((sum, note) => sum + note.advancePt, 0);
+    const retained = footnoteLayoutsByPage.get(pageIndex) ?? [];
+    const retainedAdvancePt = retained[0]?.pageArea?.heightPt
+      ?? retained.reduce((sum, note) => sum + note.advancePt, 0);
     if (reservePt !== retainedAdvancePt) {
       throw new LayoutInvariantError(
         'INVALID_GEOMETRY',
@@ -2961,6 +3337,7 @@ function* paginateBodyPassSteps(
       );
     }
   }
+  flushAnchorInputs();
   return paginationPassResult(
     state,
     owners,
@@ -2974,6 +3351,7 @@ function* paginateBodyPassSteps(
     serializedAnchorInputs,
     frameObservations,
     frameAnchorObservations,
+    endnoteLayoutsByPage,
   );
 }
 
@@ -3048,6 +3426,16 @@ function footnoteStack(
       0,
       page.section.geometry.pageHeight - Math.abs(page.section.geometry.marginBottom),
     );
+  if (notes.some(note => note.pageArea !== undefined)) {
+    const heightPt = notes[0]!.pageArea!.heightPt;
+    if (!notes.every(note => note.pageArea?.heightPt === heightPt)) {
+      throw new Error('A page-wide note area must own one common reserve');
+    }
+    const targetTopPt = blockEndPt - heightPt;
+    return { advancePt: heightPt, targetTopPt,
+      topsPt: Object.freeze(notes.map(note => targetTopPt + note.pageArea!.offsetPt)),
+    };
+  }
   // Each note band (its container, WORD_PER_COLUMN_FOOTNOTE_BANDS) stacks on
   // its own from the body bottom; a page band carries every column band.
   const bands = new Map<string, number[]>();
@@ -3216,6 +3604,7 @@ function composePageStories(
   session: BodyLayoutSession,
   owners: ReadonlyMap<string, BodySectionLayoutInput>,
   footnotesByPage: ReadonlyMap<number, readonly NoteLayout[]>,
+  endnotesByPage: ReadonlyMap<number, readonly NoteLayout[]>,
 ): DocumentLayout {
   const storyDiagnostics: LayoutDiagnostic[] = [];
   const visited = new WeakSet<object>();
@@ -3226,7 +3615,8 @@ function composePageStories(
     if (!session.layoutStory) {
       const hasPageStories = Object.values(owner.headers).some((source) => source !== null)
         || Object.values(owner.footers).some((source) => source !== null)
-        || (footnotesByPage.get(page.pageIndex)?.length ?? 0) > 0;
+        || (footnotesByPage.get(page.pageIndex)?.length ?? 0) > 0
+        || (endnotesByPage.get(page.pageIndex)?.length ?? 0) > 0;
       if (!hasPageStories) return page;
       throw new Error('Page-story composition requires a story-capable layout session');
     }
@@ -3294,10 +3684,13 @@ function composePageStories(
     const noteStack = footnoteStack(page, retainedNotes);
     const noteAdvancePt = noteStack.advancePt;
     const noteTargetTopPt = noteStack.targetTopPt;
-    const notes = retainedNotes.map((note, index) => translateNoteLayout(note, {
-      xPt: 0,
-      yPt: noteStack.topsPt[index]! - note.flowBounds.yPt,
-    }));
+    const notes = [
+      ...(endnotesByPage.get(page.pageIndex) ?? []),
+      ...retainedNotes.map((note, index) => translateNoteLayout(note, {
+        xPt: 0,
+        yPt: noteStack.topsPt[index]! - note.flowBounds.yPt,
+      })),
+    ];
     const noteInlineStartPt = notes.length === 0
       ? 0
       : Math.min(...notes.map((note) => note.flowBounds.xPt));
@@ -3354,7 +3747,7 @@ function composePageStories(
           });
           return Object.freeze({
             id: bandId,
-            kind: 'footnote' as const,
+            kind: members[0]!.source.story === 'endnote' ? 'endnote' as const : 'footnote' as const,
             ...(noteRegion ? { sectionRegionId: noteRegion.id } : {}),
             logicalBounds,
             physicalBounds: noteRegion
@@ -3428,184 +3821,6 @@ function composePageStories(
       ? { diagnostics: Object.freeze([...layout.diagnostics, ...storyDiagnostics]) }
       : {}),
   });
-}
-
-function composeDocumentEndnotes(
-  layout: DocumentLayout,
-  session: BodyLayoutSession,
-  referenceIds: readonly string[],
-): DocumentLayout {
-  if (referenceIds.length === 0) return layout;
-  let pageIndex = -1;
-  for (let index = layout.pages.length - 1; index >= 0; index -= 1) {
-    if (!layout.pages[index]!.parityBlank) {
-      pageIndex = index;
-      break;
-    }
-  }
-  if (pageIndex < 0) return layout;
-  const page = layout.pages[pageIndex]!;
-  if (!session.layoutNotes) {
-    return Object.freeze({
-      ...layout,
-      diagnostics: Object.freeze([...layout.diagnostics, Object.freeze({
-        code: 'UNSUPPORTED_FEATURE' as const,
-        severity: 'error' as const,
-        source: Object.freeze({
-          story: 'endnote' as const,
-          storyInstance: referenceIds[0]!,
-          path: Object.freeze([]),
-        }),
-        message: 'Document-end notes require a note-capable layout session',
-      })]),
-    });
-  }
-  const domains = new Map(page.flowDomains.map((domain) => [domain.id, domain]));
-  const bodyNodes = page.layers.body.filter((node) => (
-    node.ordinaryFlow && domains.get(node.flowDomainId)?.kind === 'body'
-  ));
-  // The text ends with the last node of the flow, which in a later column of
-  // a multi-column region can end above a deeper earlier column
-  // (WORD_PER_COLUMN_FOOTNOTE_BANDS: endnotes follow the text in its column).
-  const terminalBody = bodyNodes.at(-1) ?? null;
-  const bodyDomain = terminalBody
-    ? domains.get(terminalBody.flowDomainId)
-    : [...page.flowDomains].reverse().find((domain) => domain.kind === 'body');
-  if (!bodyDomain) {
-    return Object.freeze({
-      ...layout,
-      diagnostics: Object.freeze([...layout.diagnostics, Object.freeze({
-        code: 'UNSUPPORTED_FEATURE' as const,
-        severity: 'error' as const,
-        message: 'Document-end notes require a retained body flow domain',
-      })]),
-    });
-  }
-  const bodyRegion = page.sectionRegions.find((region) =>
-    region.flowDomainIds.includes(bodyDomain.id));
-  const endnoteRegion = bodyRegion ?? page.sectionRegions[0];
-  const blockStartPt = terminalBody
-    ? terminalBody.flowBounds.yPt + terminalBody.flowBounds.heightPt
-    : bodyDomain.logicalBounds.yPt;
-  // A column band (WORD_PER_COLUMN_FOOTNOTE_BANDS) limits only its column.
-  const bodyLeftPt = bodyDomain.logicalBounds.xPt;
-  const bodyRightPt = bodyLeftPt + bodyDomain.logicalBounds.widthPt;
-  const pageFootnoteTopPt = page.layers.notes
-    .filter((node) => node.kind === 'note' && node.source.story === 'footnote'
-      && (!node.flowDomainId.includes(':band:')
-        || (node.flowBounds.xPt < bodyRightPt && node.flowBounds.xPt + node.flowBounds.widthPt > bodyLeftPt)))
-    .reduce(
-      (top, note) => Math.min(top, note.flowBounds.yPt),
-      bodyDomain.logicalBounds.yPt + bodyDomain.logicalBounds.heightPt,
-    );
-  const blockEndPt = Math.min(
-    bodyDomain.logicalBounds.yPt + bodyDomain.logicalBounds.heightPt,
-    pageFootnoteTopPt,
-  );
-  const id = `endnotes:page:${page.pageIndex}`;
-  // ECMA-376 §17.11.22 defaults endnotes to the document end.
-  // The container is the notes' painted position in the region's logical
-  // frame, so note story coordinates are that frame's page coordinates; the
-  // region's own transform (applied to the whole note layer) relates them to
-  // the physical page, as it relates the story's page frames.
-  try {
-    const notes = session.layoutNotes({
-      bandTranslationPt: Object.freeze({ xPt: 0, yPt: 0 }),
-      kind: 'endnote',
-      referenceIds: Object.freeze([...referenceIds]),
-      pageIndex: page.pageIndex,
-      section: endnoteRegion?.section ?? page.section,
-      container: {
-        id,
-        kind: 'endnote',
-        bounds: {
-          xPt: bodyDomain.logicalBounds.xPt,
-          yPt: blockStartPt,
-          widthPt: bodyDomain.logicalBounds.widthPt,
-          heightPt: Math.max(0, blockEndPt - blockStartPt),
-        },
-      },
-      firstOnPage: true,
-    });
-    if (notes.length === 0) return layout;
-    const stack = new NoteStack();
-    notes.forEach((note) => stack.append(note.advancePt));
-    const endnoteLogicalBounds = Object.freeze({
-      xPt: bodyDomain.logicalBounds.xPt,
-      yPt: blockStartPt,
-      widthPt: bodyDomain.logicalBounds.widthPt,
-      heightPt: stack.advancePt,
-    });
-    const endnoteDomain = Object.freeze({
-      id,
-      kind: 'endnote' as const,
-      ...(endnoteRegion ? { sectionRegionId: endnoteRegion.id } : {}),
-      logicalBounds: endnoteLogicalBounds,
-      physicalBounds: endnoteRegion
-        ? Object.freeze(transformRect(
-            endnoteRegion.coordinateSpace.logicalToPhysical,
-            endnoteLogicalBounds,
-          ))
-        : endnoteLogicalBounds,
-    });
-    const entries: PageLayerNode[] = page.layers.roots.map((entry) => entry);
-    let insertionIndex = -1;
-    for (let index = 0; index < entries.length; index += 1) {
-      if (entries[index]!.layer === 'body') insertionIndex = index;
-    }
-    insertionIndex += 1;
-    entries.splice(insertionIndex, 0, ...notes.map((node): PageLayerNode => ({
-      layer: 'notes',
-      node,
-      coordinateSpace: 'section-logical',
-    })));
-    const bodyReadingIds = new Set(page.layers.body.map((node) => node.id));
-    let readingIndex = -1;
-    for (let index = 0; index < page.readingOrder.length; index += 1) {
-      if (bodyReadingIds.has(page.readingOrder[index]!)) readingIndex = index;
-    }
-    readingIndex += 1;
-    const readingOrder = [...page.readingOrder];
-    readingOrder.splice(readingIndex, 0, ...notes.map((note) => note.id));
-    const pages = [...layout.pages];
-    pages[pageIndex] = Object.freeze({
-      ...page,
-      flowDomains: Object.freeze([...page.flowDomains, endnoteDomain]),
-      layers: createPageLayers(entries),
-      readingOrder: Object.freeze(readingOrder),
-    });
-    const visited = new WeakSet<object>();
-    const noteDiagnostics = notes.flatMap((note) => nestedStoryDiagnostics(note, visited));
-    return Object.freeze({
-      ...layout,
-      pages: Object.freeze(pages),
-      ...(noteDiagnostics.length > 0
-        ? { diagnostics: Object.freeze([...layout.diagnostics, ...noteDiagnostics]) }
-        : {}),
-    });
-  } catch (error) {
-    if (!(error instanceof NoteCapacityExceededError)
-      || error.kind !== 'endnote'
-      || error.pageIndex !== page.pageIndex
-      || error.containerId !== id) {
-      throw error;
-    }
-    return Object.freeze({
-      ...layout,
-      diagnostics: Object.freeze([...layout.diagnostics, Object.freeze({
-        code: 'UNSUPPORTED_FEATURE' as const,
-        severity: 'error' as const,
-        source: Object.freeze({
-          story: 'endnote' as const,
-          storyInstance: referenceIds[0]!,
-          path: Object.freeze([]),
-        }),
-        message: `Document-end notes do not fit the retained terminal flow region: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      })]),
-    });
-  }
 }
 
 function appendUnsupportedNotePositionDiagnostic(
@@ -4813,13 +5028,32 @@ function* paginateBodyWithColumnBalancingSteps(
   seedPlan?: ReturnType<typeof pageAnchorDestinationPlan>,
 ): PaginationSteps<BodyPaginationPassResult> {
   let plan: BodyBalancePlan = new Map();
+  let lastBodyEntry = input.sequence.length - 1;
+  while (lastBodyEntry >= 0 && input.sequence[lastBodyEntry]!.kind !== 'body-block'
+    && input.sequence[lastBodyEntry]!.kind !== 'adjacent-table-group') lastBodyEntry--;
+  const terminalBodyPage = (layout: DocumentLayout) => {
+    for (let index = layout.pages.length - 1; index >= 0; index--) {
+      if (layout.pages[index]!.layers.body.length > 0) return layout.pages[index];
+    }
+    return undefined;
+  };
+  const seedPublisher = publisher && input.compatibilityMode === 15 && (input.endnoteIds?.length ?? 0) > 0
+    ? {
+        get publishedPages() { return publisher.publishedPages; },
+        get failed() { return publisher.failed; },
+        publish(pass: BodyPaginationPassResult, processedEntries: number, limit: number) {
+          const terminal = processedEntries > lastBodyEntry
+            ? terminalBodyPage(pass.layout)?.pageIndex : undefined;
+          publisher.publish(pass, processedEntries, terminal === undefined ? limit : Math.min(limit, terminal));
+        },
+      } : publisher;
   let pass: BodyPaginationPassResult | null = yield* paginateBodyWithAnchorConvergenceSteps(
     input,
     services,
     options,
     reserves,
     plan,
-    publisher,
+    seedPublisher,
     seedPlan,
   );
   if (pass.terminalDiagnostic !== null) return pass;
@@ -4844,6 +5078,21 @@ function* paginateBodyWithColumnBalancingSteps(
       anchorPlan,
     );
     if (pass.terminalDiagnostic !== null) return pass;
+  }
+  if (input.compatibilityMode === 15 && pass.endnoteLayoutsByPage.size > 0) {
+    const terminal = terminalBodyPage(pass.layout);
+    const region = terminal?.sectionRegions.at(-1);
+    if (terminal && region && region.flowDomainIds.length > 1) {
+      const nextPlan = new Map(plan);
+      nextPlan.set(region.sectionOccurrenceId, Object.freeze({ pageIndex: terminal.pageIndex,
+        targetPt: exactRetainedColumnBalanceTarget(input, pass.allocations,
+          pass.footnoteReserveByPage, terminal, region),
+      }));
+      const anchorPlan = pageAnchorDestinationPlan(pass.layout);
+      pass = null;
+      pass = yield* paginateBodyWithAnchorConvergenceSteps(input, services, options, reserves,
+        nextPlan, undefined, anchorPlan);
+    }
   }
   return pass;
 }
@@ -4872,9 +5121,9 @@ function continuousBalanceTarget(
   return Object.freeze({ pageIndex, targetPt });
 }
 
-/** Compose one retained pass through the same layout-to-paint boundary used by
- * the authoritative result. A progressive snapshot omits document-end notes:
- * their physical owner is unknowable until the terminal page exists. */
+/** Compose one retained pass through the authoritative layout-to-paint
+ * boundary. Progressive snapshots carry only endnote occurrences whose
+ * physical owner has already been fixed by the pagination pass. */
 function composeBodyPaginationResult(
   pass: BodyPaginationPassResult,
   input: BodyLayoutInput,
@@ -4896,6 +5145,7 @@ function composeBodyPaginationResult(
     pass.session,
     owners,
     pass.footnoteLayoutsByPage,
+    pass.endnoteLayoutsByPage,
   );
   const hasRetainedFootnotes = pageStories.pages.some((page) =>
     page.layers.notes.some((note) => note.source.story === 'footnote'));
@@ -4907,30 +5157,17 @@ function composeBodyPaginationResult(
         'pageBottom',
       )
     : pageStories;
-  const retainedEndnoteIds = includeDocumentEndnotes
-    ? new Set(bodyComposed.pages.flatMap((page) =>
-        page.layers.body.flatMap((node) => (
-          node.kind === 'paragraph' || node.kind === 'table'
-            ? endnoteIdsInRetainedSlice(node)
-            : []
-        ))))
-    : new Set<string>();
-  const authoredEndnoteIds = (input.endnoteIds ?? [])
-    .filter((id) => retainedEndnoteIds.has(id));
-  const endnoteStories = composeDocumentEndnotes(
-    composed,
-    pass.session,
-    authoredEndnoteIds,
-  );
+  const authoredEndnoteIds = includeDocumentEndnotes
+    ? [...pass.endnoteLayoutsByPage.values()].flatMap(notes => notes.map(note => note.source.storyInstance)) : [];
   const withEndnotes = authoredEndnoteIds.length > 0
     && noteLayoutSettings.endnotePosition !== 'docEnd'
     ? appendUnsupportedNotePositionDiagnostic(
-        endnoteStories,
+        composed,
         'endnote',
         noteLayoutSettings.endnotePosition,
         'docEnd',
       )
-    : endnoteStories;
+    : composed;
   const sourceDiagnostics = [
     ...(input.parserDiagnostics ?? []),
     ...(pass.terminalDiagnostic === null ? [] : [pass.terminalDiagnostic]),
