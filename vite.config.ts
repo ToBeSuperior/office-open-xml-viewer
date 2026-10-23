@@ -6,6 +6,7 @@ import { fileURLToPath } from 'url';
 import { readFile } from 'fs/promises';
 import { rolldown } from 'rolldown';
 import { docxCompatibilityMetadata } from './scripts/docx-compatibility-build.mjs';
+import { optionalRendererMarkers } from './scripts/optional-renderer-markers.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -195,6 +196,7 @@ export default defineConfig(({ command, mode }) => ({
   base: './',
   plugins: [
     docxCompatibilityMetadata(),
+    optionalRendererMarkers(),
     wasmAssetUrl(),
     wasm(),
     legacyBundleBoundary(),
@@ -254,6 +256,9 @@ export default defineConfig(({ command, mode }) => ({
           : `${name}.mjs`,
     },
     rollupOptions: {
+      // Keep consumer PURE annotations; omit only per-module debug regions.
+      // The boundary checks retain their explicit ownership markers instead.
+      experimental: { attachDebugInfo: 'none' },
       external: [/^node:/, 'skia-canvas'],
       output: {
         assetFileNames: '[name][extname]',
@@ -272,6 +277,7 @@ export default defineConfig(({ command, mode }) => ({
     // library mode base64-inlines one copy into every format worker chunk.
     plugins: () => [docxCompatibilityMetadata(), wasmAssetUrl(), wasm(), legacyBundleBoundary()],
     rollupOptions: {
+      experimental: { attachDebugInfo: 'none' },
       output: {
         assetFileNames: '[name][extname]',
         // The published format entry is commonly re-bundled by a consumer.

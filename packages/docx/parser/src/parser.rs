@@ -14579,7 +14579,7 @@ fn docx_gradient_fill(gradient: ooxml_common::fill::GradientFill) -> ShapeFill {
 
 fn parse_docx_drawingml_fill(
     fill: roxmltree::Node,
-    resolver: &(impl ooxml_common::color::ThemeResolver + ?Sized),
+    resolver: &dyn ooxml_common::color::ThemeResolver,
 ) -> Option<ShapeFill> {
     let tint_mode = ooxml_common::color::TintMode::WordLiteral;
     match fill.tag_name().name() {
