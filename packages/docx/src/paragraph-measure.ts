@@ -23,7 +23,7 @@ import type { WrapOracle } from './layout/float-wrap-oracle.js';
 import type { NumberingMarkerShapeInput, WritingMode } from './layout/types.js';
 import { wordEmptyMarkMinimumStartWidthPx } from './layout/compatibility.js';
 import {
-  WORD_NUMBERING_MARKER_FIRST_LINE_UNION,
+  wordTextMarkerKeepsBodyDescent,
   WORD_INLINE_OBJECT_GRID_LINE_ALLOCATION,
   WORD_PICTURE_BULLET_LINE_PARTICIPATION,
   wordJustifiedInterwordCompressionApplies,
@@ -434,18 +434,13 @@ export function measureParagraph(
         : fragment;
       // Windows Word 16.0 #1883 controls keep the same marker union beside a
       // square-wrapped float (a 42pt Symbol bullet raises the first line).
-      // WORD_NUMBERING_MARKER_FIRST_LINE_UNION. Windows Word 16.0 #1884/#1883
-      // controls (compatibility mode 15: Arial 10pt / Times New Roman 12pt
-      // bodies, 6-20pt Symbol bullets and Arial numbers, auto 1/1.5/2 and
-      // atLeast 18/30/60, beside square floats): a taller marker raises the
-      // first physical line (every float fragment of it) by its own ascent
-      // with line gap; the line keeps the text's descent. Other modes keep
-      // the earlier union of both sides without floats or atLeast.
-      // That retained union, including when the mode is unspecified, can
-      // accumulate excess body height and move a measured terminal endnote
-      // onto another page. The ascent-only observation is bounded to mode 15;
-      // do not conceal legacy body-metric drift by shrinking note reserves.
+      // WORD_NUMBERING_MARKER_FIRST_LINE_UNION: the first line keeps body
+      // descent in the measured modes. Marker eligibility beside floats and
+      // under atLeast is still bounded to the earlier mode-15 controls.
+      // Correct body allocation here; note reserves must retain their measured
+      // separator/line boxes even when excess body height changes pagination.
       const windowsMarkerUnion = environment.compatibilityMode === 15;
+      const markerAscentOnly = wordTextMarkerKeepsBodyDescent(environment.compatibilityMode);
       const onFirstPhysicalLine = lineIndex === 0 || (windowsMarkerUnion
         && lines[0]?.physicalLineIndex !== undefined
         && fragment.physicalLineIndex === lines[0]!.physicalLineIndex);
@@ -460,7 +455,7 @@ export function measureParagraph(
         ? environment.firstLineNumberingMarkerBox : undefined;
       const markerAscent = markerBox?.ascentPt;
       const markerDescent = markerBox?.descentPt;
-      const line = windowsMarkerUnion
+      const line = markerAscentOnly
         ? (markerAscent !== undefined && Number.isFinite(markerAscent)
           && markerAscent > originalLine.ascent
           ? {
@@ -486,8 +481,7 @@ export function measureParagraph(
         originalLine.ascent + originalLine.descent,
         originalLine.intendedSingle,
       );
-      void WORD_NUMBERING_MARKER_FIRST_LINE_UNION;
-      const markerNaturalPt = windowsMarkerUnion ? line.ascent + line.descent
+      const markerNaturalPt = markerAscentOnly ? line.ascent + line.descent
         : Math.max(line.ascent + line.descent, markerBox?.intendedSinglePt ?? 0);
       const markerRaisesBox = line !== originalLine
         && markerNaturalPt > textSinglePt;
