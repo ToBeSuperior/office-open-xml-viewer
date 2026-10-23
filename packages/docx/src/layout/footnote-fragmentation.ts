@@ -75,7 +75,12 @@ function sameSourcePosition(a: FootnoteCursor['sourcePosition'], b: FootnoteCurs
 /**
  * ECMA-376 §17.11.1 illustrates a footnote continued across pages, and
  * §17.11.21 locates its band at the page bottom. Once pagination admits a
- * continuation, library policy retains complete shaped lines within capacity. The following page owns a
+ * continuation, library policy retains complete shaped lines within capacity.
+ * Windows Word document-end endnote controls (Latin 12pt single-spaced body
+ * and separator, 10pt exact note lines) also move a line whose full box exceeds
+ * the bottom, even when its baseline fits; increasing capacity by 2pt retains
+ * it. Baseline-only fitting or an extra descent allowance is not supported.
+ * The following page owns a
  * fresh note separator and resumes at the first unpainted line. A note whose
  * first line cannot fit is left to ordinary reference relocation.
  */

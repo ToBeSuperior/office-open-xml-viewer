@@ -441,6 +441,10 @@ export function measureParagraph(
       // first physical line (every float fragment of it) by its own ascent
       // with line gap; the line keeps the text's descent. Other modes keep
       // the earlier union of both sides without floats or atLeast.
+      // That retained union, including when the mode is unspecified, can
+      // accumulate excess body height and move a measured terminal endnote
+      // onto another page. The ascent-only observation is bounded to mode 15;
+      // do not conceal legacy body-metric drift by shrinking note reserves.
       const windowsMarkerUnion = environment.compatibilityMode === 15;
       const onFirstPhysicalLine = lineIndex === 0 || (windowsMarkerUnion
         && lines[0]?.physicalLineIndex !== undefined
