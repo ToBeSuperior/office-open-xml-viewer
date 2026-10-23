@@ -147,6 +147,23 @@ export const WORD_NUMBERING_MARKER_FIRST_LINE_UNION = defineCompatibilityRule({
   description: 'In a non-grid paragraph with 1.15 automatic spacing, a text marker participates in the first-line ascent/descent union. Relative to a marker-free control, 8, 14, and 20 pt markers added 0, 1.68, and 7.68 pt to the line advance; changing the marker alone shifted subsequent paragraph baselines by the same amount. Added automatic leading follows the body text single-line height rather than scaling the taller marker box. A further 108-case Word matrix used three Latin body faces at 9 and 12 pt with smaller, larger, same-size, bold, and symbol-face markers. All 36 paired omitted-spacing and explicit-auto1 controls had identical marker-added advance; a 9 pt body with a same-size symbol-face marker gained about 0.72 pt in both modes. These controls support implicit marker participation, including a different marker face. They do not establish portable face identity or exact PDF baseline quantization. Library allocation uses the same selected-resource/reference vertical admission as body text, separately from Canvas advance and ink; pixel-rounded Canvas marker sides cannot inflate an otherwise precise same-face line. Exact spacing, grids, ruby, wrapping floats, picture markers, and continuation lines are outside the measured scope. Windows Word 16.0 build 16.0.20430 #1884 controls supersede the descent part for the selected Windows rule: with 6-20pt Symbol bullets and Arial numbers over Arial 10pt and Times New Roman 12pt text, auto 1/1.5/2 and atLeast 18/30/60, the marker raises the first line by its ascent (with line gap) only and the next line follows one text line below, so the marker descent and single-line height do not enter the union. atLeast lines use the same union, and wrapping floats do not suspend it (#1883 controls). An empty item\'s text marker joins its mark line the same way and the whole box follows an automatic multiple.',
 });
 
+/** WORD_NUMBERING_MARKER_FIRST_LINE_UNION: Windows Word 16.0 controls
+ * (2026-10-23) give identical body baselines in omitted/12/14/15 modes across
+ * 78 cases: Ubuntu 12pt, Arial 10pt and Times New Roman 12pt bodies; Symbol,
+ * Wingdings, Courier New and Arial markers at 6/12/20pt; auto 1.15/1.5, with
+ * atLeast/exact 18pt counterexamples. A marker can raise the first ascent,
+ * but its descent does not increase the step to the continuation/successor.
+ * This extends the earlier mode-15 observation, not an ECMA line-box formula.
+ * The caller retains eligibility: only mode 15 admits floats and atLeast;
+ * legacy atLeast participation remains unsupported despite the new controls.
+ * Other modes and grid/ruby/fixed-line exclusions keep their existing policy.
+ */
+export function wordTextMarkerKeepsBodyDescent(compatibilityMode?: number): boolean {
+  void WORD_NUMBERING_MARKER_FIRST_LINE_UNION;
+  return compatibilityMode == null || compatibilityMode === 12
+    || compatibilityMode === 14 || compatibilityMode === 15;
+}
+
 export const WORD_PICTURE_BULLET_LINE_PARTICIPATION = defineCompatibilityRule({
   id: 'word-picture-bullet-line-participation',
   evidence: {

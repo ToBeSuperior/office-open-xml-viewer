@@ -211,6 +211,20 @@ describe('measureParagraph', () => {
     );
     expect(exact.lines[0]?.advancePt).toBeCloseTo(12);
   });
+  it.each([undefined, 12])('keeps marker descent out of a legacy list line (mode %s)', (compatibilityMode) => {
+    const doc = paragraph({ runs: [{ type: 'text', ...textRun('List item') }] });
+    const context = layoutContext({ spaceBeforePt: 0,
+      lineSpacing: { rule: 'auto', value: 1.15, explicit: true } });
+    const at = placement({ startYPt: 0 });
+    const plain = measureParagraph(doc, context, at, measurer, environment());
+    const marked = measureParagraph(doc, context, at, measurer,
+      environment({ compatibilityMode, firstLineNumberingMarkerBox: {
+        ascentPt: 8, descentPt: 6, intendedSinglePt: 14,
+      } }));
+    // Windows Word: a same-size marker can have a deeper selected font box
+    // without raising the text ascent or moving the following paragraph.
+    expect(marked.contentEndYPt).toBeCloseTo(plain.contentEndYPt);
+  });
   it('treats implicit single spacing and explicit auto1 equally for a taller text marker', () => {
     const doc = paragraph({ runs: [{ type: 'text', ...textRun('List item') }] });
     const marker = environment({ firstLineNumberingMarkerBox: { ascentPt: 12, descentPt: 1 } });
