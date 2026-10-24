@@ -90,7 +90,10 @@ export interface SelectionInputHost {
   cellAt(clientX: number, clientY: number): CellAddress | null;
   cellRect(row: number, col: number): CellRect | null;
   screenX(logicalX: number, width: number): number;
-  /** Start-anchored logical scroll offsets (see the engine's viewport). */
+  /** Cell/header geometry uses the displayed frame; scrolling itself uses
+   * the requested offsets below so wheel input continues to accumulate. */
+  displayedViewportOffset(): { x: number; y: number };
+  /** Start-anchored requested scroll offsets (see the engine's viewport). */
   scrollLeft(): number;
   scrollTop(): number;
   setScrollLeft(value: number): void;
@@ -106,7 +109,7 @@ export interface SelectionInputHost {
   copySelection(): Promise<unknown>;
   updateSelectionOverlay(): void;
   updateFindOverlay(): void;
-  scheduleRender(): void;
+  scheduleRender(viewportOnly?: boolean): void;
   renderCurrentSheet(): Promise<void>;
   emitSelectionChange(): void;
   emitViewportChange(): void;
@@ -251,19 +254,20 @@ export class SelectionInput {
     if (inRowHeader && inColHeader) return { kind: 'corner' };
 
     const geometry = getGridGeometryForWorksheet(ws);
+    const offset = this.host.displayedViewportOffset();
 
     if (inRowHeader) {
       // Determine which row was clicked
       const innerY = ly - headerH;
       if (innerY < 0) return { kind: 'corner' };
-      const r = geometry.rowAt(innerY, this.host.scrollTop(), cs);
+      const r = geometry.rowAt(innerY, offset.y, cs);
       return r === null ? null : { kind: 'row', row: r };
     }
 
     // inColHeader
     const innerX = lx - headerW;
     if (innerX < 0) return { kind: 'corner' };
-    const c = geometry.colAt(innerX, this.host.scrollLeft(), cs);
+    const c = geometry.colAt(innerX, offset.x, cs);
     return c === null ? null : { kind: 'col', col: c };
   }
 
@@ -1100,7 +1104,7 @@ export class SelectionInput {
             const vertical = (e.shiftKey ? 0 : e.deltaY) * unit;
             this.host.setScrollLeft(this.host.scrollLeft() + horizontal);
             this.host.setScrollTop(this.host.scrollTop() + vertical);
-            this.host.scheduleRender();
+            this.host.scheduleRender(true);
             this.host.updateSelectionOverlay();
             this.host.updateFindOverlay();
             this.host.emitViewportChange();
