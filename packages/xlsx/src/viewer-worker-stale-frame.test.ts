@@ -40,7 +40,10 @@ function emptyWorksheet(): Worksheet {
  * fake workbook whose `renderViewportToBitmap` returns a caller-controlled
  * deferred promise. Returns handles to drive frames and inspect the canvas.
  */
-function buildWorker(options: { scroll?: 'native' | 'logical' } = {}) {
+function buildWorker(options: {
+  scroll?: 'native' | 'logical';
+  onViewportChange?: (offset: { x: number; y: number }) => void;
+} = {}) {
   const doc = installDom();
   const frames = new Map<number, FrameRequestCallback>();
   let nextFrame = 0;
@@ -54,8 +57,9 @@ function buildWorker(options: { scroll?: 'native' | 'logical' } = {}) {
   const container = makeContainer();
   const v = options.scroll === 'logical'
     ? new XlsxSheetViewer(doc.createElement('canvas') as unknown as HTMLCanvasElement,
-      { mode: 'worker', showScrollbars: false })
-    : new XlsxViewer(container as unknown as HTMLElement, { mode: 'worker' });
+      { mode: 'worker', showScrollbars: false, onViewportChange: options.onViewportChange })
+    : new XlsxViewer(container as unknown as HTMLElement,
+      { mode: 'worker', onViewportChange: options.onViewportChange });
 
   // Each renderViewportToBitmap call parks its {resolve, bitmap} so the test can
   // resolve frames out of order.
@@ -105,10 +109,10 @@ function buildWorker(options: { scroll?: 'native' | 'logical' } = {}) {
     currentWorksheet,
     render: () => priv.renderCurrentSheet(),
     scrollHost: priv.scrollHost,
-    flushFrame: () => {
+    flushFrame: (time = 0) => {
       const callbacks = [...frames.values()];
       frames.clear();
-      callbacks.forEach(callback => callback(0));
+      callbacks.forEach(callback => callback(time));
     },
     queuedFrames: () => frames.size,
     updateSpacerSize: () => priv.updateSpacerSize(currentWorksheet),
@@ -209,6 +213,106 @@ describe('XlsxViewer worker-mode stale-frame drop (C4 commit 3)', () => {
       v.destroy();
       for (const request of inflight.slice(extraAt)) request.resolve(fakeBitmap());
       await settle();
+    },
+  );
+
+  it.each(['native', 'logical'] as const)(
+    'keeps extending a %s drag selection while autoscroll outruns slow worker frames',
+    async (scroll) => {
+      const { v, inflight, currentWorksheet, scrollHost, flushFrame, updateSpacerSize, render } =
+        buildWorker({ scroll });
+      currentWorksheet.defaultColWidth = 8.43;
+      currentWorksheet.defaultRowHeight = 15; // 20 CSS px at scale 1.
+      scrollHost.clientWidth = 800;
+      scrollHost.clientHeight = 600;
+      scrollHost.scrollWidth = 10000;
+      scrollHost.scrollHeight = 10000;
+      updateSpacerSize();
+      const settle = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
+      const first = render();
+      inflight[0].resolve(fakeBitmap());
+      await first;
+      await settle();
+      const pointer = (clientX: number, clientY: number) => ({ button: 0, pointerId: 1,
+        pointerType: 'mouse', clientX, clientY, shiftKey: false, ctrlKey: false,
+        metaKey: false, preventDefault() {} });
+      const start = v.getCellViewportRect('C5');
+      if (!start) throw new Error('Expected C5 geometry');
+      scrollHost.dispatch('pointerdown', pointer(start.x + 4, start.y + 4));
+      // Drag below the viewport; autoscroll ticks advance the logical viewport.
+      scrollHost.dispatch('pointermove', pointer(start.x + 4, 660));
+      let time = 0;
+      for (let tick = 1; tick <= 25; tick++) {
+        time += 16;
+        flushFrame(time);
+        // Each worker response takes about five input frames.
+        if (tick % 5 === 0) {
+          for (const request of inflight) request.resolve(fakeBitmap());
+          await settle();
+        }
+      }
+      const scrolled = v.getViewportOffset().y;
+      expect(scrolled).toBeGreaterThan(200);
+      // The clamped pointer sits at the last visible data row of the logical viewport.
+      const expectedRow = Math.floor((599 - 22 + scrolled) / 20) + 1;
+      const area = v.selectionState?.areas[0];
+      expect(area).toMatchObject({ kind: 'cells', top: 5 });
+      expect((area as { bottom: number }).bottom).toBe(expectedRow);
+      scrollHost.dispatch('pointerup', pointer(start.x + 4, 660));
+      for (const request of inflight) request.resolve(fakeBitmap());
+      await settle();
+      v.destroy();
+    },
+  );
+
+  it.each(['native', 'logical'] as const)(
+    'notifies %s viewport consumers when a lagging worker frame moves displayed cell geometry',
+    async (scroll) => {
+      let annotationY: number | null = null;
+      let calls = 0;
+      let viewer: { getCellViewportRect(cell: string): { y: number } | null } | null = null;
+      const { v, inflight, currentWorksheet, scrollHost, flushFrame, updateSpacerSize, render } =
+        buildWorker({ scroll, onViewportChange: () => {
+          calls++;
+          annotationY = viewer?.getCellViewportRect('C10')?.y ?? null;
+        } });
+      viewer = v;
+      currentWorksheet.defaultColWidth = 8.43;
+      currentWorksheet.defaultRowHeight = 15; // 20 CSS px at scale 1.
+      scrollHost.clientWidth = 800;
+      scrollHost.clientHeight = 600;
+      scrollHost.scrollWidth = 10000;
+      scrollHost.scrollHeight = 10000;
+      updateSpacerSize();
+      const settle = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
+      const first = render();
+      inflight[0].resolve(fakeBitmap());
+      await first;
+      await settle();
+      expect(v.getCellViewportRect('C10')?.y).toBe(202);
+      vi.stubGlobal('WheelEvent', { DOM_DELTA_LINE: 1, DOM_DELTA_PAGE: 2 });
+      for (let step = 0; step < 5; step++) {
+        if (scroll === 'native') {
+          scrollHost.scrollTop = (step + 1) * 20;
+          scrollHost.dispatch('scroll');
+        } else {
+          scrollHost.dispatch('wheel', { deltaY: 20, deltaX: 0, deltaMode: 0,
+            ctrlKey: false, metaKey: false, shiftKey: false, preventDefault() {} });
+        }
+      }
+      expect(v.getViewportOffset().y).toBe(100);
+      const scrollCalls = calls;
+      flushFrame();
+      inflight[1].resolve(fakeBitmap());
+      await settle();
+      expect(v.getCellViewportRect('C10')?.y).toBe(102);
+      expect(annotationY).toBe(102);
+      // One coalesced notification for the landed frame, none for idle frames.
+      expect(calls).toBe(scrollCalls + 1);
+      flushFrame();
+      await settle();
+      expect(calls).toBe(scrollCalls + 1);
+      v.destroy();
     },
   );
 
