@@ -5,6 +5,18 @@ semantic versioning. While the major version is zero, minor releases may contain
 explicitly documented breaking changes; patch releases remain compatible with
 the corresponding minor release.
 
+## 0.89.4 — 2026-10-25
+
+Compatible patch release. No migration is required.
+
+- **XLSX worker scrolling:** in `mode: 'worker'`, `XlsxViewer` and
+  `XlsxSheetViewer` keep repainting during continuous scrolling instead of
+  freezing until scrolling stops (#1938).
+- **XLSX selection and overlays:** drag-selection keeps extending while the
+  viewer auto-scrolls in worker mode, and `onViewportChange` fires once when a
+  delayed worker frame moves the displayed cell geometry, so overlays placed
+  from `getCellViewportRect` follow it.
+
 ## 0.89.3 — 2026-10-24
 
 Compatible patch release. No migration is required.
