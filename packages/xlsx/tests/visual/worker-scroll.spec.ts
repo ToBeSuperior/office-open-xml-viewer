@@ -11,10 +11,8 @@ for (const format of ['xlsx', 'csv'] as const) {
     const result = await page.evaluate(async (format) => {
       // The route supplies a blank host; initialize Vite's source-mode defines
       // before importing the same entry point consumers use.
-      const envUrl = '/@vite/env';
-      await import(/* @vite-ignore */ envUrl);
-      const moduleUrl = '/src/index.ts';
-      const { XlsxWorkbook, XlsxViewer, XlsxSheetViewer } = await import(/* @vite-ignore */ moduleUrl);
+      await import('/@vite/env');
+      const { XlsxWorkbook, XlsxViewer, XlsxSheetViewer } = await import('/src/index.ts');
       const host = document.getElementById('host') as HTMLDivElement;
       const canvas = document.createElement('canvas');
       canvas.style.width = '900px';
