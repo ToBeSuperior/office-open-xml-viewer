@@ -559,6 +559,13 @@ class XlsxViewerEngine implements ZoomableViewer {
    *  (top-left) preservation so their behaviour is unchanged. */
   private _pendingZoomAnchor: { x: number; y: number } | null = null;
 
+  /** Geometry follows the bitmap actually on screen while a newer scroll is
+   * queued. Keep only one viewport, with no copies of the worksheet cell graph.
+   * Other geometry changes continue to invalidate in-flight worker frames. */
+  private displayedViewport: {
+    worksheet: Worksheet; x: number; y: number; scale: number; width: number; height: number;
+  } | null = null;
+
   // Selection state
   private readonly selectionController = new SelectionController();
   /** onSelectionStateChange / onSelectionContextChange delivery. */
@@ -810,10 +817,9 @@ class XlsxViewerEngine implements ZoomableViewer {
       }
       this.emitViewportChange();
       // Coalesce into the next frame: a scroll gesture fires many events per
-      // frame, and the previous synchronous redraw ran the full render on each
-      // one. The overlay update is cheap DOM geometry (no canvas paint) and must
-      // track the scroll immediately, so it stays synchronous.
-      this.scheduleRender();
+      // frame. Keep a slow worker frame presentable while newer scrolls queue;
+      // overlays use that frame's captured position until the next commit.
+      this.scheduleRender(true);
       this.updateSelectionOverlay();
       this.updateFindOverlay();
     });
@@ -862,6 +868,7 @@ class XlsxViewerEngine implements ZoomableViewer {
       cellAt: (clientX, clientY) => this.getCellAt(clientX, clientY),
       cellRect: (row, col) => this._cellRect(row, col),
       screenX: (x, w) => this.screenX(x, w),
+      displayedViewportOffset: () => this.displayedViewportOffset(),
       scrollLeft: () => this.effectiveScrollLeft,
       scrollTop: () => this.viewportTop,
       setScrollLeft: (value) => this.setViewportLeft(value),
@@ -879,7 +886,7 @@ class XlsxViewerEngine implements ZoomableViewer {
       copySelection: () => this.copySelection(),
       updateSelectionOverlay: () => this.updateSelectionOverlay(),
       updateFindOverlay: () => this.updateFindOverlay(),
-      scheduleRender: () => this.scheduleRender(),
+      scheduleRender: (viewportOnly) => this.scheduleRender(viewportOnly),
       renderCurrentSheet: () => this.renderCurrentSheet(),
       emitSelectionChange: () => this.emitSelectionChange(),
       emitViewportChange: () => this.emitViewportChange(),
@@ -1242,6 +1249,7 @@ class XlsxViewerEngine implements ZoomableViewer {
     this.sheetViews.clear();
     this.sheetViews.set(index, worksheet);
     this.currentSheet = index;
+    this.displayedViewport = null;
     this.currentWorksheet = worksheet;
     this.previewCompletion = previewCompletion;
     this.firstPreviewRender = previewCompletion !== null;
@@ -1265,6 +1273,7 @@ class XlsxViewerEngine implements ZoomableViewer {
         const initialReference = degraded ? undefined : this.initialAnchorReferenceFor(workbook, index);
         if (initialReference) bindInitialAnchorSizes(finalized, initialReference);
         this.viewEdits.restoreSheetViewState(index, finalized);
+        this.displayedViewport = null;
         this.currentWorksheet = finalized;
         this.sheetViews.set(index, finalized);
         if (degraded) {
@@ -1306,6 +1315,7 @@ class XlsxViewerEngine implements ZoomableViewer {
         this.firstPreviewRender = false;
         this.previewPreparedViewport = null;
         this.selectionInput.clearSheetGestures();
+        this.displayedViewport = null;
         this.currentWorksheet = null;
         this.releaseCurrentWorksheet?.();
         this.releaseCurrentWorksheet = null;
@@ -1705,6 +1715,19 @@ class XlsxViewerEngine implements ZoomableViewer {
     return 0;
   }
 
+  /** The scrollbar reports requested position; overlays, cell/object hit tests
+   * and outline controls follow the last presented bitmap. In worker mode a
+   * completed scroll frame is useful even if a newer viewport is pending. Use
+   * its captured offsets together, including frozen panes and RTL, until the
+   * next bitmap commits. Main mode and replaced/resized projections stay live. */
+  private displayedViewportOffset(): XlsxViewportOffset {
+    const shown = this.displayedViewport;
+    return shown && shown.worksheet === this.currentWorksheet &&
+      shown.scale === this.viewport.scale && shown.width === this.canvasArea.clientWidth &&
+      shown.height === this.canvasArea.clientHeight
+      ? shown : { x: this.effectiveScrollLeft, y: this.viewportTop };
+  }
+
   /** Returns the cell at canvas-client coordinates, or null if outside the cell grid. */
   getCellAt(clientX: number, clientY: number): CellAddress | null {
     if (this._destroyed) return null;
@@ -1728,8 +1751,8 @@ class XlsxViewerEngine implements ZoomableViewer {
     const innerY = ly - scaledHeaderH;
 
     return getGridGeometryForWorksheet(ws).cellAt(innerX, innerY, {
-      scrollX: this.effectiveScrollLeft,
-      scrollY: this.viewportTop,
+      scrollX: this.displayedViewportOffset().x,
+      scrollY: this.displayedViewportOffset().y,
       scale: cs,
     });
   }
@@ -1748,8 +1771,8 @@ class XlsxViewerEngine implements ZoomableViewer {
       width,
       height,
       scale,
-      scrollX: this.effectiveScrollLeft,
-      scrollY: this.viewportTop,
+      scrollX: this.displayedViewportOffset().x,
+      scrollY: this.displayedViewportOffset().y,
       headerWidth: HEADER_W,
       headerHeight: HEADER_H,
       buffer: 2,
@@ -1792,15 +1815,17 @@ class XlsxViewerEngine implements ZoomableViewer {
     const cs = this.viewport.scale;
     return getGridGeometryForWorksheet(ws).cellRect(row, col, {
       scale: cs,
-      scrollX: this.effectiveScrollLeft,
-      scrollY: this.viewportTop,
+      scrollX: this.displayedViewportOffset().x,
+      scrollY: this.displayedViewportOffset().y,
       headerWidth: HEADER_W,
       headerHeight: HEADER_H,
     });
   }
 
   /** Return one cell's viewport-relative CSS-pixel bounds. This is the forward
-   * geometry primitive for application-owned comment or annotation overlays. */
+   * geometry primitive for application-owned comment or annotation overlays.
+   * In worker mode these bounds follow the last presented frame while
+   * getViewportOffset() can already report a newer requested scroll position. */
   getCellViewportRect(cell: CellAddress | string): XlsxCellViewportRect | null {
     if (this._destroyed) return null;
     const address = typeof cell === 'string' ? parseA1(cell) : cell;
@@ -2359,13 +2384,15 @@ class XlsxViewerEngine implements ZoomableViewer {
    * scroll event forced its own synchronous full redraw. Already-scheduled frames
    * are not re-scheduled — the one pending render reads the live scroll/scale
    * state when it runs, so the most recent position always wins without threading
-   * a coordinate through. Falls back to a synchronous render when
+   * a coordinate through. Scroll-only work leaves the active frame presentable;
+   * selection, layout and resource changes invalidate it. Falls back to a synchronous render when
    * `requestAnimationFrame` is unavailable (e.g. a non-DOM host), preserving the
    * old semantics there.
    */
-  private scheduleRender(): void {
+  private scheduleRender(viewportOnly = false): void {
     this.renderDispatcher.schedule(() =>
-      this.renderCurrentSheet().catch((error) => this._reportRenderError(error)));
+      this.renderCurrentSheet().catch((error) => this._reportRenderError(error)),
+      viewportOnly && this._mode === 'worker');
   }
 
   private async renderCurrentSheet(): Promise<void> {
@@ -2419,12 +2446,14 @@ class XlsxViewerEngine implements ZoomableViewer {
     // Convert to logical pixels for cell-finding by dividing by cs. For RTL
     // sheets effectiveScrollLeft inverts the native scrollLeft so that 0 = col A
     // at the (mirrored) right edge — see the getter for the rationale.
+    const scrollX = this.effectiveScrollLeft;
+    const scrollY = this.viewportTop;
     const visible = getGridGeometryForWorksheet(ws).visibleRange({
       width: w,
       height: h,
       scale: cs,
-      scrollX: this.effectiveScrollLeft,
-      scrollY: this.viewportTop,
+      scrollX,
+      scrollY,
       headerWidth: HEADER_W,
       headerHeight: HEADER_H,
       buffer: 2,
@@ -2474,7 +2503,6 @@ class XlsxViewerEngine implements ZoomableViewer {
 
     if (this._mode === 'worker') {
       // Render the viewport off the main thread and paint the returned bitmap.
-      // The selection overlay (geometry-based, from getCellRect) is unaffected.
       // Attach the cumulative view-only size overrides (outline collapse/
       // expand, drag resize) so the worker re-lays the mutated bands — its
       // local sheet cache never sees main-thread model writes on its own.
@@ -2484,6 +2512,11 @@ class XlsxViewerEngine implements ZoomableViewer {
         viewerRenderOpts,
       );
       if (!this.renderDispatcher.commitBitmap(seq, bmp, w, h)) return;
+      this.displayedViewport = { worksheet: ws, x: scrollX, y: scrollY, scale: cs, width: w, height: h };
+      // Transfer and chrome updates run in one turn: never paint live-scroll
+      // selection/find/outline geometry over a bitmap from an earlier viewport.
+      this.updateSelectionOverlay();
+      this.updateFindOverlay();
     } else {
       await this.workbook.renderViewport(
         this.canvas,
@@ -2566,6 +2599,7 @@ class XlsxViewerEngine implements ZoomableViewer {
     if (typeof releaseProjection === 'function') {
       releaseProjection.call(this.wb, this.projectionId);
     }
+    this.displayedViewport = null;
     this.currentWorksheet = null;
     this.releaseCurrentWorksheet?.();
     this.releaseCurrentWorksheet = null;

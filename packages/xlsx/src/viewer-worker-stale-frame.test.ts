@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { XlsxViewer } from './viewer.js';
+import { XlsxViewer, XlsxSheetViewer } from './viewer.js';
 import { installDom, makeContainer, type FakeEl } from './viewer-destroy-test-dom.js';
 import type { Worksheet } from './types.js';
 import { extractViewerRenderContext } from './worker-protocol.js';
@@ -40,10 +40,22 @@ function emptyWorksheet(): Worksheet {
  * fake workbook whose `renderViewportToBitmap` returns a caller-controlled
  * deferred promise. Returns handles to drive frames and inspect the canvas.
  */
-function buildWorker() {
-  installDom();
+function buildWorker(options: { scroll?: 'native' | 'logical' } = {}) {
+  const doc = installDom();
+  const frames = new Map<number, FrameRequestCallback>();
+  let nextFrame = 0;
+  if (options.scroll) Object.assign(doc.defaultView, {
+    requestAnimationFrame: (callback: FrameRequestCallback) => {
+      frames.set(++nextFrame, callback);
+      return nextFrame;
+    },
+    cancelAnimationFrame: (id: number) => { frames.delete(id); },
+  });
   const container = makeContainer();
-  const v = new XlsxViewer(container as unknown as HTMLElement, { mode: 'worker' });
+  const v = options.scroll === 'logical'
+    ? new XlsxSheetViewer(doc.createElement('canvas') as unknown as HTMLCanvasElement,
+      { mode: 'worker', showScrollbars: false })
+    : new XlsxViewer(container as unknown as HTMLElement, { mode: 'worker' });
 
   // Each renderViewportToBitmap call parks its {resolve, bitmap} so the test can
   // resolve frames out of order.
@@ -61,17 +73,22 @@ function buildWorker() {
     renderViewportToBitmap,
     sheetNames: ['Sheet1'],
     sheetCount: 1,
+    isHidden: () => false,
     destroy: vi.fn(),
   };
 
   // Inject private state (the vitest env is node; there is no real load()).
-  const priv = v as unknown as {
+  const engine = options.scroll === 'logical'
+    ? (v as unknown as { engine: unknown }).engine : v;
+  const priv = engine as unknown as {
     wb: unknown;
     currentWorksheet: Worksheet;
     currentSheet: number;
     canvasArea: FakeEl;
     canvas: FakeEl;
+    scrollHost: FakeEl;
     renderCurrentSheet: () => Promise<void>;
+    updateSpacerSize(worksheet: Worksheet): void;
   };
   priv.wb = fakeWb;
   const currentWorksheet = emptyWorksheet();
@@ -87,6 +104,14 @@ function buildWorker() {
     canvas: priv.canvas,
     currentWorksheet,
     render: () => priv.renderCurrentSheet(),
+    scrollHost: priv.scrollHost,
+    flushFrame: () => {
+      const callbacks = [...frames.values()];
+      frames.clear();
+      callbacks.forEach(callback => callback(0));
+    },
+    queuedFrames: () => frames.size,
+    updateSpacerSize: () => priv.updateSpacerSize(currentWorksheet),
   };
 }
 
@@ -98,6 +123,95 @@ function buildWorker() {
  * of the pptx scroll-viewer render epoch.
  */
 describe('XlsxViewer worker-mode stale-frame drop (C4 commit 3)', () => {
+  it.each(['native', 'logical'] as const)(
+    'presents intermediate worker frames during continuous %s scrolling with aligned cell geometry',
+    async (scroll) => {
+      const { v, inflight, canvas, currentWorksheet, scrollHost, flushFrame, queuedFrames, updateSpacerSize } =
+        buildWorker({ scroll });
+      currentWorksheet.defaultColWidth = 8.43;
+      currentWorksheet.defaultRowHeight = 15; // 20 CSS px at scale 1.
+      currentWorksheet.rightToLeft = scroll === 'logical';
+      currentWorksheet.freezeRows = 1;
+      currentWorksheet.freezeCols = 1;
+      scrollHost.clientWidth = 800;
+      scrollHost.clientHeight = 600;
+      scrollHost.scrollWidth = 10000;
+      scrollHost.scrollHeight = 10000;
+      updateSpacerSize();
+      v.setSelection('C10:C12');
+      const settle = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
+      const scrollTo = (y: number) => {
+        if (scroll === 'native') {
+          scrollHost.scrollTop = y;
+          scrollHost.scrollLeft = y / 2;
+          scrollHost.dispatch('scroll');
+        } else {
+          vi.stubGlobal('WheelEvent', { DOM_DELTA_LINE: 1, DOM_DELTA_PAGE: 2 });
+          scrollHost.dispatch('wheel', { deltaY: 20, deltaX: 10, deltaMode: 0,
+            ctrlKey: false, metaKey: false, shiftKey: false, preventDefault() {} });
+        }
+      };
+      flushFrame();
+      inflight[0].resolve(fakeBitmap());
+      await settle();
+      const initial = v.getCellViewportRect('C10');
+      expect(initial).not.toBeNull();
+      for (let cycle = 0; cycle < 3; cycle++) {
+        const start = cycle * 80 + 20;
+        scrollTo(start);
+        flushFrame();
+        for (let y = start + 20; y <= start + 60; y += 20) scrollTo(y);
+        // One active worker request; intervening viewports replace one pending callback.
+        expect(inflight).toHaveLength(cycle + 2);
+        const bitmap = fakeBitmap();
+        inflight[cycle + 1].resolve(bitmap);
+        await settle();
+        expect(canvas._bitmapCtx?.lastBitmap).toBe(bitmap);
+        expect(bitmap.close).not.toHaveBeenCalled();
+        expect(v.getViewportOffset().y).toBe(start + 60);
+        const rect = v.getCellViewportRect('C10');
+        expect(rect?.y).toBe((initial?.y ?? 0) - start);
+        expect(rect?.x).toBe((initial?.x ?? 0) + (scroll === 'logical' ? 1 : -1) * start / 2);
+        expect(v.getCellViewportRect('A1')?.y).toBe(22); // frozen row stays fixed.
+        // Selection geometry follows the displayed frame, rather than the newer scrollbar.
+        const cutout = (canvas.parentElement as unknown as FakeEl)
+          .querySelector('[data-xlsx-active-cell-cutout]');
+        if (cycle === 0) expect(cutout?.getAttribute('y')).toBe(String(rect?.y));
+        expect(queuedFrames()).toBe(1);
+      }
+      flushFrame();
+      const final = fakeBitmap();
+      inflight.at(-1)?.resolve(final);
+      await settle();
+      expect(canvas._bitmapCtx?.lastBitmap).toBe(final);
+      expect(v.getCellViewportRect('C10')?.y).toBe((initial?.y ?? 0) - 240);
+      // A header click must target the row/column in the displayed frame,
+      // even while the scrollbar has advanced three more rows.
+      scrollTo(260);
+      flushFrame();
+      for (const y of [280, 300, 320]) scrollTo(y);
+      inflight.at(-1)?.resolve(fakeBitmap());
+      await settle();
+      const shown = v.getCellViewportRect('G30');
+      if (!shown) throw new Error('Expected displayed cell geometry');
+      const pointer = (clientX: number, clientY: number) => ({ button: 0, pointerId: 1,
+        pointerType: 'mouse', clientX, clientY, shiftKey: false, ctrlKey: false,
+        metaKey: false, preventDefault() {} });
+      const extraAt = inflight.length;
+      const row = pointer(scroll === 'logical' ? 795 : 5, shown.y + shown.height / 2);
+      scrollHost.dispatch('pointerdown', row);
+      scrollHost.dispatch('pointerup', row);
+      expect(v.selectionState?.areas[0]).toEqual({ kind: 'rows', firstRow: 30, lastRow: 30 });
+      const col = pointer(scroll === 'logical' ? shown.x + 8 : shown.x + shown.width - 8, 5);
+      scrollHost.dispatch('pointerdown', col);
+      scrollHost.dispatch('pointerup', col);
+      expect(v.selectionState?.areas[0]).toEqual({ kind: 'columns', firstColumn: 7, lastColumn: 7 });
+      v.destroy();
+      for (const request of inflight.slice(extraAt)) request.resolve(fakeBitmap());
+      await settle();
+    },
+  );
+
   it('sends the Window-measured MDW as internal layout authority for worker paint', async () => {
     const { currentWorksheet, inflight, renderViewportToBitmap, render } = buildWorker();
     currentWorksheet.defaultFontFamily = 'Realm Divergence';
@@ -143,6 +257,22 @@ describe('XlsxViewer worker-mode stale-frame drop (C4 commit 3)', () => {
     expect(bmpA.close).toHaveBeenCalledTimes(1);
     // The canvas still shows B — the stale A was not transferred.
     expect(canvas._bitmapCtx?.lastBitmap).toBe(bmpB);
+  });
+
+  it('discards a pre-zoom bitmap even when scrolling can finish intermediate frames', async () => {
+    const { v, inflight, canvas, render } = buildWorker();
+    const pending = render();
+    v.setScale(1.5);
+    const stale = fakeBitmap();
+    inflight[0].resolve(stale);
+    await pending;
+    expect(stale.close).toHaveBeenCalledOnce();
+    expect(canvas._bitmapCtx?.lastBitmap).toBeNull();
+    const zoomed = fakeBitmap();
+    inflight[1].resolve(zoomed);
+    for (let i = 0; i < 8; i++) await Promise.resolve();
+    expect(canvas._bitmapCtx?.lastBitmap).toBe(zoomed);
+    v.destroy();
   });
 
   it('paints a single in-flight frame normally (no false stale-drop)', async () => {
