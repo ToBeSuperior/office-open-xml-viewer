@@ -70,7 +70,7 @@ import { ValidationPanel } from './internal/viewer/validation-panel.js';
 import { HyperlinkDispatcher } from './internal/viewer/hyperlink-dispatcher.js';
 import { FindAdapter } from './internal/viewer/find-adapter.js';
 import { CopyController } from './internal/viewer/copy-controller.js';
-import { SelectionInput } from './internal/viewer/selection-input.js';
+import { SelectionInput, type ViewportGeometry } from './internal/viewer/selection-input.js';
 import { SelectionOverlay } from './internal/viewer/selection-overlay.js';
 import { SelectionNotifier } from './internal/viewer/selection-notifier.js';
 import { SelectionContextReader } from './internal/viewer/selection-context.js';
@@ -309,7 +309,11 @@ export interface XlsxSheetViewerOptions extends LoadOptions {
    * {@link XlsxViewer.setHiddenSheetMode} setter. Mirrors pptx `hiddenSlideMode`.
    */
   hiddenSheetMode?: HiddenSheetMode;
-  /** Called after viewport movement with logical CSS-pixel offsets. */
+  /** Called after viewport movement with logical CSS-pixel offsets. In worker
+   * mode it is also called once when a frame that lagged behind scrolling
+   * lands and moves the cell geometry reported by getCellViewportRect() /
+   * getCellAt(), even if the offset itself is unchanged, so overlays refreshed
+   * from this callback stay aligned with the painted sheet. */
   onViewportChange?: (offset: XlsxViewportOffset) => void;
 }
 
@@ -537,10 +541,15 @@ class XlsxViewerEngine implements ZoomableViewer {
   private get chromeColors(): XlsxChromeColors {
     return this.chromeTheme.colors;
   }
-  /** Last offset delivered to onViewportChange. Keeping this in the shared
-   *  engine prevents a programmatic scroll followed by the browser's native
-   *  scroll event from producing duplicate notifications. */
-  private _lastViewportNotification: XlsxViewportOffset | null = null;
+  /** Last offset delivered to onViewportChange, plus the displayed-frame
+   *  offset cell geometry resolved against at that moment. Keeping this in the
+   *  shared engine prevents a programmatic scroll followed by the browser's
+   *  native scroll event from producing duplicate notifications. The displayed
+   *  half lets a lagging worker frame that moves getCellViewportRect() geometry
+   *  notify once when it lands (main mode: always equal to the logical half). */
+  private _lastViewportNotification: {
+    offset: XlsxViewportOffset; displayed: XlsxViewportOffset;
+  } | null = null;
   private get activeCell(): CellAddress | null {
     return this.selectionController.active;
   }
@@ -865,7 +874,7 @@ class XlsxViewerEngine implements ZoomableViewer {
       scale: () => this.viewport.scale,
       isRtl: () => this.isRtl,
       isDestroyed: () => this._destroyed,
-      cellAt: (clientX, clientY) => this.getCellAt(clientX, clientY),
+      cellAt: (clientX, clientY, geometry) => this.cellAtGeometry(clientX, clientY, geometry),
       cellRect: (row, col) => this._cellRect(row, col),
       screenX: (x, w) => this.screenX(x, w),
       displayedViewportOffset: () => this.displayedViewportOffset(),
@@ -1654,9 +1663,12 @@ class XlsxViewerEngine implements ZoomableViewer {
     const callback = this.opts.onViewportChange;
     if (!callback) return;
     const offset = this.getViewportOffset();
+    const shown = this.displayedViewportOffset();
+    const displayed = { x: shown.x, y: shown.y };
     const previous = this._lastViewportNotification;
-    if (previous && previous.x === offset.x && previous.y === offset.y) return;
-    this._lastViewportNotification = offset;
+    if (previous && previous.offset.x === offset.x && previous.offset.y === offset.y &&
+      previous.displayed.x === displayed.x && previous.displayed.y === displayed.y) return;
+    this._lastViewportNotification = { offset, displayed };
     callback(offset);
   }
 
@@ -1730,6 +1742,16 @@ class XlsxViewerEngine implements ZoomableViewer {
 
   /** Returns the cell at canvas-client coordinates, or null if outside the cell grid. */
   getCellAt(clientX: number, clientY: number): CellAddress | null {
+    return this.cellAtGeometry(clientX, clientY, 'displayed');
+  }
+
+  /** Cell hit test against the displayed frame (clicks, the public API) or the
+   * requested logical viewport (drag-selection extension during autoscroll). */
+  private cellAtGeometry(
+    clientX: number,
+    clientY: number,
+    geometry: ViewportGeometry = 'displayed',
+  ): CellAddress | null {
     if (this._destroyed) return null;
     const ws = this.currentWorksheet;
     if (!ws) return null;
@@ -1750,9 +1772,12 @@ class XlsxViewerEngine implements ZoomableViewer {
     const innerX = lx - scaledHeaderW;
     const innerY = ly - scaledHeaderH;
 
+    const offset = geometry === 'logical'
+      ? { x: this.effectiveScrollLeft, y: this.viewportTop }
+      : this.displayedViewportOffset();
     return getGridGeometryForWorksheet(ws).cellAt(innerX, innerY, {
-      scrollX: this.displayedViewportOffset().x,
-      scrollY: this.displayedViewportOffset().y,
+      scrollX: offset.x,
+      scrollY: offset.y,
       scale: cs,
     });
   }
@@ -1825,7 +1850,8 @@ class XlsxViewerEngine implements ZoomableViewer {
   /** Return one cell's viewport-relative CSS-pixel bounds. This is the forward
    * geometry primitive for application-owned comment or annotation overlays.
    * In worker mode these bounds follow the last presented frame while
-   * getViewportOffset() can already report a newer requested scroll position. */
+   * getViewportOffset() can already report a newer requested scroll position;
+   * onViewportChange fires again when a later frame moves them. */
   getCellViewportRect(cell: CellAddress | string): XlsxCellViewportRect | null {
     if (this._destroyed) return null;
     const address = typeof cell === 'string' ? parseA1(cell) : cell;
@@ -2517,6 +2543,13 @@ class XlsxViewerEngine implements ZoomableViewer {
       // selection/find/outline geometry over a bitmap from an earlier viewport.
       this.updateSelectionOverlay();
       this.updateFindOverlay();
+      // Cell geometry (getCellViewportRect/getCellAt) follows this frame, so an
+      // application overlay refreshed from onViewportChange must hear about it
+      // even when the requested offset already settled. At most one per landed
+      // frame; deduplicated when the frame shows the already-notified viewport.
+      // Before any notification, nothing reported needs correcting: the
+      // geometry fallback already resolved against this same logical offset.
+      if (this._lastViewportNotification) this.emitViewportChange();
     } else {
       await this.workbook.renderViewport(
         this.canvas,

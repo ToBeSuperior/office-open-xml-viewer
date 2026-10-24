@@ -68,6 +68,8 @@ export function resizeHitIndex(
 }
 
 type CellRect = { x: number; y: number; w: number; h: number };
+/** Which viewport a hit test resolves against (see SelectionInputHost.cellAt). */
+export type ViewportGeometry = 'displayed' | 'logical';
 
 /** Engine state, collaborators and follow-up work the viewport input drives. */
 export interface SelectionInputHost {
@@ -87,11 +89,15 @@ export interface SelectionInputHost {
   scale(): number;
   isRtl(): boolean;
   isDestroyed(): boolean;
-  cellAt(clientX: number, clientY: number): CellAddress | null;
+  /** Cell hit test. `'displayed'` (default) follows the last presented frame,
+   * matching what a click lands on; `'logical'` follows the requested scroll
+   * position, which drag-selection extension advances during autoscroll. */
+  cellAt(clientX: number, clientY: number, geometry?: ViewportGeometry): CellAddress | null;
   cellRect(row: number, col: number): CellRect | null;
   screenX(logicalX: number, width: number): number;
-  /** Cell/header geometry uses the displayed frame; scrolling itself uses
-   * the requested offsets below so wheel input continues to accumulate. */
+  /** Click/header geometry uses the displayed frame; scrolling itself and
+   * drag-selection extension use the requested offsets below so wheel input
+   * and autoscroll continue to accumulate while a worker frame lags. */
   displayedViewportOffset(): { x: number; y: number };
   /** Start-anchored requested scroll offsets (see the engine's viewport). */
   scrollLeft(): number;
@@ -236,6 +242,7 @@ export class SelectionInput {
   getHeaderHit(
     clientX: number,
     clientY: number,
+    viewport: ViewportGeometry = 'displayed',
   ): { kind: 'corner' } | { kind: 'row'; row: number } | { kind: 'col'; col: number } | null {
     const ws = this.host.worksheet();
     if (!ws) return null;
@@ -254,7 +261,9 @@ export class SelectionInput {
     if (inRowHeader && inColHeader) return { kind: 'corner' };
 
     const geometry = getGridGeometryForWorksheet(ws);
-    const offset = this.host.displayedViewportOffset();
+    const offset = viewport === 'logical'
+      ? { x: this.host.scrollLeft(), y: this.host.scrollTop() }
+      : this.host.displayedViewportOffset();
 
     if (inRowHeader) {
       // Determine which row was clicked
@@ -599,7 +608,12 @@ export class SelectionInput {
 
   /** Extend the active drag selection to the pointer's cell. Captured pointers
    * outside the canvas and auto-scroll ticks clamp to the visible data edge so
-   * selection never jumps ahead of the viewport. */
+   * selection never jumps ahead of the viewport. While autoscroll drives the
+   * viewport (its timer ticks, or a move while it is active), hit tests use the
+   * requested (logical) viewport it advances: in worker mode the displayed
+   * bitmap may lag several input frames, and hit-testing that frame would pin
+   * the selection to the last painted rows while the sheet keeps scrolling.
+   * An ordinary move hits the displayed frame the user is pointing at. */
   private extendDragSelection(
     clientX: number,
     clientY: number,
@@ -607,6 +621,8 @@ export class SelectionInput {
   ): boolean {
     let pointerX = clientX;
     let pointerY = clientY;
+    const viewport: ViewportGeometry =
+      clampToViewport || this.selectionAutoScrollFrame !== null ? 'logical' : 'displayed';
     const bounds = this.viewportInputBounds();
     const outsideViewport = clientX < bounds.left || clientX >= bounds.left + bounds.width ||
       clientY < bounds.top || clientY >= bounds.top + bounds.height;
@@ -624,26 +640,26 @@ export class SelectionInput {
     }
 
     if (this.selectionMode === 'rows') {
-      const hit = clampToViewport ? null : this.getHeaderHit(pointerX, pointerY);
+      const hit = clampToViewport ? null : this.getHeaderHit(pointerX, pointerY, viewport);
       const row = hit?.kind === 'row'
         ? hit.row
-        : this.host.cellAt(pointerX, pointerY)?.row;
+        : this.host.cellAt(pointerX, pointerY, viewport)?.row;
       if (!row || row === this.activeCell?.row) return false;
       this.host.selection.extend({ row, col: 1 });
       return true;
     }
 
     if (this.selectionMode === 'cols') {
-      const hit = clampToViewport ? null : this.getHeaderHit(pointerX, pointerY);
+      const hit = clampToViewport ? null : this.getHeaderHit(pointerX, pointerY, viewport);
       const col = hit?.kind === 'col'
         ? hit.col
-        : this.host.cellAt(pointerX, pointerY)?.col;
+        : this.host.cellAt(pointerX, pointerY, viewport)?.col;
       if (!col || col === this.activeCell?.col) return false;
       this.host.selection.extend({ row: 1, col });
       return true;
     }
 
-    const cell = this.host.cellAt(pointerX, pointerY);
+    const cell = this.host.cellAt(pointerX, pointerY, viewport);
     if (!cell || (cell.row === this.activeCell?.row && cell.col === this.activeCell?.col)) {
       return false;
     }
@@ -717,7 +733,11 @@ export class SelectionInput {
     if (moved) {
       this.host.updateSelectionOverlay();
       this.host.updateFindOverlay();
-      this.host.scheduleRender();
+      // An autoscroll tick is a scroll: let a slow worker frame finish and
+      // present instead of invalidating it every tick (which would starve
+      // presentation). The queued render reads the live selection, so the
+      // header highlight catches up with the next frame.
+      this.host.scheduleRender(true);
       this.host.emitViewportChange();
       if (extended) this.host.emitSelectionChange();
     }
@@ -982,8 +1002,10 @@ export class SelectionInput {
       this.host.updateSelectionOverlay();
       // Drag-select fires per pointermove; coalesce the canvas repaint (the
       // header-highlight bands the renderer draws) into one frame. The overlay
-      // rect and the selection-change callback stay synchronous.
-      this.host.scheduleRender();
+      // rect and the selection-change callback stay synchronous. While
+      // autoscroll is driving the viewport, treat the repaint like its ticks
+      // so pointer jitter cannot keep invalidating in-flight worker frames.
+      this.host.scheduleRender(this.selectionAutoScrollFrame !== null);
       this.host.emitSelectionChange();
     });
 
