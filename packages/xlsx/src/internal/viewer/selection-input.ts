@@ -608,10 +608,12 @@ export class SelectionInput {
 
   /** Extend the active drag selection to the pointer's cell. Captured pointers
    * outside the canvas and auto-scroll ticks clamp to the visible data edge so
-   * selection never jumps ahead of the viewport. Hit tests use the requested
-   * (logical) viewport the autoscroll advances: in worker mode the displayed
+   * selection never jumps ahead of the viewport. While autoscroll drives the
+   * viewport (its timer ticks, or a move while it is active), hit tests use the
+   * requested (logical) viewport it advances: in worker mode the displayed
    * bitmap may lag several input frames, and hit-testing that frame would pin
-   * the selection to the last painted rows while the sheet keeps scrolling. */
+   * the selection to the last painted rows while the sheet keeps scrolling.
+   * An ordinary move hits the displayed frame the user is pointing at. */
   private extendDragSelection(
     clientX: number,
     clientY: number,
@@ -619,6 +621,8 @@ export class SelectionInput {
   ): boolean {
     let pointerX = clientX;
     let pointerY = clientY;
+    const viewport: ViewportGeometry =
+      clampToViewport || this.selectionAutoScrollFrame !== null ? 'logical' : 'displayed';
     const bounds = this.viewportInputBounds();
     const outsideViewport = clientX < bounds.left || clientX >= bounds.left + bounds.width ||
       clientY < bounds.top || clientY >= bounds.top + bounds.height;
@@ -636,26 +640,26 @@ export class SelectionInput {
     }
 
     if (this.selectionMode === 'rows') {
-      const hit = clampToViewport ? null : this.getHeaderHit(pointerX, pointerY, 'logical');
+      const hit = clampToViewport ? null : this.getHeaderHit(pointerX, pointerY, viewport);
       const row = hit?.kind === 'row'
         ? hit.row
-        : this.host.cellAt(pointerX, pointerY, 'logical')?.row;
+        : this.host.cellAt(pointerX, pointerY, viewport)?.row;
       if (!row || row === this.activeCell?.row) return false;
       this.host.selection.extend({ row, col: 1 });
       return true;
     }
 
     if (this.selectionMode === 'cols') {
-      const hit = clampToViewport ? null : this.getHeaderHit(pointerX, pointerY, 'logical');
+      const hit = clampToViewport ? null : this.getHeaderHit(pointerX, pointerY, viewport);
       const col = hit?.kind === 'col'
         ? hit.col
-        : this.host.cellAt(pointerX, pointerY, 'logical')?.col;
+        : this.host.cellAt(pointerX, pointerY, viewport)?.col;
       if (!col || col === this.activeCell?.col) return false;
       this.host.selection.extend({ row: 1, col });
       return true;
     }
 
-    const cell = this.host.cellAt(pointerX, pointerY, 'logical');
+    const cell = this.host.cellAt(pointerX, pointerY, viewport);
     if (!cell || (cell.row === this.activeCell?.row && cell.col === this.activeCell?.col)) {
       return false;
     }

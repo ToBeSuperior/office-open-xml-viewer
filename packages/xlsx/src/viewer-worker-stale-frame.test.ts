@@ -217,6 +217,64 @@ describe('XlsxViewer worker-mode stale-frame drop (C4 commit 3)', () => {
   );
 
   it.each(['native', 'logical'] as const)(
+    'hit-tests an ordinary %s drag against the displayed frame while a scroll frame is pending',
+    async (scroll) => {
+      const { v, inflight, currentWorksheet, scrollHost, flushFrame, updateSpacerSize, render } =
+        buildWorker({ scroll });
+      currentWorksheet.defaultColWidth = 8.43;
+      currentWorksheet.defaultRowHeight = 15; // 20 CSS px at scale 1.
+      scrollHost.clientWidth = 800;
+      scrollHost.clientHeight = 600;
+      scrollHost.scrollWidth = 10000;
+      scrollHost.scrollHeight = 10000;
+      updateSpacerSize();
+      const settle = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
+      const first = render();
+      inflight[0].resolve(fakeBitmap());
+      await first;
+      await settle();
+      const c5 = v.getCellViewportRect('C5');
+      const d5 = v.getCellViewportRect('D5');
+      if (!c5 || !d5) throw new Error('Expected displayed geometry');
+      // Request a 100px vertical and one-column horizontal scroll; its frame stays pending.
+      vi.stubGlobal('WheelEvent', { DOM_DELTA_LINE: 1, DOM_DELTA_PAGE: 2 });
+      for (let step = 0; step < 5; step++) {
+        if (scroll === 'native') {
+          scrollHost.scrollTop = (step + 1) * 20;
+          scrollHost.scrollLeft = (step + 1) * (d5.x - c5.x) / 5;
+          scrollHost.dispatch('scroll');
+        } else {
+          scrollHost.dispatch('wheel', { deltaY: 20, deltaX: (d5.x - c5.x) / 5, deltaMode: 0,
+            ctrlKey: false, metaKey: false, shiftKey: false, preventDefault() {} });
+        }
+      }
+      flushFrame();
+      expect(v.getViewportOffset().y).toBe(100);
+      expect(v.getCellViewportRect('C5')?.y).toBe(c5.y); // still the displayed frame
+      const pointer = (clientX: number, clientY: number) => ({ button: 0, pointerId: 1,
+        pointerType: 'mouse', clientX, clientY, shiftKey: false, ctrlKey: false,
+        metaKey: false, preventDefault() {} });
+      const drag = (x: number, y: number) => {
+        scrollHost.dispatch('pointerdown', pointer(x, y));
+        scrollHost.dispatch('pointermove', pointer(x + 1, y));
+        scrollHost.dispatch('pointerup', pointer(x + 1, y));
+      };
+      const midX = c5.x + c5.width / 2;
+      const midY = c5.y + c5.height / 2; // clear of header resize borders
+      drag(midX, midY);
+      expect(v.selectionState?.areas[0]).toMatchObject(
+        { kind: 'cells', top: 5, bottom: 5, left: 3, right: 3 });
+      drag(5, midY);
+      expect(v.selectionState?.areas[0]).toEqual({ kind: 'rows', firstRow: 5, lastRow: 5 });
+      drag(midX, 5);
+      expect(v.selectionState?.areas[0]).toEqual({ kind: 'columns', firstColumn: 3, lastColumn: 3 });
+      for (const request of inflight) request.resolve(fakeBitmap());
+      await settle();
+      v.destroy();
+    },
+  );
+
+  it.each(['native', 'logical'] as const)(
     'keeps extending a %s drag selection while autoscroll outruns slow worker frames',
     async (scroll) => {
       const { v, inflight, currentWorksheet, scrollHost, flushFrame, updateSpacerSize, render } =
