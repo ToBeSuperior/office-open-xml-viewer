@@ -478,7 +478,11 @@ export class FontSourceSession {
   }
 
   /** One resolver call for the families no session has resolved through this
-   * source identity yet; cached families join earlier results. */
+   * source identity yet; cached families join earlier results. The batch
+   * result is handed out per family (each family takes and removes its own
+   * entry) and only per-family results are cached, so nothing outlives the
+   * call except what each family claimed and was charged for: unclaimed or
+   * rejected declarations are unreachable once the call settles. */
   private async resolveWithResolver(
     source: FontResolverSource,
     cache: SourceCache,
@@ -486,8 +490,8 @@ export class FontSourceSession {
     tuples: FontDemand['tuples'],
     signal: AbortSignal,
   ): Promise<ReadonlyMap<string, FamilyResolution>> {
-    const needed = families.filter(({ name }) => !cache.families.has(fontFamilyKey(name)));
-    let call: SharedTask<ReadonlyMap<string, FamilyResolution>> | undefined;
+    const needed: NormalizedDemand['names'] = families.filter(({ name }) => !cache.families.has(fontFamilyKey(name)));
+    let call: SharedTask<Map<string, FamilyResolution>> | undefined;
     if (needed.length) {
       const neededKeys = new Set(needed.map(({ name }) => fontFamilyKey(name)));
       const demand: FontDemand = Object.freeze({
@@ -502,7 +506,10 @@ export class FontSourceSession {
       const key = fontFamilyKey(name);
       const answer = await cache.families.join(key, async (taskSignal) => {
         if (!call) return { kind: 'absent' } satisfies FamilyResolution;
-        return (await call.join(taskSignal)).get(key) ?? { kind: 'absent' };
+        const batch = await call.join(taskSignal);
+        const own = batch.get(key) ?? { kind: 'absent' };
+        batch.delete(key);
+        return own;
       }, signal);
       return [key, answer] as const;
     }));
@@ -513,7 +520,7 @@ export class FontSourceSession {
     source: FontResolverSource,
     demand: FontDemand,
     signal: AbortSignal,
-  ): Promise<ReadonlyMap<string, FamilyResolution>> {
+  ): Promise<Map<string, FamilyResolution>> {
     const failAll = (reason: string) => new Map(
       [...demand.families, ...demand.fallbackFamilies].map((name) =>
         [fontFamilyKey(name), { kind: 'failed', reason } satisfies FamilyResolution]));

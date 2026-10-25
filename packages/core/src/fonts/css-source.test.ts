@@ -52,6 +52,25 @@ describe('parseFontFaceCss', () => {
     expect(parseFontFaceCss(face(`font-family: X; src: ${src};`), SHEET)[0]?.url).toBe(expected);
   });
 
+  it('consumes unquoted url tokens per CSS Syntax §4.3.6', () => {
+    const url = (src: string) => parseFontFaceCss(face(`font-family: X; src: ${src};`), SHEET)[0]?.url;
+    const base = 'https://cdn.internal.example/styles/';
+    // The white space ending a hex escape belongs to the escape.
+    expect(url('url(font\\2e woff2)')).toBe(`${base}font.woff2`);
+    expect(url('url(font\\2e\r\nwoff2)')).toBe(`${base}font.woff2`);
+    expect(url('url(  font.woff2\t)')).toBe(`${base}font.woff2`);
+    expect(url('url(a\\ b.woff2)')).toBe(`${base}a%20b.woff2`);
+    expect(url('url(a\\)b.woff2)')).toBe(`${base}a)b.woff2`);
+    expect(url('url(a\\(b.woff2)')).toBe(`${base}a(b.woff2`);
+    expect(url('url(a\\"b\\\'c.woff2)')).toBe(`${base}a%22b'c.woff2`);
+    // Bad-url tokens drop the entry; the next entry still parses.
+    for (const bad of ['url(a b.woff2)', 'url(a"b.woff2)', "url(a'b.woff2)", 'url(a(b.woff2)',
+      'url(a\\\nb.woff2)', 'url(a\u0001b.woff2)']) {
+      expect(url(bad), bad).toBeUndefined();
+      expect(url(`${bad}, url(ok.woff2)`), bad).toBe(`${base}ok.woff2`);
+    }
+  });
+
   it('accepts only url() sources: local() skipped, first supported format chosen', () => {
     const [declaration] = parseFontFaceCss(face(`font-family: X; src:
       local("X Regular"), url(x.eot) format("embedded-opentype"), url(x.var.woff2) format(woff2) tech(variations),

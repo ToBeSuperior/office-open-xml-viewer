@@ -1,3 +1,5 @@
+import { setFlagsFromString } from 'node:v8';
+import { runInNewContext } from 'node:vm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { OoxmlError } from '../errors/ooxml-error.js';
 import { HARD_MAX_FONT_SOURCE_FAMILIES } from '../worker/resource-policy.generated.js';
@@ -436,6 +438,54 @@ describe('FontSourceSession: retained bytes held by shared caches', () => {
       await expect(cycle('C')).rejects.toMatchObject({ code: 'font-source-limit', violation: { quota: 'retained' } });
       idle.release();
       expect(fresh.retainedFontSourceBytes()).toBe(0);
+    } finally {
+      vi.doUnmock('../worker/resource-policy.generated.js');
+      vi.resetModules();
+    }
+  });
+});
+
+describe('FontSourceSession: caches keep only accounted bytes', () => {
+  it('lets unclaimed resolver bytes of a cached batch be collected', async () => {
+    setFlagsFromString('--expose-gc');
+    const gc = runInNewContext('gc') as () => void;
+    vi.resetModules();
+    vi.doMock('../worker/resource-policy.generated.js', async (importOriginal) => ({
+      ...await importOriginal<Record<string, unknown>>(),
+      HARD_MAX_FONT_SOURCE_RETAINED_BYTES: 100,
+    }));
+    try {
+      const fresh = await import('./source-session.js');
+      const sourceModule = await import('./source.js');
+      let live = 0;
+      const registry = new FinalizationRegistry<number>((bytes) => { live -= bytes; });
+      // Answers every demanded family except "Absent*" with 30 bytes.
+      const source = sourceModule.fontResolver((request) => request.families
+        .filter((family) => !family.startsWith('Absent'))
+        .map((family) => {
+          const data = new ArrayBuffer(30);
+          registry.register(data, 30);
+          live += 30;
+          return { family, data };
+        }));
+      const set = fakeSet();
+      const idle = new fresh.FontSourceSession({ sources: [source], fontSet: asSet(set) });
+      for (let batch = 0; batch < 5; batch++) {
+        const session = new fresh.FontSourceSession({ sources: [source], fontSet: asSet(set) });
+        // The cached absent family must not pin its batch (and the claimed
+        // faces the ceiling rejected).
+        await session.ensure(demand([`Absent${batch}`, ...[0, 1, 2, 3].map((index) => `F${batch}-${index}`)]))
+          .catch(() => undefined);
+        session.release();
+      }
+      const accounted = fresh.retainedFontSourceBytes();
+      expect(accounted).toBeLessThanOrEqual(100);
+      for (let round = 0; round < 50 && live > accounted; round++) {
+        gc();
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      expect(live).toBe(accounted);
+      idle.release();
     } finally {
       vi.doUnmock('../worker/resource-policy.generated.js');
       vi.resetModules();

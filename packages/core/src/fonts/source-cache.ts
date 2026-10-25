@@ -142,15 +142,24 @@ export class SharedTask<T> {
   private waiters = 0;
   private settled = false;
 
-  constructor(private readonly produce: (signal: AbortSignal) => Promise<T>, private readonly onAbandon: () => void) {}
+  /** Dropped once started: a settled task (possibly cached for the source's
+   * lifetime) must keep only its result, never the producer's closure and
+   * whatever that captured (a resolver batch, unclaimed font bytes). */
+  private produce: ((signal: AbortSignal) => Promise<T>) | undefined;
+
+  constructor(produce: (signal: AbortSignal) => Promise<T>, private readonly onAbandon: () => void) {
+    this.produce = produce;
+  }
 
   private start(): Promise<T> {
     const signal = this.controller.signal;
+    const produce = this.produce as (signal: AbortSignal) => Promise<T>;
+    this.produce = undefined;
     const promise = Promise.resolve()
       .then(() => {
         // Every waiter may have left between the join and this microtask.
         if (signal.aborted) throw createAbortError('Font source request abandoned');
-        return this.produce(signal);
+        return produce(signal);
       })
       .finally(() => { this.settled = true; });
     // The task's own rejection is observed by each joiner; never unhandled here.
@@ -188,6 +197,7 @@ export class SharedTask<T> {
   }
 
   private abandon(): void {
+    this.produce = undefined;
     this.controller.abort();
     this.onAbandon();
   }

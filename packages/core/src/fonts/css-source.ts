@@ -330,18 +330,51 @@ function leadingFunction(text: string): { name: string; args: string; rest: stri
   return { name: match[1].toLowerCase(), args: text.slice(match[0].length, close), rest: text.slice(close + 1).trim() };
 }
 
+const isNonPrintable = (unit: number) =>
+  unit <= 0x08 || unit === 0x0b || (unit >= 0x0e && unit <= 0x1f) || unit === 0x7f;
+
+/**
+ * The value of an unquoted url token whose contents start at `at` (just after
+ * `url(`), per CSS Syntax §4.3.6, or null for a bad-url token. Leading and
+ * trailing white space is dropped; white space elsewhere, a quote, `(` or a
+ * non-printable code point makes it bad, as does a backslash that does not
+ * start a valid escape. Valid escapes are consumed exactly as in identifiers
+ * (§4.3.7: a hex escape takes one following white space). End of input closes
+ * the token.
+ */
+function consumeUrlToken(text: string, at: number): string | null {
+  let index = at;
+  while (index < text.length && isWhitespace(text.charCodeAt(index))) index++;
+  let value = '';
+  while (index < text.length) {
+    const char = text[index];
+    const unit = text.charCodeAt(index);
+    if (char === ')') return value;
+    if (isWhitespace(unit)) {
+      while (index < text.length && isWhitespace(text.charCodeAt(index))) index++;
+      return index >= text.length || text[index] === ')' ? value : null;
+    }
+    if (char === '"' || char === "'" || char === '(' || isNonPrintable(unit)) return null;
+    if (char === '\\') {
+      if (!startsValidEscape(text, index)) return null;
+      const escape = consumeEscape(text, index);
+      value += escape.value;
+      index = escape.end;
+      continue;
+    }
+    value += char;
+    index++;
+  }
+  return value;
+}
+
 /** The URL of one `src` entry when it is an acceptable `url()`, else null. */
 function srcEntryUrl(entry: string): string | null {
   let text = entry.trim();
   let url: string | null = null;
   const unquotedEnd = skipUnquotedUrl(text, 0);
   if (unquotedEnd >= 0) {
-    const raw = text.slice(4, unquotedEnd - 1).trim();
-    // A url token may not contain quotes, `(`, white space or non-printables.
-    if (unquotedEnd === text.length && text.at(-1) !== ')') return null;
-    // Escaped code points are part of the URL.
-    if (/["'(\s\u0000-\u0008\u000b\u000e-\u001f\u007f]/.test(raw.replace(/\\[^\n\r\f]/g, ''))) return null;
-    url = unescapeCssString(raw);
+    url = consumeUrlToken(text, 4);
     text = text.slice(unquotedEnd).trim();
   } else {
     const call = leadingFunction(text);
