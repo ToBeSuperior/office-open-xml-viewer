@@ -193,7 +193,12 @@ export function layoutLines(
  *   baseline probe `M` (paragraph.ts), and the shared Canvas sentinels;
  * - U+00B7 MIDDLE DOT: the `middleDot` tab leader (layout/paragraph.ts);
  * - U+3042 HIRAGANA LETTER A: the East Asian paragraph-mark probe
- *   (line-breaker/line-metrics.ts, segment-builder.ts).
+ *   (line-breaker/line-metrics.ts, segment-builder.ts);
+ * - U+4E00 CJK UNIFIED IDEOGRAPH-4E00: the ideographic-cell probe of
+ *   character-grid and full-width punctuation metrics (segment-builder.ts).
+ *
+ * `font-demand-coverage.test.ts` asserts that finite demand covers every
+ * scalar layout measures or paints over a representative corpus.
  *
  * Emphasis-mark glyphs (§17.3.2.12) are demanded per run that carries one
  * (layout/paragraph.ts `emphasisGlyph`), not here, so a document without them never
@@ -203,4 +208,5 @@ export const LAYOUT_SYNTHESIZED_SCALARS: readonly number[] = Object.freeze([
   ...Array.from({ length: 0x7e - 0x20 + 1 }, (_, index) => 0x20 + index),
   0x00b7,
   0x3042,
+  0x4e00,
 ]);

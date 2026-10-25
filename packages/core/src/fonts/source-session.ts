@@ -73,7 +73,13 @@ import {
   type FontSource,
 } from './source.js';
 import type { FontSubstituteScript } from './substitute-script.js';
-import { fontFamilyKey, loadedRegularAliases, type FontSubstitution } from './substitutions.js';
+import {
+  fontFamilyKey,
+  loadedRegularAliases,
+  scopedFamilyKey,
+  type FontSubstituteScripts,
+  type FontSubstitution,
+} from './substitutions.js';
 
 /** One face a source supplied that loaded in this realm. */
 export interface LoadedSourceFace {
@@ -126,11 +132,35 @@ const EMPTY_SNAPSHOT: LoadedFontSources = Object.freeze({
 // ---- demand normalisation -----------------------------------------------------------
 
 interface NormalizedDemand {
-  /** Authored then fallback families, trimmed, first spelling per key. */
-  readonly names: readonly { readonly name: string; readonly fallback: boolean }[];
+  /** Authored then fallback families, trimmed, first spelling per key, with
+   * the substitute scripts their text proves. */
+  readonly names: readonly DemandedName[];
   readonly tuples: FontDemand['tuples'];
   /** Sorted, unique, or 'all'. */
   readonly scalars: 'all' | readonly number[];
+}
+
+interface DemandedName {
+  readonly name: string;
+  readonly fallback: boolean;
+  readonly scripts: FontSubstituteScripts;
+}
+
+const KNOWN_SUBSTITUTE_SCRIPTS: ReadonlySet<string> = new Set<FontSubstituteScript>(['arabic']);
+
+function substituteScriptsOf(value: unknown): (name: string) => FontSubstituteScripts {
+  if (value === undefined) return () => 'all';
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new TypeError('font demand substituteScripts must be an object');
+  }
+  const scripts = new Map<string, readonly FontSubstituteScript[]>();
+  for (const [family, list] of Object.entries(value)) {
+    if (!Array.isArray(list) || !list.every((script) => typeof script === 'string' && KNOWN_SUBSTITUTE_SCRIPTS.has(script))) {
+      throw new TypeError(`font demand substituteScripts[${JSON.stringify(family)}] must list substitute scripts`);
+    }
+    scripts.set(fontFamilyKey(family), Object.freeze([...new Set(list as FontSubstituteScript[])].sort()));
+  }
+  return (name) => scripts.get(fontFamilyKey(name)) ?? [];
 }
 
 function familyList(value: unknown, location: string): string[] {
@@ -147,14 +177,15 @@ function familyList(value: unknown, location: string): string[] {
  * answer). Library-produced demand never fails this; it guards the contract. */
 export function normalizeFontDemand(demand: FontDemand): NormalizedDemand {
   if (!demand || typeof demand !== 'object') throw new TypeError('font demand must be an object');
-  const names: { name: string; fallback: boolean }[] = [];
+  const names: DemandedName[] = [];
   const seen = new Set<string>();
+  const scriptsOf = substituteScriptsOf(demand.substituteScripts);
   const add = (list: string[], fallback: boolean) => {
     for (const name of list) {
       const key = fontFamilyKey(name);
       if (!key || seen.has(key)) continue;
       seen.add(key);
-      names.push({ name, fallback });
+      names.push({ name, fallback, scripts: scriptsOf(name) });
     }
   };
   add(familyList(demand.families, 'font demand families'), false);
@@ -480,12 +511,14 @@ export class FontSourceSession {
     const source = this.sources[sourceIndex];
     const cache = this.caches[sourceIndex];
     const names = families.map(({ name }) => name);
+    const scripts = new Map(families.map(({ name, scripts: proven }) => [fontFamilyKey(name), proven]));
+    const scriptsOf = (name: string): FontSubstituteScripts => scripts.get(fontFamilyKey(name)) ?? 'all';
     switch (source.kind) {
       case 'css-api':
       case 'font-face-css':
-        return resolveCssSource(source, cache, names, signal);
+        return resolveCssSource(source, cache, names, signal, scriptsOf);
       case 'font-files':
-        return resolveFontFiles(source, cache, names);
+        return resolveFontFiles(source, cache, names, scriptsOf);
       case 'font-resolver':
         return this.resolveWithResolver(source, cache, families, tuples, signal);
     }
@@ -504,7 +537,8 @@ export class FontSourceSession {
     tuples: FontDemand['tuples'],
     signal: AbortSignal,
   ): Promise<ReadonlyMap<string, FamilyResolution>> {
-    const needed: NormalizedDemand['names'] = families.filter(({ name }) => !cache.families.has(fontFamilyKey(name)));
+    const needed: NormalizedDemand['names'] = families.filter(({ name, scripts }) =>
+      !cache.families.has(scopedFamilyKey(name, scripts)));
     let call: SharedTask<Map<string, FamilyResolution>> | undefined;
     if (needed.length) {
       const neededKeys = new Set(needed.map(({ name }) => fontFamilyKey(name)));
@@ -513,13 +547,17 @@ export class FontSourceSession {
         fallbackFamilies: Object.freeze(needed.filter((entry) => entry.fallback).map(({ name }) => name)),
         tuples: Object.freeze(tuples.filter((tuple) => neededKeys.has(fontFamilyKey(tuple.family)))),
         scalars: this.all ? 'all' : Object.freeze([...this.points].sort((a, b) => a - b)),
+        ...(needed.some(({ scripts }) => scripts !== 'all') ? {
+          substituteScripts: Object.freeze(Object.fromEntries(needed.flatMap(({ name, scripts }) =>
+            scripts === 'all' ? [] : [[fontFamilyKey(name), scripts] as const]))),
+        } : {}),
       });
       const runner = this.runResolver;
       call = new SharedTask((callSignal) => callResolver(runner, source, demand, callSignal), () => undefined);
     }
-    const entries = await Promise.all(families.map(async ({ name }) => {
+    const entries = await Promise.all(families.map(async ({ name, scripts }) => {
       const key = fontFamilyKey(name);
-      const answer = await cache.families.join(key, async (taskSignal) => {
+      const answer = await cache.families.join(scopedFamilyKey(name, scripts), async (taskSignal) => {
         if (!call) return { kind: 'absent' } satisfies FamilyResolution;
         const batch = await call.join(taskSignal);
         const own = batch.get(key) ?? { kind: 'absent' };
@@ -711,8 +749,10 @@ source: FontResolverSource,
     return failAll(error.message);
   }
   const index = indexFontDeclarations(declarations);
+  const scriptsOf = substituteScriptsOf(demand.substituteScripts);
+  const restricted = demand.substituteScripts !== undefined;
   return new Map([...demand.families, ...demand.fallbackFamilies].map((name) =>
-    [fontFamilyKey(name), claimFromIndex(index, name, source.substitutes)]));
+    [fontFamilyKey(name), claimFromIndex(index, name, source.substitutes, restricted ? scriptsOf(name) : 'all')]));
 }
 
 const releasedRunner: FontResolverRunner = () => {

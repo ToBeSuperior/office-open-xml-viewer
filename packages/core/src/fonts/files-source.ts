@@ -14,7 +14,7 @@
  */
 import type { FamilyResolution, SourceCache } from './source-cache.js';
 import type { FontFaceDeclaration, FontFilesSource } from './source.js';
-import { fontFamilyKey, substitutionsFor, type FontSubstitution } from './substitutions.js';
+import { fontFamilyKey, substitutionsFor, type FontSubstituteScripts, type FontSubstitution } from './substitutions.js';
 
 /** Declarations grouped by lower-cased family, each group in declaration
  * order (overlapping `unicode-range` precedence is order-dependent). */
@@ -37,10 +37,11 @@ export function claimFromIndex(
   index: ReadonlyMap<string, readonly FontFaceDeclaration[]>,
   family: string,
   substitutes: readonly FontSubstitution[] | undefined,
+  scripts: FontSubstituteScripts = 'all',
 ): FamilyResolution {
   const direct = index.get(fontFamilyKey(family));
   if (direct?.length) return { kind: 'claimed', served: direct[0].family, declarations: direct };
-  for (const substitution of substitutionsFor(substitutes, family)) {
+  for (const substitution of substitutionsFor(substitutes, family, scripts)) {
     const served = index.get(fontFamilyKey(substitution.use));
     if (served?.length) {
       return { kind: 'claimed', served: served[0].family, substitution, declarations: served };
@@ -54,8 +55,10 @@ export function resolveFontFiles(
   source: FontFilesSource,
   cache: SourceCache,
   families: readonly string[],
+  scriptsOf: (family: string) => FontSubstituteScripts = () => 'all',
 ): ReadonlyMap<string, FamilyResolution> {
   cache.index ??= indexFontDeclarations(source.faces);
   const index = cache.index;
-  return new Map(families.map((family) => [fontFamilyKey(family), claimFromIndex(index, family, source.substitutes)]));
+  return new Map(families.map((family) => [fontFamilyKey(family),
+    claimFromIndex(index, family, source.substitutes, scriptsOf(family))]));
 }

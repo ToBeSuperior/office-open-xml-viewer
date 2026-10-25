@@ -32,7 +32,7 @@ import {
   HARD_MAX_FONT_SOURCE_URL_LENGTH,
 } from '../worker/resource-policy.generated.js';
 import type { FontSubstituteScript } from './substitute-script.js';
-import { fontFamilyKey, substitutionsFor, type FontSubstitution } from './substitutions.js';
+import { fontFamilyKey, substitutionsFor, type FontSubstituteScripts, type FontSubstitution } from './substitutions.js';
 
 export type { FontSubstitution } from './substitutions.js';
 
@@ -111,6 +111,14 @@ export interface FontDemand {
   readonly fallbackFamilies: readonly string[];
   /** Unicode scalars seen in text, sorted, or 'all'. Drives unicode-range laziness. */
   readonly scalars: 'all' | readonly number[];
+  /**
+   * Substitute scripts (core `substitute-script.ts`) each family's painted
+   * text proves, keyed by lower-cased family. When present, a script-scoped
+   * substitution is consulted for a family only if its script is listed for
+   * that family (a family absent from the record proves none); the family's
+   * own faces are always consulted. Omitted: no restriction.
+   */
+  readonly substituteScripts?: Readonly<Record<string, readonly FontSubstituteScript[]>>;
 }
 
 export interface FontResolveContext {
@@ -690,10 +698,14 @@ export interface CssApiRequest {
  * `OoxmlError('font-source-limit')` when a completed URL exceeds
  * `HARD_MAX_FONT_SOURCE_URL_LENGTH`.
  */
-export function cssApiRequests(source: CssApiSource, demandedFamily: string): readonly CssApiRequest[] {
+export function cssApiRequests(
+  source: CssApiSource,
+  demandedFamily: string,
+  scripts: FontSubstituteScripts = 'all',
+): readonly CssApiRequest[] {
   const candidates: { family: string; substitution?: FontSubstitution }[] = [
     { family: demandedFamily.trim() },
-    ...substitutionsFor(source.substitutes, demandedFamily).map((substitution) => ({
+    ...substitutionsFor(source.substitutes, demandedFamily, scripts).map((substitution) => ({
       family: substitution.use, substitution,
     })),
   ];

@@ -1,5 +1,5 @@
 import { ScriptPreloadAccumulator } from '@silurus/ooxml-core/internal/script-preload-accumulator';
-import type { CjkLang, OfficeFontFallbackRequest } from '@silurus/ooxml-core';
+import type { CjkLang, FontSubstituteScript, OfficeFontFallbackRequest } from '@silurus/ooxml-core';
 import {
   classifyCjkFont,
   cjkLangFromLanguage,
@@ -9,11 +9,12 @@ import {
 } from '@silurus/ooxml-core';
 import {
   fontFamilyKey,
+  substitutionsFor,
   type FontDemand,
   type FontSource,
   type FontSubstitution,
 } from '@silurus/ooxml-core/internal/font-sources';
-import { declaredFontSubstitutions, scriptScopedSubstitutedFamilies } from './font-substitution-scope.js';
+import { declaredFontSubstitutions } from './font-substitution-scope.js';
 
 // Kept in a parser-model-free module: layout font routing reads the declared
 // scopes, while this module traverses parser-owned facts.
@@ -50,6 +51,10 @@ export interface DocxFontDemandCandidates {
   /** Library script fallback families (Noto per script present in the text,
    * CJK ordered by language). */
   readonly fallback: readonly string[];
+  /** Per authored family (lower-cased), the scripts of its declared
+   * script-scoped substitutes that its rendered text proves
+   * (`FontDemand.substituteScripts`). */
+  readonly substituteScripts: Readonly<Record<string, readonly FontSubstituteScript[]>>;
 }
 
 /**
@@ -63,13 +68,15 @@ export interface DocxFontDemandCandidates {
  * tables, headers/footers, notes, complete text-box stories and numbering
  * markers. The document font table alone never adds a name.
  *
- * A family every declared substitution of which is script-scoped (Sakkal
- * Majalla → Noto Naskh Arabic, Arabic only) is demanded only from usage whose
- * text contains that script: elsewhere the substitute may not paint, so
- * requesting it would fetch a face nothing uses. Theme fonts are always
- * demanded. Consequence (documented limit): a source that serves such a
- * family under its own name is consulted for it only when the document uses
- * the family for text of that script.
+ * Every authored family is demanded, so a source serving it under its own
+ * name is always consulted (a face of the authored family beats a
+ * substitute, design §3.3). A script-scoped substitute (Sakkal Majalla →
+ * Noto Naskh Arabic, Arabic only) may paint only text of its script, so
+ * `substituteScripts` records, per family, the scoped scripts its rendered
+ * text proves; the session consults a scoped substitution only for those, and
+ * never requests a substitute nothing would paint. Theme fonts govern
+ * paragraph marks and inherited runs whatever their text, so every declared
+ * scoped script is admitted for them.
  *
  * Eagerly fetching multi-MB CJK families for a document with no CJK glyphs
  * would block first paint for nothing, so script fallbacks follow the text.
@@ -89,16 +96,30 @@ export function docxFontDemandCandidates(
     const key = name ? fontFamilyKey(name) : '';
     if (name && key && !authored.has(key)) authored.set(key, name);
   };
-  addAuthored(doc.majorFont);
-  addAuthored(doc.minorFont);
-  const scoped = scriptScopedSubstitutedFamilies(substitutes);
+  const scopedScripts = new Map<string, Set<FontSubstituteScript>>();
+  for (const substitution of substitutes) {
+    if (!substitution.script) continue;
+    const key = fontFamilyKey(substitution.for);
+    scopedScripts.set(key, (scopedScripts.get(key) ?? new Set()).add(substitution.script));
+  }
+  const proven = new Map<string, Set<FontSubstituteScript>>();
+  const prove = (key: string, script: FontSubstituteScript) =>
+    proven.set(key, (proven.get(key) ?? new Set()).add(script));
+  for (const theme of [doc.majorFont, doc.minorFont]) {
+    const name = theme?.trim();
+    if (!name) continue;
+    addAuthored(name);
+    for (const script of scopedScripts.get(fontFamilyKey(name)) ?? []) prove(fontFamilyKey(name), script);
+  }
   for (const usage of docxRenderedTextUsages(doc, 'font-demand')) {
     for (const family of usage.fontFamilies) {
       const name = family?.trim();
-      if (!name || authored.has(fontFamilyKey(name))) continue;
-      const script = scoped.get(fontFamilyKey(name));
-      if (script && !substituteEntryCoversText({ script }, usage.text, 'any')) continue;
+      if (!name) continue;
       addAuthored(name);
+      const key = fontFamilyKey(name);
+      for (const script of scopedScripts.get(key) ?? []) {
+        if (!proven.get(key)?.has(script) && substituteEntryCoversText({ script }, usage.text, 'any')) prove(key, script);
+      }
     }
     const region = cjkLangFromLanguage(usage.eastAsiaLanguage);
     if (region) {
@@ -110,6 +131,8 @@ export function docxFontDemandCandidates(
   return {
     authored: [...authored.values()],
     fallback: [...new Set([...scripts.names(), ...languageNames])],
+    substituteScripts: Object.freeze(Object.fromEntries([...authored.keys()].map((key) =>
+      [key, Object.freeze([...(proven.get(key) ?? [])].sort())]))),
   };
 }
 
@@ -121,6 +144,8 @@ export interface DocxFontFamilyPlan {
   readonly fallbackFamilies: readonly string[];
   /** Exact authored tuples of the demanded families. */
   readonly tuples: FontDemand['tuples'];
+  /** See {@link DocxFontDemandCandidates.substituteScripts}. */
+  readonly substituteScripts: Readonly<Record<string, readonly FontSubstituteScript[]>>;
   /** Normalised candidate families with a declared substitute whose own face
    * is installed. They are neither demanded nor routed to the substitute, and
    * their script scope is lifted (an installed authored face paints all of
@@ -152,9 +177,12 @@ export function docxFontFamilyPlan(
     return routedFamilies.has(key) || probed.has(key);
   };
   const families = candidates.authored.filter((family) => !installed(family));
-  const substituted = new Set(substitutes.map((substitution) => fontFamilyKey(substitution.for)));
+  // A family with an admissible substitute: unscoped, or scoped to a script
+  // its text proves. Only such a substitute could have displaced it.
+  const substituted = (family: string) => substitutionsFor(substitutes, family,
+    candidates.substituteScripts[fontFamilyKey(family)] ?? []).length > 0;
   const installedSubstituteFamilies = [...new Set(candidates.authored
-    .filter((family) => installed(family) && substituted.has(fontFamilyKey(family)))
+    .filter((family) => installed(family) && substituted(family))
     .map((family) => family.trim().toLowerCase()))].sort();
   const demanded = new Set(families.map(fontFamilyKey));
   const tuples = new Map<string, FontDemand['tuples'][number]>();
@@ -172,6 +200,7 @@ export function docxFontFamilyPlan(
     fallbackFamilies: Object.freeze([...candidates.fallback]),
     tuples: Object.freeze([...tuples.values()]),
     installedSubstituteFamilies: Object.freeze(installedSubstituteFamilies),
+    substituteScripts: candidates.substituteScripts,
   });
 }
 

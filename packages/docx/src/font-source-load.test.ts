@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cssApi, OFFICE_FONT_SUBSTITUTIONS } from '@silurus/ooxml-core/internal/font-sources';
+import { cssApi, fontFiles, OFFICE_FONT_SUBSTITUTIONS } from '@silurus/ooxml-core/internal/font-sources';
 import { docxFontFamilyPlan } from './font-plan.js';
 import { formatOrdinalNumber } from '@silurus/ooxml-core';
 import { ASCII_NUMBER_FORMATS, docxFontDemandScalars, loadDocxFontSources } from './font-source-load.js';
@@ -94,7 +94,7 @@ class FakeFontFace {
   }
 }
 
-const SUBSETS = { latin: 'U+0-FF', kana: 'U+3000-30FF', kanji: 'U+4E00-4FFF' } as const;
+const SUBSETS = { latin: 'U+0-FF', kana: 'U+3000-30FF', kanji: 'U+6000-6FFF' } as const;
 const NOTO_CSS = Object.entries(SUBSETS).map(([name, range]) =>
   `@font-face { font-family: 'Noto Sans JP'; font-weight: 400; src: url(https://fonts.example/jp-${name}.woff2); unicode-range: ${range}; }`).join('\n');
 const CARLITO_CSS = `@font-face { font-family: 'Carlito'; font-weight: 400; src: url(https://fonts.example/carlito.woff2); unicode-range: ${SUBSETS.latin}; }`;
@@ -138,7 +138,7 @@ describe('loadDocxFontSources', () => {
       .map((face) => [face.source, face.status]));
     expect(status()).toEqual({
       'url("https://fonts.example/jp-latin.woff2")': 'loaded',
-      // U+3042, the East Asian paragraph-mark probe (LAYOUT_SYNTHESIZED_SCALARS).
+      // U+3042 and U+4E00, layout probes (LAYOUT_SYNTHESIZED_SCALARS).
       'url("https://fonts.example/jp-kana.woff2")': 'loaded',
       'url("https://fonts.example/jp-kanji.woff2")': 'unloaded',
     });
@@ -153,7 +153,7 @@ describe('loadDocxFontSources', () => {
     expect(faces).toHaveLength(0);
 
     // Mixed Latin + kanji: the kanji subset loads too.
-    const mixed = docWith([text('Hello 一')]);
+    const mixed = docWith([text('Hello 本')]);
     const mixedPlan = docxFontFamilyPlan(mixed, [SOURCE], undefined, { routes: {} });
     expect(mixedPlan.fallbackFamilies).toContain('Noto Sans JP');
     const second = await loadDocxFontSources(mixed, mixedPlan, [SOURCE], { fontSet: set });
@@ -168,6 +168,32 @@ describe('loadDocxFontSources', () => {
     expect(plan.families).toEqual([]);
     expect(plan.installedSubstituteFamilies).toEqual(['calibri']);
     const loaded = await loadDocxFontSources(doc, plan, [SOURCE], { fontSet: set });
+    expect(fetched).toEqual([]);
+    loaded.session.release();
+  });
+
+  it('lets an earlier source serve a scoped-substitute family by name; the later substitute is never requested', async () => {
+    const { set, fetched } = install();
+    const doc = docWith([text('Latin only', { fontFamily: 'Sakkal Majalla' })]);
+    const own = fontFiles({ faces: [{ family: 'Sakkal Majalla', data: new Uint8Array([0, 1, 0, 0]).buffer }] });
+    const naskh = cssApi({
+      urlTemplate: 'https://fonts.example/css?family={family}',
+      families: { 'Noto Naskh Arabic': true },
+      query: 'x',
+      substitutes: OFFICE_FONT_SUBSTITUTIONS,
+    });
+    for (const sources of [[own, naskh], [own]]) {
+      const plan = docxFontFamilyPlan(doc, sources, undefined, { routes: {} });
+      expect(plan.families).toContain('Sakkal Majalla');
+      const loaded = await loadDocxFontSources(doc, plan, sources, { fontSet: set });
+      expect(loaded.loaded.faces.map((face) => face.family)).toContain('Sakkal Majalla');
+      loaded.session.release();
+    }
+    // Without an own face, the Arabic-scoped substitute is not requested for
+    // Latin-only text.
+    const plan = docxFontFamilyPlan(doc, [naskh], undefined, { routes: {} });
+    const loaded = await loadDocxFontSources(doc, plan, [naskh], { fontSet: set });
+    expect(loaded.loaded.substitutions.size).toBe(0);
     expect(fetched).toEqual([]);
     loaded.session.release();
   });

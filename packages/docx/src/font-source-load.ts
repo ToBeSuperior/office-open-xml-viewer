@@ -97,19 +97,27 @@ function docxSynthesizedPaint(doc: DocxDocumentModel): 'all' | string[] {
         const fmt = (record.pageNumType as { fmt?: unknown }).fmt;
         if (typeof fmt === 'string' && !ASCII_NUMBER_FORMATS.has(fmt)) return 'all';
       }
+      // Texts this record paints beyond what the rendered-text traversal
+      // spells: a DATE / TIME picture's literals (its items are ASCII:
+      // digits, English month/weekday names, AM/PM).
+      const own: string[] = [];
       if (typeof record.fieldType === 'string' && typeof record.instruction === 'string') {
         const format = parseFieldFormatSwitch(record.instruction);
         if (format !== null && !ASCII_NUMBER_FORMATS.has(format)) return 'all';
         if (record.fieldType === 'date' || record.fieldType === 'time') {
           const picture = parseDateTimePictureSwitch(record.instruction);
-          if (picture) texts.push(picture);
+          if (picture) own.push(picture);
         }
       }
-      if (typeof record.text === 'string' && (record.allCaps === true || record.smallCaps === true)) {
-        texts.push(record.text.toUpperCase());
-      }
-      if (typeof record.fallbackText === 'string' && (record.allCaps === true || record.smallCaps === true)) {
-        texts.push(record.fallbackText.toUpperCase());
+      texts.push(...own);
+      // §17.3.2.5 caps / §17.3.2.33 smallCaps: the shaper paints the
+      // upper-cased display text of the run (segment-builder.ts), including
+      // a field's synthesized result, so every text the run paints is also
+      // demanded upper-cased.
+      if (record.allCaps === true || record.smallCaps === true) {
+        for (const value of [record.text, record.fallbackText, ...own]) {
+          if (typeof value === 'string') texts.push(value.toUpperCase());
+        }
       }
       if (typeof record.emphasisMark === 'string') texts.push(emphasisGlyph(record.emphasisMark));
     }
@@ -155,6 +163,7 @@ export function docxFontDemand(doc: DocxDocumentModel, plan: DocxFontFamilyPlan)
     tuples: plan.tuples,
     fallbackFamilies: plan.fallbackFamilies,
     scalars: docxFontDemandScalars(doc),
+    substituteScripts: plan.substituteScripts,
   });
 }
 

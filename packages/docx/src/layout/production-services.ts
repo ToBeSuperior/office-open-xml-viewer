@@ -220,14 +220,27 @@ export function createProductionTextLayoutService(
       seen.add(key);
       const substitution = loaded.substitutions.get(key);
       const served = normalizedFaceFamily(substitution?.family ?? name);
-      for (const face of sourceFaces.filter((candidate) => candidate.family === served)) {
+      const servedFaces = sourceFaces.filter((candidate) => candidate.family === served);
+      if (servedFaces.length === 0) continue;
+      // CSS Fonts 4 §5.2 font matching: once any face of the served family is
+      // loaded, the registered route paints every WordprocessingML tuple from
+      // that family (nearest weight/style, synthesized bold/oblique where the
+      // family lacks the face), exactly as CSS matching does for the family
+      // name. So every regular/bold × upright/italic tuple resolves to the
+      // family; an exact face only refines nothing further (Canvas selects it).
+      const tuples = new Map<string, { weight: number; style: 'normal' | 'italic' }>();
+      for (const face of servedFaces) tuples.set(`${face.weight}:${face.style}`, face);
+      for (const weight of [400, 700]) {
+        for (const style of ['normal', 'italic'] as const) tuples.set(`${weight}:${style}`, { weight, style });
+      }
+      for (const { weight, style } of tuples.values()) {
         inventory.push({
           requestedFamily: name,
-          resolvedFamily: face.displayFamily,
+          resolvedFamily: servedFaces[0].displayFamily,
           source: substitution ? 'substitute' : 'source',
           ...(substitution?.script === undefined ? {} : { script: substitution.script }),
-          weight: face.weight,
-          style: face.style,
+          weight,
+          style,
         });
       }
     }

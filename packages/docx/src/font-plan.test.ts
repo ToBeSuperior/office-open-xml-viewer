@@ -178,16 +178,17 @@ it('demands a theme minorFont such as Ubuntu', () => {
   expect(docxFontPreloadNames(docWith('City or Town', 'Calibri', 'Ubuntu'))).toContain('Ubuntu');
 });
 
-it('demands only Arabic-proven usage of a family whose substitutes are Arabic-scoped', () => {
+it('demands a family with Arabic-scoped substitutes, admitting the substitute only for Arabic text', () => {
   const doc = docWith('body', 'Aptos', 'Aptos');
   (doc.body[0] as { runs: object[] }).runs = [
     { type: 'text', text: 'Latin only', fontFamily: 'Sakkal Majalla' },
   ];
-  expect(docxFontPreloadNames(doc)).not.toContain('Sakkal Majalla');
-  // Without a declared scoped substitute the family is demanded as authored.
-  expect(docxFontDemandCandidates(doc, []).authored).toContain('Sakkal Majalla');
-  (doc.body[0] as { runs: object[] }).runs.push({ type: 'text', text: 'مرحبا', fontFamily: 'Sakkal Majalla' });
+  // The authored family is always demanded (a source may serve it by name);
+  // only its Arabic-scoped substitute waits for Arabic text.
   expect(docxFontPreloadNames(doc)).toContain('Sakkal Majalla');
+  expect(docxFontDemandCandidates(doc, SUBSTITUTES).substituteScripts['sakkal majalla']).toEqual([]);
+  (doc.body[0] as { runs: object[] }).runs.push({ type: 'text', text: 'مرحبا', fontFamily: 'Sakkal Majalla' });
+  expect(docxFontDemandCandidates(doc, SUBSTITUTES).substituteScripts['sakkal majalla']).toEqual(['arabic']);
 });
 
 it('preloads the configured fallback only for ambiguous Han', () => {

@@ -170,6 +170,13 @@ function docxFontPreloadNames(model: DocxDocumentModel): string[] {
   return [...candidates.authored, ...candidates.fallback];
 }
 
+/** Whether demand admits the Arabic-scoped substitute for Sakkal Majalla. */
+function arabicSubstituteAdmitted(model: DocxDocumentModel): boolean {
+  const candidates = docxFontDemandCandidates(model, GOOGLE_SUBSTITUTES);
+  return candidates.authored.includes('Sakkal Majalla')
+    && (candidates.substituteScripts['sakkal majalla'] ?? []).includes('arabic');
+}
+
 beforeAll(async () => {
   await init({ module_or_path: await readFile(new URL('./wasm/docx_parser_bg.wasm', import.meta.url)) });
 });
@@ -645,7 +652,7 @@ describe('script-scoped Arabic visual substitutes', () => {
 
   it('neither preloads nor paints Noto Naskh Arabic for Latin-only Sakkal Majalla text', async () => {
     const model = parse(docx(sakkal('Leader')));
-    expect(docxFontPreloadNames(model)).not.toContain('Sakkal Majalla');
+    expect(arabicSubstituteAdmitted(model)).toBe(false);
     // Naskh is loaded (another run's Arabic text would load it too), but the
     // missing authored face must fall back past it for Latin.
     expect(await paintedFamily(model, 'Leader')).toBe('serif');
@@ -667,7 +674,7 @@ describe('script-scoped Arabic visual substitutes', () => {
 
   it('paints only the Arabic characters of a mixed ascii-slot run with the substitute', async () => {
     const model = parse(docx(sakkal('مرحبا Leader')));
-    expect(docxFontPreloadNames(model)).toContain('Sakkal Majalla');
+    expect(arabicSubstituteAdmitted(model)).toBe(true);
     expect(await paintedFamilies(model, ['مرحبا', 'Leader']))
       .toEqual(['Noto Naskh Arabic', 'serif']);
   });
@@ -751,7 +758,7 @@ describe('script-scoped Arabic visual substitutes', () => {
 
   it('never lets an invisible control enable the substitute for a complex-script span', async () => {
     const model = parse(docx(sakkal('Leader\uFEFF', true)));
-    expect(docxFontPreloadNames(model)).not.toContain('Sakkal Majalla');
+    expect(arabicSubstituteAdmitted(model)).toBe(false);
     expect(await paintedFamily(model, 'Leader')).toBe('serif');
   });
 

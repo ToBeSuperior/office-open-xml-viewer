@@ -37,7 +37,7 @@ export function sourceFontLayoutOptions(
   for (const name of names) {
     const key = fontFamilyKey(name);
     if (loadedFamilies.has(key)) continue;
-    const substitution = substitutionsFor(substitutes, name).find((entry) => loadedFamilies.has(fontFamilyKey(entry.use)));
+    const substitution = substitutionsFor(substitutes, name, plan.substituteScripts[key] ?? []).find((entry) => loadedFamilies.has(fontFamilyKey(entry.use)));
     if (substitution) {
       substitutions.set(key, { family: substitution.use, ...(substitution.script ? { script: substitution.script } : {}) });
     }

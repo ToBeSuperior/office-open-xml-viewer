@@ -834,6 +834,13 @@ describe('production layout service integration', () => {
     const substituted = loaded.text.shape({ text: 'x', fontSizePt: 10, fonts: { ascii: 'Calibri' } });
     expect(substituted.spans[0]?.font).toMatchObject({ source: 'substitute', resolvedFamily: 'Carlito' });
     expect(substituted.diagnostics[0]?.message).toMatch(/implementation-dependent/i);
+    // CSS font matching: a regular-only loaded substitute still paints bold
+    // and italic (synthesized) instead of dropping to the host fallback.
+    for (const [weight, style] of [[700, 'normal'], [400, 'italic'], [700, 'italic']] as const) {
+      const styled = loaded.text.shape({ text: 'x', fontSizePt: 10, fonts: { ascii: 'Calibri' }, weight, style });
+      expect(styled.spans[0]?.font).toMatchObject({ source: 'substitute', resolvedFamily: 'Carlito', weight, style });
+      expect(styled.spans[0]?.font.route.familyList).toMatch(/^"Carlito"/);
+    }
   });
 
   it('collects every currently representable math story, including rich text boxes and nested tables', () => {
