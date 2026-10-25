@@ -210,33 +210,38 @@ export function createProductionTextLayoutService(
     // (LoadedFontSources.substitutions holds only substitutions with a loaded
     // face). Installed families were never demanded.
     const { names, loaded } = options.sourceFonts;
-    const sourceFaces = loadedFaces(loaded.faces.map((face) => ({
-      family: face.family, status: 'loaded', style: face.style, weight: face.weight,
-    })));
+    // Presence of a served family is any face of it that loaded, whatever its
+    // descriptors: an oblique (any angle range), a weight range, a stretch or
+    // any other value is still matched by CSS for the family name, so it must
+    // not be filtered by the exact-tuple projection used for application
+    // faces (loadedFaces).
+    const loadedSourceFamilies = new Map<string, string>();
+    for (const face of loaded.faces) {
+      const family = normalizedFaceFamily(face.family);
+      if (family && !loadedSourceFamilies.has(family)) loadedSourceFamilies.set(family, displayFaceFamily(face.family));
+    }
     const seen = new Set<string>();
     for (const name of names) {
       const key = fontFamilyKey(name);
       if (!key || seen.has(key)) continue;
       seen.add(key);
       const substitution = loaded.substitutions.get(key);
-      const served = normalizedFaceFamily(substitution?.family ?? name);
-      const servedFaces = sourceFaces.filter((candidate) => candidate.family === served);
-      if (servedFaces.length === 0) continue;
+      const displayFamily = loadedSourceFamilies.get(normalizedFaceFamily(substitution?.family ?? name));
+      if (displayFamily === undefined) continue;
       // CSS Fonts 4 §5.2 font matching: once any face of the served family is
       // loaded, the registered route paints every WordprocessingML tuple from
-      // that family (nearest weight/style, synthesized bold/oblique where the
-      // family lacks the face), exactly as CSS matching does for the family
-      // name. So every regular/bold × upright/italic tuple resolves to the
-      // family; an exact face only refines nothing further (Canvas selects it).
-      const tuples = new Map<string, { weight: number; style: 'normal' | 'italic' }>();
-      for (const face of servedFaces) tuples.set(`${face.weight}:${face.style}`, face);
+      // that family (nearest weight/style/stretch, synthesized bold/oblique
+      // where the family lacks the face), exactly as CSS matching does for
+      // the family name. WordprocessingML requests regular/bold ×
+      // upright/italic, so each of those tuples resolves to the family.
+      const tuples: { weight: number; style: 'normal' | 'italic' }[] = [];
       for (const weight of [400, 700]) {
-        for (const style of ['normal', 'italic'] as const) tuples.set(`${weight}:${style}`, { weight, style });
+        for (const style of ['normal', 'italic'] as const) tuples.push({ weight, style });
       }
-      for (const { weight, style } of tuples.values()) {
+      for (const { weight, style } of tuples) {
         inventory.push({
           requestedFamily: name,
-          resolvedFamily: servedFaces[0].displayFamily,
+          resolvedFamily: displayFamily,
           source: substitution ? 'substitute' : 'source',
           ...(substitution?.script === undefined ? {} : { script: substitution.script }),
           weight,

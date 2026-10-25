@@ -843,6 +843,43 @@ describe('production layout service integration', () => {
     }
   });
 
+  it('keeps a loaded source family whatever its face descriptors declare', () => {
+    const doc = model({ majorFont: 'Calibri' });
+    // Oblique (with an angle range), a weight range and a stretch: CSS
+    // matching paints the family for every tuple, so none may be filtered.
+    for (const descriptors of [
+      { style: 'oblique', weight: '400', stretch: 'normal' },
+      { style: 'oblique 10deg 20deg', weight: '100 900', stretch: 'condensed' },
+      { style: 'normal', weight: '350', stretch: '75%' },
+    ]) {
+      const face = { family: 'Review Served', unicodeRange: 'U+0-10FFFF', sourceIndex: 0, face: {} as FontFace, ...descriptors };
+      for (const [requested, substitution] of [
+        ['Review Missing', { family: 'Review Served' }],
+        ['Review Served', undefined],
+      ] as const) {
+        const services = createLayoutServices(doc, {
+          measureContext: measureContext(),
+          fontSubstitutes: [{ for: 'Review Missing', use: 'Review Served' }],
+          sourceFonts: {
+            names: [requested],
+            loaded: {
+              faces: [face],
+              substitutions: new Map(substitution ? [['review missing', substitution]] : []),
+              regularAliases: new Map(),
+            },
+          },
+        });
+        for (const [weight, style] of [[400, 'normal'], [700, 'normal'], [400, 'italic'], [700, 'italic']] as const) {
+          const shaped = services.text.shape({ text: 'x', fontSizePt: 10, fonts: { ascii: requested }, weight, style });
+          expect(shaped.spans[0]?.font, `${descriptors.style} ${requested} ${weight} ${style}`).toMatchObject({
+            source: substitution ? 'substitute' : 'source', resolvedFamily: 'Review Served',
+          });
+          expect(shaped.spans[0]?.font.route.familyList).toMatch(/^"Review Served"/);
+        }
+      }
+    }
+  });
+
   it('collects every currently representable math story, including rich text boxes and nested tables', () => {
     const math = (value: string) => ({
       type: 'math', nodes: [{ type: 'text', text: value }], display: false, fontSize: 10,
