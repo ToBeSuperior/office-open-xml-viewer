@@ -261,7 +261,8 @@ async function initPptx(buffer: ArrayBuffer, useGoogleFonts: boolean): Promise<v
   const viewer = new PptxScrollViewer(viewerContainer, {
     math,
     ...fullRenderers,
-    useGoogleFonts,
+    // PPTX consumes `fonts`; the setting keeps its name (design §2.4).
+    ...(useGoogleFonts ? { fonts: [googleFonts()] } : {}),
     progressiveLayout: true,
     enableTextSelection: true,
     enableElementSelection: true,

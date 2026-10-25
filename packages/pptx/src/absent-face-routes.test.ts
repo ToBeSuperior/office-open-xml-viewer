@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { loadOfficeFontFallbacks, unloadOfficeFontFallbacks } from '@silurus/ooxml-core';
 import type { OfficeFontFallbackRequest } from '@silurus/ooxml-core';
 import { PptxPresentation } from './presentation.js';
-import { pptxSlideOfficeFontRequests } from './google-fonts.js';
+import { pptxSlideOfficeFontRequests } from './font-requests.js';
 import { officeFaceWeight } from './powerpoint-line-metrics.js';
 import { buildFont, layoutParagraph } from './renderer.js';
 import { acquireOfficeRoutes } from './office-route-acquisition.js';

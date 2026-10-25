@@ -72,7 +72,7 @@ import {
   type FontResolverSource,
   type FontSource,
 } from './source.js';
-import type { FontSubstituteScript } from './substitute-script.js';
+import { FONT_SUBSTITUTE_SCRIPTS, type FontSubstituteScript } from './substitute-script.js';
 import {
   fontFamilyKey,
   loadedRegularAliases,
@@ -146,7 +146,7 @@ interface DemandedName {
   readonly scripts: FontSubstituteScripts;
 }
 
-const KNOWN_SUBSTITUTE_SCRIPTS: ReadonlySet<string> = new Set<FontSubstituteScript>(['arabic']);
+const KNOWN_SUBSTITUTE_SCRIPTS: ReadonlySet<string> = new Set<FontSubstituteScript>(FONT_SUBSTITUTE_SCRIPTS);
 
 function substituteScriptsOf(value: unknown): (name: string) => FontSubstituteScripts {
   if (value === undefined) return () => 'all';

@@ -168,6 +168,18 @@ export function auditAwaitCase(file, name, previous, current) {
       candidate = [...candidate.slice(0, index), 'preloadGoogleFonts', ...candidate.slice(index + 1)];
     }
   }
+  // PPTX font sources (LoadOptions.fonts) replace the Google-only presentation
+  // lease barrier with the generic font-source barrier at the same position
+  // (its opt-in gate is now `opts.fonts`, so the old callee normalization does
+  // not apply). Accept exactly that one rename while the merge base still
+  // awaits the old callee; any other addition, removal or reordering fails.
+  if (pptxFontOwnerRefactor) {
+    const index = baseline.indexOf('preloadGoogleFonts');
+    if (index >= 0 && candidate[index] === 'pres._ensureFontSources'
+      && candidate.filter((entry) => entry === 'pres._ensureFontSources').length === 1) {
+      candidate = [...candidate.slice(0, index), 'preloadGoogleFonts', ...candidate.slice(index + 1)];
+    }
+  }
   if (JSON.stringify(candidate) !== JSON.stringify(baseline)) {
     throw new Error(`${file} ${name}: OOXML awaits changed\nmain ${JSON.stringify(baseline)}\nhead ${JSON.stringify(candidate)}`);
   }

@@ -60,3 +60,4 @@ export {
   resetFontDeprecationWarningsForTests,
   type FontLoadOptions,
 } from '../fonts/deprecations.js';
+export { FONT_SUBSTITUTE_SCRIPTS } from '../fonts/substitute-script.js';

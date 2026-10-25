@@ -2,7 +2,9 @@ import { loadFontDemandCollector } from './font-demand-collector.js';
 import type { CjkLang } from '@silurus/ooxml-core';
 import init, { PptxArchive, reinit } from './wasm/pptx_parser.js';
 import type { PptxTextRunInfo } from './renderer';
-import { PPTX_GOOGLE_FONTS, pptxSlideOfficeFontRequests } from './google-fonts';
+import { pptxSlideOfficeFontRequests } from './font-requests';
+import { FontSourceSession, pptxFontDemand } from './font-source-load.js';
+import { assertFontSourceDescriptors, type FontSource } from '@silurus/ooxml-core/internal/font-sources';
 import { acquireOfficeRoutes, distinctOfficeRouteLoads, type AcquiredOfficeRoutes } from './office-route-acquisition.js';
 import {
   findPreflightMimeType,
@@ -13,7 +15,6 @@ import { PptxSlideRepository } from './slide-repository';
 import { loadPptxSlideFromCursor } from './slide-cursor-operation';
 import { SlidePullWorker } from './slide-pull-worker';
 import {
-  GoogleFontPreloadLease,
   activeFontSet,
   loadOfficeFontFallbacks,
   unloadOfficeFontFallbacks,
@@ -46,7 +47,7 @@ import type {
   RenderWorkerResponse,
 } from './worker-protocol';
 import { findPptxElementBoundsByIds, hitTestPptxSlideContext } from './element-selection';
-import { excludeEmbeddedFontFamilies, loadEmbeddedFonts, uncoveredOfficeFontRequests } from './embedded-fonts';
+import { loadEmbeddedFonts, uncoveredOfficeFontRequests } from './embedded-fonts';
 import { ProgressivePreflightGate } from './progressive-preflight-gate';
 import type { WorkerPresentationSourceOwner, WorkerCursorArchive } from './internal/worker-presentation-source';
 
@@ -71,9 +72,10 @@ const slidePull = new SlidePullWorker(
 
 let preflight: PresentationPreflight | null = null;
 let cjkFallback: CjkLang | undefined;
-let googleSubstitutes = false;
 let preflightBuilder: PresentationPreflightBuilder | null = null;
-let googleFonts: GoogleFontPreloadLease | null = null;
+/** This presentation's font-source session (LoadOptions.fonts) in self.fonts;
+ * reset with every parse and on a failed parse, and gone with the worker. */
+let fontSources: FontSourceSession | null = null;
 let slides: PptxSlideRepository | null = null;
 let availableSlideCount = 0;
 const slideAvailabilityWaiters = new Set<() => void>();
@@ -183,8 +185,8 @@ async function openPresentation(request: Extract<RenderWorkerRequest, { kind: 'p
   releaseOfficeFonts();
   unregisterEmbeddedFonts(embeddedFontFaces);
   embeddedFontFaces = [];
-  googleFonts?.release();
-  googleFonts = null;
+  fontSources?.release();
+  fontSources = null;
   progressivePreflightGate.reset();
   await slidePull.reset();
   slides?.clear();
@@ -203,6 +205,9 @@ async function openPresentation(request: Extract<RenderWorkerRequest, { kind: 'p
   embeddedFontAuthoredFamilies = new Map();
   embeddedFontTuples = new Set();
   resourceUsage = undefined;
+  // Descriptors crossed the realm boundary: validate them as strictly as the
+  // factories did (TypeError / font-source-limit reject the parse).
+  const sources: readonly FontSource[] = request.fonts === undefined ? [] : assertFontSourceDescriptors(request.fonts);
   renderers = await loadWorkerRenderers(request.renderers);
 
   const bootstrap = await slidePull.run(() => executeArchiveFromNew(
@@ -217,26 +222,29 @@ async function openPresentation(request: Extract<RenderWorkerRequest, { kind: 'p
   embeddedFontAuthoredFamilies = embedded.authoredFamilies;
   embeddedFontTuples = embedded.tuples;
   cjkFallback = request.cjkFallback;
-  googleSubstitutes = request.useGoogleFonts === true;
-  // Optional Google subset loading is library policy keyed to the slide model
+  // Font-source subset loading is library policy keyed to the slide model
   // alone, as in main mode. Registering an optional renderer does not widen it:
   // the text those renderers draw (math runs, charts) already yields 'all', and
   // TIFF decoding draws no text.
-  preflightBuilder = new PresentationPreflightBuilder(bootstrap, { cjkFallback, collectFontDemand: await loadFontDemandCollector(request.useGoogleFonts === true) });
+  preflightBuilder = new PresentationPreflightBuilder(bootstrap, { cjkFallback, collectFontDemand: await loadFontDemandCollector(sources.length > 0) });
   slides = new PptxSlideRepository({
     slideCount: bootstrap.slideCount,
     maxCachedSlides: HARD_MAX_PPTX_CACHED_SLIDES,
     maxCachedStructuralBytes: HARD_MAX_PPTX_CACHED_SLIDE_PROJECTION_BYTES,
     loadSlide,
   });
-  if (request.useGoogleFonts) googleFonts = new GoogleFontPreloadLease(PPTX_GOOGLE_FONTS);
+  // Same demand and session as main mode, registered into self.fonts.
+  if (sources.length > 0) fontSources = new FontSourceSession({ sources });
+  const session = fontSources;
   if (request.progressiveLayout) {
     const ensureFonts = async (): Promise<void> => {
-      if (!request.useGoogleFonts) return;
-      await googleFonts?.ensure(
-        excludeEmbeddedFontFamilies(preflightBuilder!.currentFontPreloadNames, embedded.aliases),
+      if (!session) return;
+      await session.ensure(pptxFontDemand(
+        preflightBuilder!.currentFontPreloadNames,
+        preflightBuilder!.currentFontPreloadFacts,
         preflightBuilder!.currentFontPreloadDemandDelta,
-      );
+        embedded.aliases,
+      ));
     };
     for (let index = 0; index < bootstrap.slideCount; index += 1) {
       await slides.withSlide(index, () => undefined);
@@ -271,15 +279,14 @@ async function openPresentation(request: Extract<RenderWorkerRequest, { kind: 'p
     availableSlideCount = bootstrap.slideCount;
     wakeSlideAvailabilityWaiters();
     fontsLoaded = (async () => {
-      if (!request.useGoogleFonts) return embedded.faces;
-      await googleFonts?.ensure(
-        excludeEmbeddedFontFamilies(preflight.fontPreloadNames, embedded.aliases),
-        preflight.fontPreloadDemand,
-      );
+      if (!session) return embedded.faces;
+      await session.ensure(pptxFontDemand(
+        preflight.fontPreloadNames, preflight.fontPreloadFacts, preflight.fontPreloadDemand, embedded.aliases,
+      ));
       return embedded.faces;
     })();
   }
-  // Google subsets started by ordinary preflight must also settle before ready.
+  // Font-source subsets started by ordinary preflight must also settle before ready.
   await fontsLoaded;
   return preflight;
 }
@@ -390,7 +397,7 @@ self.onmessage = async (event: MessageEvent<RenderWorkerRequest | WorkerSvgDecod
           embeddedFontTuples,
           officeFontRoutes,
           officeInstalledFamilies,
-          googleSubstitutes,
+          fontSubstitutions: fontSources?.loaded.substitutions,
           fetchMedia: getMedia,
           fetchImage: getImage,
           svgDecoder: svgDecodeClient.decode,
@@ -430,7 +437,7 @@ self.onmessage = async (event: MessageEvent<RenderWorkerRequest | WorkerSvgDecod
           embeddedFontTuples,
           officeFontRoutes,
           officeInstalledFamilies,
-          googleSubstitutes,
+          fontSubstitutions: fontSources?.loaded.substitutions,
           fetchMedia: getMedia,
           fetchImage: getImage,
           svgDecoder: svgDecodeClient.decode,
@@ -501,8 +508,8 @@ self.onmessage = async (event: MessageEvent<RenderWorkerRequest | WorkerSvgDecod
       releaseOfficeFonts();
       unregisterEmbeddedFonts(embeddedFontFaces);
       embeddedFontFaces = [];
-      googleFonts?.release();
-      googleFonts = null;
+      fontSources?.release();
+      fontSources = null;
       rawParts.clear();
       try { host.run(() => host.disposeArchive()); } catch {}
       progressivePreflightGate.reset();

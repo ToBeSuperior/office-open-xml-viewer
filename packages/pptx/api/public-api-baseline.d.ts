@@ -1128,6 +1128,14 @@ export interface ChartTrendline {
 export type ChartType = 'line' | 'stackedLine' | 'stackedLinePct' | 'clusteredBar' | 'clusteredBarH' | 'stackedBar' | 'stackedBarH' | 'stackedBarPct' | 'stackedBarHPct' | 'area' | 'stackedArea' | 'stackedAreaPct' | 'pie' | 'doughnut' | 'scatter' | 'bubble' | 'radar' | 'waterfall' | 'stock' | 'surface' | 'surface3D' | 'boxWhisker' | 'sunburst' | 'treemap' | string;
 export type CjkFallback = 'auto' | CjkLang;
 type CjkLang = 'kr' | 'sc' | 'tc' | 'hk' | 'jp';
+export function cssApi(options: CssApiOptions): CssApiSource;
+export interface CssApiOptions {
+    readonly urlTemplate: string;
+    readonly query?: string;
+    readonly families?: Readonly<Record<string, string | true>>;
+    readonly substitutes?: readonly FontSubstitution[];
+    readonly credentials?: FontSourceCredentials;
+}
 export interface CssApiSource extends FontSourceBase {
     readonly kind: 'css-api';
     readonly urlTemplate: string;
@@ -1182,6 +1190,12 @@ export interface FindMatchesOptions {
     caseSensitive?: boolean;
 }
 const FONT_SOURCE_PROTOCOL = 'ooxml-font-source/v1';
+export function fontFaceCss(options: FontFaceCssOptions): FontFaceCssSource;
+export interface FontFaceCssOptions {
+    readonly url: string;
+    readonly substitutes?: readonly FontSubstitution[];
+    readonly credentials?: FontSourceCredentials;
+}
 export interface FontFaceCssSource extends FontSourceBase {
     readonly kind: 'font-face-css';
     readonly url: string;
@@ -1195,6 +1209,11 @@ export interface FontFaceDeclaration {
     readonly style?: string;
     readonly stretch?: string;
     readonly unicodeRange?: string;
+}
+export function fontFiles(options: FontFilesOptions): FontFilesSource;
+export interface FontFilesOptions {
+    readonly faces: readonly FontFaceDeclaration[];
+    readonly substitutes?: readonly FontSubstitution[];
 }
 export interface FontFilesSource extends FontSourceBase {
     readonly kind: 'font-files';
@@ -1211,7 +1230,7 @@ interface FontSourceBase {
     readonly substitutes?: readonly FontSubstitution[];
 }
 export type FontSourceCredentials = 'omit' | 'same-origin';
-type FontSubstituteScript = 'arabic';
+export type FontSubstituteScript = 'arabic';
 export interface FontSubstitution {
     readonly for: string;
     readonly use: string;
@@ -1221,6 +1240,10 @@ export interface Glow {
     color: string;
     alpha: number;
     radius: number;
+}
+export function googleFonts(options?: GoogleFontsOptions): CssApiSource;
+export interface GoogleFontsOptions {
+    readonly cssOrigin?: string;
 }
 export interface GradientFill {
     fillType: 'gradient';
@@ -1480,6 +1503,7 @@ export type ModelSourceTarget = 'docx' | 'xlsx' | 'pptx';
 export interface NoFill {
     fillType: 'none';
 }
+export const officeFontSubstitutions: readonly FontSubstitution[];
 export class OoxmlDecodedImageLimitError extends RangeError {
     readonly metric: OoxmlDecodedImageLimitMetric;
     readonly limit: number;

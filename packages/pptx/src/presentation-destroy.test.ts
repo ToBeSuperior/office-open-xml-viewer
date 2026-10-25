@@ -1,9 +1,9 @@
+import { googleFonts } from '@silurus/ooxml-core/internal/font-sources';
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import {
   WorkerBridge,
   type ModelSource,
   type WorkerLike,
-  type FontPreloadEntry,
 } from '@silurus/ooxml-core';
 import { BoundedRawPartCache } from '@silurus/ooxml-core/internal/bounded-raw-part-cache';
 import { ProgressiveLayoutLifecycle } from '@silurus/ooxml-core/internal/progressive-layout-lifecycle';
@@ -91,9 +91,6 @@ function installFontFaceSet(): { added: FakeFace[] } {
   delete G.self;
   return { added };
 }
-const MAP: Record<string, FontPreloadEntry> = {
-  calibri: { url: 'https://fonts.googleapis.com/css2?family=Carlito', loadFamily: 'Carlito' },
-};
 
 describe('PptxPresentation.destroy() — rejects in-flight worker requests', () => {
   function makePresentation() {
@@ -168,7 +165,7 @@ describe('PptxPresentation.destroy() — rejects in-flight worker requests', () 
         _parse(
           buffer: ArrayBuffer,
           resourcePolicy: object,
-          useGoogleFonts?: boolean,
+          fonts?: unknown,
           timeoutMs?: number,
         ): Promise<void>;
       },
@@ -216,7 +213,7 @@ describe('PptxPresentation.destroy() — rejects in-flight worker requests', () 
         _parse(
           buffer: ArrayBuffer,
           resourcePolicy: object,
-          useGoogleFonts?: boolean,
+          fonts?: unknown,
           timeoutMs?: number,
         ): Promise<void>;
       },
@@ -277,7 +274,7 @@ describe('PptxPresentation.destroy() — rejects in-flight worker requests', () 
     expect(added).toHaveLength(0);
   });
 
-  it('does not request remote fonts when useGoogleFonts is false', async () => {
+  it('does not request remote fonts without font sources', async () => {
     G.Worker = SilentWorker;
     G.location = { href: 'http://localhost/' };
     installFontFaceSet();
@@ -306,7 +303,6 @@ describe('PptxPresentation.destroy() — rejects in-flight worker requests', () 
 
     const presentation = await PptxPresentation.load(new ArrayBuffer(0), {
       mode: 'main',
-      useGoogleFonts: false,
     });
 
     expect(fetch).not.toHaveBeenCalled();
@@ -342,10 +338,13 @@ describe('PptxPresentation.destroy() — rejects in-flight worker requests', () 
   // `_googleFontFaces = []`, so they never exercise the unload branch — a dropped
   // call (or a wrong field name) would go unnoticed. Preload a real face through
   // core, hand it to the deck, then assert destroy() removes it and clears the array.
-  it('destroy() releases the deck’s Google fonts from the FontFaceSet', async () => {
+  it('destroy() releases the deck’s font-source faces from the FontFaceSet', async () => {
     const { added } = installFontFaceSet();
     const { pres } = makePresentation();
-    await (pres as unknown as { _ensureGoogleFonts(names: string[]): Promise<void> })._ensureGoogleFonts(['Calibri']);
+    Object.assign(pres, { _fonts: [googleFonts()], _embeddedFontAliases: new Map() });
+    await (pres as unknown as {
+      _ensureFontSources(names: string[], facts: undefined, scalars: undefined): Promise<void>;
+    })._ensureFontSources(['Calibri'], undefined, undefined);
     expect(added).toHaveLength(1);
     pres.destroy();
     expect(added).toHaveLength(0);
@@ -400,7 +399,7 @@ it.each(['ordinary', 'selected-source'] as const)('filters ordinary Window prelo
     module: { protocol: 'ooxml-model-source-module/v2', target: 'pptx', moduleUrl: 'https://example.test/source.mjs', config: {} },
     release: () => undefined,
   }) };
-  const presentation = await PptxPresentation.load(new ArrayBuffer(0), { useGoogleFonts: true,
+  const presentation = await PptxPresentation.load(new ArrayBuffer(0), { fonts: [googleFonts()],
     ...(variant === 'selected-source' ? { legacyPpt: source } : {}),
   });
   expect(added).toHaveLength(2);

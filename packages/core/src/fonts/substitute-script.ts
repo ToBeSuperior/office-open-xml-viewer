@@ -18,6 +18,11 @@ import { graphemeClusterOffsets } from '../text/sea-break.js';
 
 export type FontSubstituteScript = 'arabic';
 
+/** Every {@link FontSubstituteScript}, for callers that admit all scoped
+ * substitutes of a family whatever its text (theme fonts, which govern
+ * inherited runs) or validate a demand's scripts. */
+export const FONT_SUBSTITUTE_SCRIPTS: readonly FontSubstituteScript[] = Object.freeze(['arabic']);
+
 const FORMAT_CONTROL = /^\p{Cf}$/u;
 const WHITE_SPACE = /^\s$/u;
 const MARK = /^\p{M}$/u;

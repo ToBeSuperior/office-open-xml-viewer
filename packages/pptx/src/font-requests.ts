@@ -1,34 +1,43 @@
-import type { CjkLang } from '@silurus/ooxml-core';
+import type { CjkLang, FontSubstituteScript } from '@silurus/ooxml-core';
 import {
   classifyCjkFont,
   cjkFallbackForText,
   scriptPreloadNamesForText,
-  GOOGLE_FONT_SUBSTITUTES,
-  SCRIPT_GOOGLE_FONTS,
-  type FontPreloadEntry,
+  substituteEntryCoversText,
   type OfficeFontFallbackRequest,
 } from '@silurus/ooxml-core';
 import { ScriptPreloadAccumulator } from '@silurus/ooxml-core/internal/script-preload-accumulator';
-import type { Presentation, Slide, SlideElement, TextBody } from './types';
+import {
+  FONT_SUBSTITUTE_SCRIPTS,
+  fontFamilyKey,
+  type FontDemand,
+} from '@silurus/ooxml-core/internal/font-sources';
+import type { Slide, SlideElement, TextBody } from './types';
 import { officeFaceWeight } from './powerpoint-line-metrics.js';
 
-/** Theme-referenced typefaces commonly used by PPTX templates. Keys are
- *  lower-cased family names.
- *
- *  {@link GOOGLE_FONT_SUBSTITUTES} supplies base text-face substitutes
- *  (Calibri → Carlito, Cambria → Caladea), the popular free
- *  web fonts and the Arabic Noto fallbacks — shared with docx/xlsx; the
- *  renderer puts each substitute into the canvas font stack so a missing Office
- *  font degrades to an advance-width alternative instead of a generic system serif/sans.
- *  {@link SCRIPT_GOOGLE_FONTS} adds the CJK / Cyrillic / Thai / Devanagari /
- *  Hebrew Noto faces (CJK ordered by document language). Both load only when
- *  `useGoogleFonts` is on. The exact local Calibri route is applied only to
- *  named font choices; the CSS alias for an unavailable face is likewise
- *  enabled only by that explicit opt-in. PPTX has no format-specific additions. */
-export const PPTX_GOOGLE_FONTS: Record<string, FontPreloadEntry> = {
-  ...GOOGLE_FONT_SUBSTITUTES,
-  ...SCRIPT_GOOGLE_FONTS,
-};
+// PPTX font requests: the families a deck paints (`fontPreloadNames`), the
+// exact local Office-face tuples one slide probes, and, when font sources are
+// configured (`LoadOptions.fonts`), the remaining facts of the font-source
+// demand. Library resource policy: DrawingML names faces (ECMA-376
+// §21.1.2.3) and leaves their provision to the host. Demand is computed from
+// the slide model alone; which families a source serves is the source's
+// business, so no provider table appears here.
+
+/** Font-source demand facts beyond the names, collected only when font
+ * sources are configured (the default offline path neither computes nor
+ * retains them). */
+export interface PptxFontDemandFacts {
+  /** The leading `fontPreloadNames` entries that are authored families (theme
+   * major/minor and every run, paragraph-default and slot family); the rest
+   * are library script fallbacks. */
+  readonly familyCount: number;
+  /** Exact authored face tuples ({@link pptxSlideOfficeFontRequests}). */
+  readonly tuples: FontDemand['tuples'];
+  /** Lower-cased authored family → the scoped-substitute scripts its painted
+   * text proves (`FontDemand.substituteScripts`). Families absent here prove
+   * none, so a script-scoped substitute is never requested for them. */
+  readonly substituteScripts: Readonly<Record<string, readonly FontSubstituteScript[]>>;
+}
 
 /** Include authored equation previews in font preparation, so runtime recovery
  * uses the same fonts in main-thread and worker rendering. Iterators retain
@@ -93,10 +102,25 @@ export function* pptxSlideTextRuns(slide: Slide): Generator<string> {
   }
 }
 
+/** Mutable font-source demand facts of an accumulator (see
+ * {@link PptxFontDemandFacts}). */
+interface DemandFactState {
+  readonly tuples: Map<string, FontDemand['tuples'][number]>;
+  readonly scripts: Map<string, Set<FontSubstituteScript>>;
+}
+
+function cloneDemandFacts(state: DemandFactState): DemandFactState {
+  return {
+    tuples: new Map(state.tuples),
+    scripts: new Map([...state.scripts].map(([key, scripts]) => [key, new Set(scripts)])),
+  };
+}
+
 /** Incremental PPTX adapter over core's single script-classification source. */
 export class PptxFontPreloadAccumulator {
   private readonly scripts: ScriptPreloadAccumulator;
   private readonly families: Set<string>;
+  private readonly demand: DemandFactState | null;
 
   constructor(
     private readonly majorFont: string | null,
@@ -105,17 +129,27 @@ export class PptxFontPreloadAccumulator {
     families?: Set<string>,
     private readonly fallback?: CjkLang,
     private readonly scriptNames = new Set<string>(),
+    /** Collect {@link PptxFontDemandFacts} (font sources configured). */
+    demand: boolean | DemandFactState = false,
   ) {
     const cjkLang = classifyCjkFont(majorFont) ?? classifyCjkFont(minorFont) ?? fallback ?? null;
     this.scripts = scripts ?? new ScriptPreloadAccumulator(cjkLang);
     this.families = families ?? new Set();
-    if (majorFont) this.families.add(majorFont);
-    if (minorFont) this.families.add(minorFont);
+    this.demand = demand === false ? null : demand === true ? { tuples: new Map(), scripts: new Map() } : demand;
+    if (majorFont) this.addThemeFamily(majorFont);
+    if (minorFont) this.addThemeFamily(minorFont);
+  }
+
+  /** Theme fonts govern every run that names no face of its own, whatever its
+   * text, so every scoped-substitute script is admitted for them. */
+  private addThemeFamily(family: string): void {
+    this.families.add(family);
+    if (this.demand) this.demand.scripts.set(fontFamilyKey(family), new Set(FONT_SUBSTITUTE_SCRIPTS));
   }
 
   addSlide(slide: Slide): void {
-    if (slide.theme?.majorFont) this.families.add(slide.theme.majorFont);
-    if (slide.theme?.minorFont) this.families.add(slide.theme.minorFont);
+    if (slide.theme?.majorFont) this.addThemeFamily(slide.theme.majorFont);
+    if (slide.theme?.minorFont) this.addThemeFamily(slide.theme.minorFont);
     this.scripts.addText(pptxSlideTextRuns(slide));
     // Keep the union of per-slide choices: later kana must not remove a Han-only
     // slide's SC preload after that slide has already been published.
@@ -124,13 +158,50 @@ export class PptxFontPreloadAccumulator {
         ?? classifyCjkFont(slide.theme ? slide.theme.minorFont : this.minorFont) ?? this.fallback ?? null)) {
       this.scriptNames.add(name);
     }
+    const body = (textBody: TextBody | null | undefined) => {
+      for (const family of textBodyFontFamilies(textBody)) this.families.add(family);
+      if (this.demand) this.proveSubstituteScripts(textBody);
+    };
     for (const el of fontElements(slide.elements)) {
       if (el.type === 'shape') {
-        for (const family of textBodyFontFamilies(el.textBody)) this.families.add(family);
+        body(el.textBody);
       } else if (el.type === 'table') {
         for (const row of el.rows) {
-          for (const cell of row.cells) {
-            for (const family of textBodyFontFamilies(cell.textBody)) this.families.add(family);
+          for (const cell of row.cells) body(cell.textBody);
+        }
+      }
+    }
+    if (this.demand) {
+      const major = slide.theme ? slide.theme.majorFont : this.majorFont;
+      const minor = slide.theme ? slide.theme.minorFont : this.minorFont;
+      for (const request of pptxSlideOfficeFontRequests(slide, major, minor)) {
+        if (request.presenceOnly) continue;
+        const tuple = Object.freeze({
+          family: request.family,
+          weight: request.weight ?? 400,
+          style: request.style ?? 'normal',
+        });
+        this.demand.tuples.set(`${fontFamilyKey(tuple.family)}:${tuple.weight}:${tuple.style}`, tuple);
+      }
+    }
+  }
+
+  /** Record, per family a run names, the scoped-substitute scripts the run's
+   * text proves (core substitute-script.ts). A CSS stack cannot split a run, so
+   * every slot family of the run is credited with its text, exactly as the
+   * renderer's `cssFontStack` admits a scoped substitute for the whole run. */
+  private proveSubstituteScripts(textBody: TextBody | null | undefined): void {
+    const scripts = (this.demand as DemandFactState).scripts;
+    for (const paragraph of textBody?.paragraphs ?? []) {
+      for (const run of paragraph.runs) {
+        if (run.type !== 'text' || !run.text) continue;
+        const families = [run.fontFamily ?? paragraph.defFontFamily, run.fontFamilyEa, run.fontFamilyCs, run.fontFamilySym];
+        for (const script of FONT_SUBSTITUTE_SCRIPTS) {
+          if (!substituteEntryCoversText({ script }, run.text, 'any')) continue;
+          for (const family of families) {
+            if (!family) continue;
+            const key = fontFamilyKey(family);
+            scripts.set(key, (scripts.get(key) ?? new Set()).add(script));
           }
         }
       }
@@ -141,6 +212,22 @@ export class PptxFontPreloadAccumulator {
     return [...new Set([...this.families, ...this.scripts.names(), ...this.scriptNames])];
   }
 
+  /** {@link PptxFontDemandFacts} for {@link names}, or undefined when this
+   * accumulator does not collect them. */
+  demandFacts(): PptxFontDemandFacts | undefined {
+    if (!this.demand) return undefined;
+    const substituteScripts: Record<string, readonly FontSubstituteScript[]> = {};
+    for (const [key, scripts] of this.demand.scripts) {
+      if (scripts.size) substituteScripts[key] = Object.freeze([...scripts].sort());
+    }
+    return Object.freeze({
+      // names() lists the distinct families first, so they are its prefix.
+      familyCount: this.families.size,
+      tuples: Object.freeze([...this.demand.tuples.values()]),
+      substituteScripts: Object.freeze(substituteScripts),
+    });
+  }
+
   withSlide(slide: Slide): PptxFontPreloadAccumulator {
     const candidate = new PptxFontPreloadAccumulator(
       this.majorFont,
@@ -149,6 +236,7 @@ export class PptxFontPreloadAccumulator {
       new Set(this.families),
       this.fallback,
       new Set(this.scriptNames),
+      this.demand ? cloneDemandFacts(this.demand) : false,
     );
     candidate.addSlide(slide);
     return candidate;
