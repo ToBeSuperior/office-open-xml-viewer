@@ -1128,6 +1128,13 @@ export interface ChartTrendline {
 export type ChartType = 'line' | 'stackedLine' | 'stackedLinePct' | 'clusteredBar' | 'clusteredBarH' | 'stackedBar' | 'stackedBarH' | 'stackedBarPct' | 'stackedBarHPct' | 'area' | 'stackedArea' | 'stackedAreaPct' | 'pie' | 'doughnut' | 'scatter' | 'bubble' | 'radar' | 'waterfall' | 'stock' | 'surface' | 'surface3D' | 'boxWhisker' | 'sunburst' | 'treemap' | string;
 export type CjkFallback = 'auto' | CjkLang;
 type CjkLang = 'kr' | 'sc' | 'tc' | 'hk' | 'jp';
+export interface CssApiSource extends FontSourceBase {
+    readonly kind: 'css-api';
+    readonly urlTemplate: string;
+    readonly query?: string;
+    readonly families?: Readonly<Record<string, string | true>>;
+    readonly credentials?: FontSourceCredentials;
+}
 export type DecodedImageBudgetStrategy = 'adaptive' | 'strict';
 export interface DimOptions {
     color: string;
@@ -1173,6 +1180,42 @@ export interface FindMatch<Loc = unknown> {
 }
 export interface FindMatchesOptions {
     caseSensitive?: boolean;
+}
+const FONT_SOURCE_PROTOCOL = 'ooxml-font-source/v1';
+export interface FontFaceCssSource extends FontSourceBase {
+    readonly kind: 'font-face-css';
+    readonly url: string;
+    readonly credentials?: FontSourceCredentials;
+}
+export interface FontFaceDeclaration {
+    readonly family: string;
+    readonly url?: string;
+    readonly data?: ArrayBuffer;
+    readonly weight?: string;
+    readonly style?: string;
+    readonly stretch?: string;
+    readonly unicodeRange?: string;
+}
+export interface FontFilesSource extends FontSourceBase {
+    readonly kind: 'font-files';
+    readonly faces: readonly FontFaceDeclaration[];
+}
+export interface FontResolverSource extends FontSourceBase {
+    readonly kind: 'font-resolver';
+    readonly id: string;
+}
+export type FontSource = CssApiSource | FontFaceCssSource | FontFilesSource | FontResolverSource;
+interface FontSourceBase {
+    readonly protocol: typeof FONT_SOURCE_PROTOCOL;
+    readonly kind: string;
+    readonly substitutes?: readonly FontSubstitution[];
+}
+export type FontSourceCredentials = 'omit' | 'same-origin';
+type FontSubstituteScript = 'arabic';
+export interface FontSubstitution {
+    readonly for: string;
+    readonly use: string;
+    readonly script?: FontSubstituteScript;
 }
 export interface Glow {
     color: string;
@@ -1259,6 +1302,7 @@ export type LoadOptions = LoadOptions__emitterCollision1 & {
     onLayoutComplete?: (error?: unknown) => void;
 };
 interface LoadOptions__emitterCollision1 {
+    fonts?: readonly FontSource[];
     useGoogleFonts?: boolean;
     cjkFallback?: CjkFallback;
     password?: string;

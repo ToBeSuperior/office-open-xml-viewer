@@ -157,6 +157,17 @@ export function auditAwaitCase(file, name, previous, current) {
       candidate = [...candidate.slice(0, index), ...candidate.slice(index + 1)];
     }
   }
+  // DOCX font sources (LoadOptions.fonts) replace the Google-only preload
+  // barrier with the generic font-source barrier at the same position. Accept
+  // exactly that one rename while the merge base still awaits the old callee;
+  // any other addition, removal or reordering still fails.
+  if (file === 'packages/docx/src/document.ts' && name === 'load') {
+    const index = baseline.indexOf('preloadGoogleFonts');
+    if (index >= 0 && candidate[index] === 'doc._loadFontSources'
+      && candidate.filter((entry) => entry === 'doc._loadFontSources').length === 1) {
+      candidate = [...candidate.slice(0, index), 'preloadGoogleFonts', ...candidate.slice(index + 1)];
+    }
+  }
   if (JSON.stringify(candidate) !== JSON.stringify(baseline)) {
     throw new Error(`${file} ${name}: OOXML awaits changed\nmain ${JSON.stringify(baseline)}\nhead ${JSON.stringify(candidate)}`);
   }

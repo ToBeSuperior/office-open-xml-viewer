@@ -1,6 +1,6 @@
-// Internal font-source descriptors, factories and substitution data. Not yet
-// part of the package root API: the `fonts` load option is wired format by
-// format, and the factories become public together with it.
+// Internal font-source descriptors, factories, substitution data, session and
+// the `useGoogleFonts` migration. The public factories are re-exported by the
+// format entries that consume the `fonts` load option.
 export {
   FONT_SOURCE_PROTOCOL,
   assertFontSourceDescriptors,
@@ -54,3 +54,9 @@ export {
   type LoadedSourceFace,
 } from '../fonts/source-session.js';
 export { fetchFontStylesheet, parseFontFaceCss, parseUnicodeRange } from '../fonts/css-source.js';
+export {
+  USE_GOOGLE_FONTS_DEPRECATION_MESSAGE,
+  normalizeFontOptions,
+  resetFontDeprecationWarningsForTests,
+  type FontLoadOptions,
+} from '../fonts/deprecations.js';

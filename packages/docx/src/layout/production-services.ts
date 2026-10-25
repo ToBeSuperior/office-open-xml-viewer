@@ -1,6 +1,10 @@
 import { acquireCanvasGlyphContours } from '../native-glyph-contours.js';
-import { ownValue } from '@silurus/ooxml-core/internal/own-key';
 import { type CjkLang } from '@silurus/ooxml-core';
+import {
+  fontFamilyKey,
+  type FontSubstitution,
+  type LoadedFontSources,
+} from '@silurus/ooxml-core/internal/font-sources';
 import {
   activeFontSet,
   canvasFontString,
@@ -8,7 +12,7 @@ import {
 } from '@silurus/ooxml-core';
 import type { ResolvedFontMetric } from '@silurus/ooxml-core';
 import type { FontSubstituteScript, OfficeFontFallbackRoute } from '@silurus/ooxml-core';
-import { DOCX_GOOGLE_FONTS } from '../google-font-registry.js';
+import { scriptScopedSubstitutedFamilies } from '../font-substitution-scope.js';
 import type { LoadedEmbeddedFontRoute } from '../embedded-fonts.js';
 import { normalizeFontFamilyUncached } from '../line-layout.js';
 import type { LayoutSourceStore } from './layout-source-store.js';
@@ -49,7 +53,11 @@ export interface ProductionLayoutServiceOptions {
   readonly allowFootnoteContinuation?: boolean;
   readonly localMetrics?: Readonly<Record<string, ResolvedFontMetric>>;
   readonly fontMetrics?: Readonly<Record<string, ResolvedFontMetric>>;
-  readonly useGoogleFonts?: boolean;
+  /** Substitutions declared by the configured font sources
+   * (`LoadOptions.fonts`), in option order. Their script scopes delimit scoped
+   * substitution whether or not a face has loaded (native route enumeration
+   * runs before any font loads). Absent: no font source. */
+  readonly fontSubstitutes?: readonly FontSubstitution[];
   readonly cjkFallback?: CjkLang;
   readonly mathResources?: readonly MathLayoutResource[];
   readonly mathDrawables?: ReadonlyMap<string, CanvasImageSource>;
@@ -61,9 +69,11 @@ export interface ProductionLayoutServiceOptions {
   readonly embeddedRoutes?: readonly LoadedEmbeddedFontRoute[];
   /** Exact local registrations, scoped to this FontFaceSet. */
   readonly officeRoutes?: readonly OfficeFontFallbackRoute[];
-  readonly googleFaces?: readonly LoadedFontFaceRecord[];
+  /** Faces the font sources loaded for this document (`font-source-load.ts`):
+   * the demanded names in demand order and the session snapshot. */
+  readonly sourceFonts?: Readonly<{ names: readonly string[]; loaded: LoadedFontSources }>;
   /** Normalized families whose authored face is installed; they are never
-   * routed to a different-family Google substitute (`docxGoogleFontPlan`). */
+   * routed to a different-family substitute (`docxFontFamilyPlan`). */
   readonly installedSubstituteFamilies?: readonly string[];
   /** Normalized authored families the family presence probe found installed. */
   readonly installedFamilies?: readonly string[];
@@ -71,23 +81,25 @@ export interface ProductionLayoutServiceOptions {
   readonly nativeRouteMetrics?: Readonly<Record<string, NativeRouteLineMetric>>;
 }
 
-/** Registry families with a script-scoped visual substitute (core
- * substitute-script.ts), mapped to every substitute family of that script. An
- * installed authored face is never substituted, so it is not scoped either.
- * This registry delimits proof, not slot overrides: the resolver permits an
+/** Families with a script-scoped visual substitute (core
+ * substitute-script.ts) among the substitutions the configured sources
+ * declare, mapped to every substitute family of that script. An installed
+ * authored face is never substituted, so it is not scoped either. These
+ * declarations delimit proof, not slot overrides: the resolver permits an
  * override only when a loaded scoped substitute wins the exact resource tuple,
  * after embedded, local and authored CSS inventory precedence. */
 function docxScriptScopedFamilies(
+  substitutes: readonly FontSubstitution[],
   installed: readonly string[],
 ): Record<string, { script: FontSubstituteScript; substituteFamilies: string[] }> {
-  const scoped = Object.entries(DOCX_GOOGLE_FONTS).filter(([, entry]) => entry.script !== undefined);
-  return Object.fromEntries(scoped
+  const scoped = scriptScopedSubstitutedFamilies(substitutes);
+  return Object.fromEntries([...scoped]
     .filter(([key]) => !installed.includes(key))
-    .map(([key, entry]) => [key, {
-      script: entry.script!,
-      substituteFamilies: [...new Set(scoped
-        .filter(([, other]) => other.script === entry.script && other.loadFamily)
-        .map(([, other]) => other.loadFamily!))],
+    .map(([key, script]) => [key, {
+      script,
+      substituteFamilies: [...new Set(substitutes
+        .filter((substitution) => substitution.script === script)
+        .map((substitution) => substitution.use))],
     }]));
 }
 
@@ -192,30 +204,30 @@ export function createProductionTextLayoutService(
       style: metric.style ?? 'normal',
     });
   }
-  if (options.useGoogleFonts) {
-    const successfulGoogle = loadedFaces(options.googleFaces ?? []);
+  if (options.sourceFonts) {
+    // A demanded family resolves to the faces its claiming source loaded: the
+    // family's own faces, or those of the substitute that loaded for it
+    // (LoadedFontSources.substitutions holds only substitutions with a loaded
+    // face). Installed families were never demanded.
+    const { names, loaded } = options.sourceFonts;
+    const sourceFaces = loadedFaces(loaded.faces.map((face) => ({
+      family: face.family, status: 'loaded', style: face.style, weight: face.weight,
+    })));
     const seen = new Set<string>();
-    for (const name of source.fonts.preloadNames) {
-      if (!name) continue;
-      const key = name.toLowerCase();
-      if (seen.has(key)) continue;
+    for (const name of names) {
+      const key = fontFamilyKey(name);
+      if (!key || seen.has(key)) continue;
       seen.add(key);
-      const entry = ownValue(DOCX_GOOGLE_FONTS, key);
-      const resolvedFamily = entry?.loadFamily ?? name;
-      if (!entry) continue;
-      if (normalizedFaceFamily(resolvedFamily) !== normalizedFaceFamily(name)
-        && options.installedSubstituteFamilies?.includes(key)) continue;
-      for (const loaded of successfulGoogle.filter(
-        (face) => face.family === normalizedFaceFamily(resolvedFamily),
-      )) {
+      const substitution = loaded.substitutions.get(key);
+      const served = normalizedFaceFamily(substitution?.family ?? name);
+      for (const face of sourceFaces.filter((candidate) => candidate.family === served)) {
         inventory.push({
           requestedFamily: name,
-          resolvedFamily: loaded.displayFamily,
-          source: normalizedFaceFamily(resolvedFamily) === normalizedFaceFamily(name)
-            ? 'google' : 'substitute',
-          ...(entry.script === undefined ? {} : { script: entry.script }),
-          weight: loaded.weight,
-          style: loaded.style,
+          resolvedFamily: face.displayFamily,
+          source: substitution ? 'substitute' : 'source',
+          ...(substitution?.script === undefined ? {} : { script: substitution.script }),
+          weight: face.weight,
+          style: face.style,
         });
       }
     }
@@ -266,8 +278,8 @@ export function createProductionTextLayoutService(
             family, source.fonts.familyClasses, source.fonts.familyPitches, region,
           )])),
       ])),
-      scriptScopedFamilies: options.useGoogleFonts
-        ? docxScriptScopedFamilies(options.installedSubstituteFamilies ?? [])
+      scriptScopedFamilies: options.fontSubstitutes?.length
+        ? docxScriptScopedFamilies(options.fontSubstitutes, options.installedSubstituteFamilies ?? [])
         : undefined,
       nativeRouteMetrics: options.nativeRouteMetrics,
       nativeFamilyLists: Object.fromEntries(routedFontFamilies.map((family) => [

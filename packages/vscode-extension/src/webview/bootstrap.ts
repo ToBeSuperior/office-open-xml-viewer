@@ -20,7 +20,7 @@ declare function acquireVsCodeApi(): {
 };
 
 import { XlsxViewer } from '@silurus/ooxml-xlsx';
-import { DocxScrollViewer } from '@silurus/ooxml-docx';
+import { DocxScrollViewer, googleFonts } from '@silurus/ooxml-docx';
 import { PptxScrollViewer } from '@silurus/ooxml-pptx';
 import { svgExtents, type ZoomableViewer } from '@silurus/ooxml-core';
 import { loadAtContainerFit, loadAtNaturalScale } from './naturalScale';
@@ -231,7 +231,8 @@ async function initDocx(buffer: ArrayBuffer, useGoogleFonts: boolean): Promise<v
   const viewer = new DocxScrollViewer(viewerContainer, {
     math,
     ...fullRenderers,
-    useGoogleFonts,
+    // DOCX consumes `fonts`; the setting keeps its name (design §2.4).
+    ...(useGoogleFonts ? { fonts: [googleFonts()] } : {}),
     progressiveLayout: true,
     enableTextSelection: true,
     enableElementSelection: true,

@@ -76,7 +76,6 @@ export interface LayoutSourceFontFacts {
   readonly embeddedFonts: readonly EmbeddedFontRef[];
   readonly renderedFamilies: readonly string[];
   readonly scriptCjkLanguage?: import('@silurus/ooxml-core').CjkLang | null;
-  readonly preloadNames: readonly (string | null | undefined)[];
   readonly defaultBodyFontSizePt: number;
 }
 

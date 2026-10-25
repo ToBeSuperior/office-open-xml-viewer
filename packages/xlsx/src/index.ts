@@ -283,3 +283,16 @@ export type {
 } from './types.js';
 
 export type { BlendMode, BlipEffectContainer, BlipEffectFill, BlipEffectImageFill } from '@silurus/ooxml-core';
+// Shared `LoadOptions.fonts` descriptor types. This entry still loads fonts
+// through `useGoogleFonts`; the font-source factories are exported here once
+// this format consumes `fonts`.
+export type {
+  CssApiSource,
+  FontFaceCssSource,
+  FontFaceDeclaration,
+  FontFilesSource,
+  FontResolverSource,
+  FontSource,
+  FontSourceCredentials,
+  FontSubstitution,
+} from '@silurus/ooxml-core/internal/font-sources';

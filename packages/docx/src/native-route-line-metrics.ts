@@ -81,7 +81,7 @@ export function docxNativeRouteRequests(
   };
   visit(doc.majorFont, false, false, undefined);
   visit(doc.minorFont, false, false, undefined);
-  for (const usage of docxRenderedTextUsages(doc, 'google-preload')) {
+  for (const usage of docxRenderedTextUsages(doc, 'font-demand')) {
     const bold = usage.bold === true;
     const italic = usage.italic === true;
     for (const family of usage.fontFamilies) visit(family, bold, italic, usage.eastAsiaLanguage);

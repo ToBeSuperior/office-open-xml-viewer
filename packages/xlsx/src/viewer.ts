@@ -338,6 +338,7 @@ type ForwardedViewerLoadOptions = {
 function viewerLoadOptions(opts: LoadOptions, mode: 'main' | 'worker'): LoadOptions {
   const forwarded: ForwardedViewerLoadOptions = {
     password: opts.password,
+    fonts: opts.fonts,
     useGoogleFonts: opts.useGoogleFonts,
     cjkFallback: opts.cjkFallback,
     maxZipEntryBytes: opts.maxZipEntryBytes,

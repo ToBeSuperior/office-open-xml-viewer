@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { sourceFontLayoutOptions } from '../testing/font-sources.js';
 import {
   buildSegments,
   layoutLines,
@@ -817,8 +818,7 @@ describe('production layout service integration', () => {
     });
     const failed = createLayoutServices(doc, {
       measureContext: measureContext(),
-      googleFaces: [],
-      useGoogleFonts: true,
+      ...sourceFontLayoutOptions(doc, []),
     });
     const missingEmbedded = failed.text.shape({ text: 'x', fontSizePt: 10, fonts: { ascii: 'Broken Embedded' } });
     const missingGoogle = failed.text.shape({ text: 'x', fontSizePt: 10, fonts: { ascii: 'Calibri' } });
@@ -829,8 +829,7 @@ describe('production layout service integration', () => {
     const carlito = { family: 'Carlito', weight: '400', style: 'normal', status: 'loaded' } as FontFace;
     const loaded = createLayoutServices(doc, {
       measureContext: measureContext(),
-      googleFaces: [carlito],
-      useGoogleFonts: true,
+      ...sourceFontLayoutOptions(doc, [carlito]),
     });
     const substituted = loaded.text.shape({ text: 'x', fontSizePt: 10, fonts: { ascii: 'Calibri' } });
     expect(substituted.spans[0]?.font).toMatchObject({ source: 'substitute', resolvedFamily: 'Carlito' });
@@ -944,7 +943,6 @@ describe('production layout service integration', () => {
       measureContext: measureContext(),
       embeddedRoutes: [{ requestedFamily: 'Embedded', resolvedFamily: '__ooxml_docx_embedded_same',
         weight: 700, style: 'italic' as const, resourceIdentity: 'embedded:__ooxml_docx_embedded_same' }],
-      googleFaces: [] as FontFace[],
       localMetrics: { authored: { family: '__local_authored', lineHeightRatio: 1.25 } },
     };
     const main = createLayoutServices(model(), options);
@@ -959,8 +957,8 @@ describe('production layout service integration', () => {
 
 it('retains CJK routes in registered and generic fonts with different service fingerprints', () => {
   const document = model({ majorFont: 'Calibri', minorFont: 'Calibri' });
-  const options = { measureContext: measureContext(), useGoogleFonts: true,
-    googleFaces: [{ family: 'Carlito', status: 'loaded', weight: '400', style: 'normal' }] as FontFace[],
+  const options = { measureContext: measureContext(),
+    ...sourceFontLayoutOptions(document, [{ family: 'Carlito', status: 'loaded', weight: '400', style: 'normal' }]),
   };
   const sc = createLayoutServices(document, { ...options, cjkFallback: 'sc' });
   const tc = createLayoutServices(document, { ...options, cjkFallback: 'tc' });
