@@ -343,7 +343,9 @@ export class FontSourceSession {
     try { normalized = normalizeFontDemand(demand); }
     catch (error) { return Promise.reject(error); }
     const task = this.queue.then(() => this.ensureNow(normalized));
-    this.queue = task.catch(() => undefined);
+    // The queue only orders ensures: it must never hold a settled snapshot
+    // (its FontFaces) past the caller's own reference.
+    this.queue = task.then(() => undefined, () => undefined);
     return task;
   }
 

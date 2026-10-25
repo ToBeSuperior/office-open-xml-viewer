@@ -525,6 +525,41 @@ describe('FontSourceSession: registration order', () => {
   });
 });
 
+describe('FontSourceSession: released sessions keep no FontFace alive', () => {
+  it('lets every face of a released session be collected without another ensure', async () => {
+    setFlagsFromString('--expose-gc');
+    const gc = runInNewContext('gc') as () => void;
+    let live = 0;
+    const registry = new FinalizationRegistry<undefined>(() => { live--; });
+    class TrackedFontFace extends FakeFontFace {
+      constructor(family: string, source: string | ArrayBuffer, descriptors?: FontFaceDescriptors) {
+        super(family, source, descriptors);
+        registry.register(this, undefined);
+        live++;
+      }
+    }
+    G.FontFace = TrackedFontFace;
+    const set = fakeSet();
+    const kept: FontSourceSession[] = [];
+    for (let index = 0; index < 5; index++) {
+      const session = new FontSourceSession({
+        sources: [fontFiles({ faces: [{ family: `F${index}`, url: `https://app.example/f${index}.woff2` }] })],
+        fontSet: asSet(set),
+      });
+      await session.ensure(demand([`F${index}`]));
+      session.release();
+      kept.push(session);
+    }
+    expect(set.faces).toHaveLength(0);
+    for (let round = 0; round < 50 && live > 0; round++) {
+      gc();
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    expect(live).toBe(0);
+    expect(kept).toHaveLength(5);
+  });
+});
+
 describe('FontSourceSession: released sessions keep no font content', () => {
   it('drops the stylesheet family index with the last release, even while session objects live on', async () => {
     setFlagsFromString('--expose-gc');

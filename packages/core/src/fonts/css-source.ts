@@ -24,9 +24,15 @@
  * matches the browser that will paint. Without `FontFace` (Node) a fallback
  * CSS Fonts 4 §4 grammar applies; it accepts math functions unevaluated and
  * treats `auto` as the initial value, where a browser that does not support
- * `auto` ignores the declaration. `src` and `font-family` always use the
- * library's own parse (they decide what is fetched). Library policy on top
- * of CSS Fonts Level 4:
+ * `auto` ignores the declaration. `src` validity is the host's as well,
+ * probed per entry (`new FontFace(family, entry)` parses without fetching);
+ * the url to register is then taken from the last valid declaration with the
+ * library's own tokenizer, and the fallback grammar follows Chrome (one
+ * `format()` argument; svg, embedded-opentype and unknown formats or techs
+ * invalidate their entry). `font-family` uses the library's own parse. All
+ * structure comes from one CSS Syntax §4.3.1 tokenizer ({@link consumeToken}):
+ * hash, at-keyword, numeric, ident-like (url, function), string, CDO/CDC and
+ * delim tokens. Library policy on top of CSS Fonts Level 4:
  *
  * - only `url()` sources are accepted: `local()` would let a stylesheet probe
  *   or paint host fonts, which is the host-fallback path's job. The first
@@ -108,60 +114,123 @@ function skipComment(css: string, at: number): number {
   return end < 0 ? css.length : end + 2;
 }
 
-/** Index after the string token starting at the quote at `at`
- * ({@link consumeStringToken}). */
-function skipString(css: string, at: number): number {
-  return consumeStringToken(css, at).end;
+/** One CSS token (CSS Syntax §4.3.1). Comments are reported as tokens so
+ * callers can keep source positions; nothing else is folded away. */
+export type CssToken =
+  | { readonly type: 'whitespace' | 'comment' | 'CDO' | 'CDC' | 'bad-string' | 'bad-url' }
+  | { readonly type: 'string' | 'ident' | 'function' | 'at-keyword' | 'url' | 'delim'; readonly value: string }
+  | { readonly type: 'hash'; readonly value: string; readonly id: boolean }
+  | { readonly type: 'number' | 'percentage'; readonly value: number }
+  | { readonly type: 'dimension'; readonly value: number; readonly unit: string }
+  | { readonly type: '(' | ')' | '[' | ']' | '{' | '}' | ',' | ':' | ';' };
+
+const PUNCTUATION = '()[]{},:;';
+const isDigit = (char: string | undefined) => char !== undefined && char >= '0' && char <= '9';
+
+/** "Check if three code points would start a number" (§4.3.10). */
+function startsNumber(text: string, at: number): boolean {
+  const char = text[at];
+  if (isDigit(char)) return true;
+  if (char === '.') return isDigit(text[at + 1]);
+  if (char === '+' || char === '-') return isDigit(text[at + 1]) || (text[at + 1] === '.' && isDigit(text[at + 2]));
+  return false;
 }
 
-/**
- * End of the non-structural token starting at `at`, following CSS Syntax
- * §4.3.1 so structure is found exactly where the value tokenizer finds it:
- * a comment, a string, a numeric token (with its `%` or unit), or an
- * ident-like token, which is a url token when its decoded name is `url`
- * followed by `(` and an unquoted argument (`u\72l(x{y)` included).
- * Returns -1 when `at` starts none of these (a single code point follows).
- */
-function skipToken(css: string, at: number): number {
-  const char = css[at];
-  if (char === '/' && css[at + 1] === '*') return skipComment(css, at);
-  if (char === '"' || char === "'") return skipString(css, at);
-  NUMBER.lastIndex = at;
-  const number = NUMBER.exec(css);
-  if (number) {
-    const end = at + number[0].length;
-    if (css[end] === '%') return end + 1;
-    return startsIdentifier(css, end) ? consumeIdent(css, end).end : end;
+/** "Consume an ident-like token" (§4.3.4): an ident, a function token, or a
+ * url token when the decoded name is `url` and the argument is unquoted. */
+function consumeIdentLike(text: string, at: number): { token: CssToken; end: number } {
+  const ident = consumeIdent(text, at);
+  if (text[ident.end] !== '(') return { token: { type: 'ident', value: ident.value }, end: ident.end };
+  if (ident.value.toLowerCase() === 'url') {
+    let first = ident.end + 1;
+    while (first < text.length && isWhitespace(text.charCodeAt(first))) first++;
+    if (text[first] !== '"' && text[first] !== "'") {
+      const url = consumeUrlToken(text, ident.end + 1);
+      return { token: url.value === null ? { type: 'bad-url' } : { type: 'url', value: url.value }, end: url.end };
+    }
   }
-  if (!startsIdentifier(css, at)) return -1;
-  const ident = consumeIdent(css, at);
-  if (css[ident.end] !== '(' || ident.value.toLowerCase() !== 'url') return ident.end;
-  let first = ident.end + 1;
-  while (first < css.length && isWhitespace(css.charCodeAt(first))) first++;
-  // A quoted url("…") is an ordinary function: its `(` is structure.
-  if (css[first] === '"' || css[first] === "'") return ident.end;
-  return consumeUrlToken(css, ident.end + 1).end;
+  return { token: { type: 'function', value: ident.value }, end: ident.end + 1 };
 }
 
-const CLOSER: Readonly<Record<string, string>> = { '{': '}', '(': ')', '[': ']' };
+/** "Consume a token" (§4.3.1) at `at` (input already preprocessed, §3.3). */
+export function consumeToken(text: string, at: number): { token: CssToken; end: number } {
+  const char = text[at];
+  if (char === '/' && text[at + 1] === '*') return { token: { type: 'comment' }, end: skipComment(text, at) };
+  if (isWhitespace(text.charCodeAt(at))) {
+    let end = at + 1;
+    while (end < text.length && isWhitespace(text.charCodeAt(end))) end++;
+    return { token: { type: 'whitespace' }, end };
+  }
+  if (char === '"' || char === "'") {
+    const string = consumeStringToken(text, at);
+    return { token: string.bad ? { type: 'bad-string' } : { type: 'string', value: string.value }, end: string.end };
+  }
+  if (startsNumber(text, at)) {
+    NUMBER.lastIndex = at;
+    const match = NUMBER.exec(text) as RegExpExecArray;
+    const value = Number(match[0]);
+    const end = at + match[0].length;
+    if (startsIdentifier(text, end)) {
+      const unit = consumeIdent(text, end);
+      return { token: { type: 'dimension', value, unit: unit.value.toLowerCase() }, end: unit.end };
+    }
+    if (text[end] === '%') return { token: { type: 'percentage', value }, end: end + 1 };
+    return { token: { type: 'number', value }, end };
+  }
+  if (char === '#' && (isNameUnit(text.charCodeAt(at + 1)) || startsValidEscape(text, at + 1))) {
+    const id = startsIdentifier(text, at + 1);
+    const name = consumeIdent(text, at + 1);
+    return { token: { type: 'hash', value: name.value, id }, end: name.end };
+  }
+  if (char === '-' && text.startsWith('-->', at)) return { token: { type: 'CDC' }, end: at + 3 };
+  if (char === '<' && text.startsWith('<!--', at)) return { token: { type: 'CDO' }, end: at + 4 };
+  if (char === '@' && startsIdentifier(text, at + 1)) {
+    const name = consumeIdent(text, at + 1);
+    return { token: { type: 'at-keyword', value: name.value }, end: name.end };
+  }
+  if (startsIdentifier(text, at)) return consumeIdentLike(text, at);
+  if (PUNCTUATION.includes(char)) return { token: { type: char as '(' }, end: at + 1 };
+  const code = text.codePointAt(at) as number;
+  return { token: { type: 'delim', value: String.fromCodePoint(code) }, end: at + (code > 0xffff ? 2 : 1) };
+}
+
+/** The whole token stream of `text` (preprocessed per §3.3 first). */
+export function tokenizeCss(text: string): CssToken[] {
+  const input = preprocessCss(text);
+  const tokens: CssToken[] = [];
+  for (let index = 0; index < input.length;) {
+    const { token, end } = consumeToken(input, index);
+    tokens.push(token);
+    index = end;
+  }
+  return tokens;
+}
+
+/** CSS Syntax §3.3 input preprocessing: CR LF, CR and FF become LF; NUL and
+ * lone surrogates become U+FFFD. */
+function preprocessCss(css: string): string {
+  return css.replace(/\r\n?|\f/g, '\n')
+    .replace(/\0|[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g, REPLACEMENT);
+}
 
 /**
- * Scan component values from `at` until one of `stops` appears outside any
- * block, string, comment or url token. Returns the stop's index, or the end of
- * input. Blocks are tracked with an explicit stack of expected closers (a
- * mismatched closer is an ordinary token, as in CSS Syntax §5.4.8).
+ * Scan tokens from `at` until a punctuation token in `stops` appears outside
+ * any block. Returns its index, or the end of input. `(`, `[`, `{` and
+ * function tokens open blocks; only the matching closer ends one (a
+ * mismatched closer is an ordinary token, CSS Syntax §5.4.8).
  */
 function scanUntil(css: string, at: number, stops: string): number {
   const expected: string[] = [];
   let index = at;
   while (index < css.length) {
-    const end = skipToken(css, index);
-    if (end >= 0) { index = end; continue; }
-    const char = css[index];
-    if (expected.length === 0 && stops.includes(char)) return index;
-    if (char === '{' || char === '(' || char === '[') expected.push(CLOSER[char]);
-    else if (expected.length && char === expected[expected.length - 1]) expected.pop();
-    index++;
+    const { token, end } = consumeToken(css, index);
+    const type = token.type;
+    if (expected.length === 0 && type.length === 1 && stops.includes(type)) return index;
+    if (type === '(' || type === 'function') expected.push(')');
+    else if (type === '[') expected.push(']');
+    else if (type === '{') expected.push('}');
+    else if (expected.length && type === expected[expected.length - 1]) expected.pop();
+    index = end;
   }
   return css.length;
 }
@@ -172,16 +241,13 @@ function blockEnd(css: string, at: number): number {
   return end < css.length ? end : -1;
 }
 
-/** `text` without comments outside strings and url tokens. */
+/** `text` with every comment token replaced by a space. */
 function stripComments(text: string): string {
   let out = '';
-  let index = 0;
-  while (index < text.length) {
-    if (text[index] === '/' && text[index + 1] === '*') { index = skipComment(text, index); out += ' '; continue; }
-    const end = skipToken(text, index);
-    const next = end >= 0 ? end : index + 1;
-    out += text.slice(index, next);
-    index = next;
+  for (let index = 0; index < text.length;) {
+    const { token, end } = consumeToken(text, index);
+    out += token.type === 'comment' ? ' ' : text.slice(index, end);
+    index = end;
   }
   return out;
 }
@@ -400,56 +466,32 @@ type ValueToken =
 
 const NUMBER = /[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?/y;
 
-/** Tokenize a descriptor value. A bad string, a bad url or an unterminated
- * function becomes a `bad` token, which no grammar accepts. */
+/** Descriptor-value view of the token stream ({@link consumeToken}): white
+ * space and comments dropped, a function token taking its arguments up to the
+ * matching `)`. A bad string, a bad url or an unterminated function becomes a
+ * `bad` token, which no grammar accepts; every other token kind is a delim. */
 function tokenizeValue(text: string): ValueToken[] {
   const tokens: ValueToken[] = [];
   let index = 0;
   while (index < text.length) {
-    const char = text[index];
-    if (isWhitespace(text.charCodeAt(index))) { index++; continue; }
-    if (char === '/' && text[index + 1] === '*') { index = skipComment(text, index); continue; }
-    if (char === '"' || char === "'") {
-      const string = consumeStringToken(text, index);
-      tokens.push(string.bad ? { type: 'bad' } : { type: 'string', value: string.value });
-      index = string.end;
-      continue;
-    }
-    if (char === ',') { tokens.push({ type: 'comma' }); index++; continue; }
-    NUMBER.lastIndex = index;
-    const number = NUMBER.exec(text);
-    if (number) {
-      const value = Number(number[0]);
-      index += number[0].length;
-      if (text[index] === '%') { tokens.push({ type: 'percentage', value }); index++; }
-      else if (startsIdentifier(text, index)) {
-        const unit = consumeIdent(text, index);
-        tokens.push({ type: 'dimension', value, unit: unit.value.toLowerCase() });
-        index = unit.end;
-      } else tokens.push({ type: 'number', value });
-      continue;
-    }
-    if (startsIdentifier(text, index)) {
-      const ident = consumeIdent(text, index);
-      index = ident.end;
-      if (text[index] !== '(') { tokens.push({ type: 'ident', value: ident.value }); continue; }
-      const name = ident.value.toLowerCase();
-      let first = index + 1;
-      while (first < text.length && isWhitespace(text.charCodeAt(first))) first++;
-      if (name === 'url' && text[first] !== '"' && text[first] !== "'") {
-        const url = consumeUrlToken(text, index + 1);
-        tokens.push(url.value === null ? { type: 'bad' } : { type: 'url', value: url.value });
-        index = url.end;
+    const { token, end } = consumeToken(text, index);
+    switch (token.type) {
+      case 'whitespace': case 'comment': break;
+      case 'string': case 'ident': case 'url': tokens.push({ type: token.type, value: token.value }); break;
+      case 'number': case 'percentage': tokens.push({ type: token.type, value: token.value }); break;
+      case 'dimension': tokens.push({ type: 'dimension', value: token.value, unit: token.unit }); break;
+      case 'bad-string': case 'bad-url': tokens.push({ type: 'bad' }); break;
+      case ',': tokens.push({ type: 'comma' }); break;
+      case 'function': {
+        const close = scanUntil(text, end, ')');
+        if (close >= text.length) { tokens.push({ type: 'bad' }); return tokens; }
+        tokens.push({ type: 'function', name: token.value.toLowerCase(), args: text.slice(end, close) });
+        index = close + 1;
         continue;
       }
-      const close = scanUntil(text, index + 1, ')');
-      if (close >= text.length) { tokens.push({ type: 'bad' }); break; }
-      tokens.push({ type: 'function', name, args: text.slice(index + 1, close) });
-      index = close + 1;
-      continue;
+      default: tokens.push({ type: 'delim', value: text.slice(index, end) }); break;
     }
-    tokens.push({ type: 'delim', value: char });
-    index++;
+    index = end;
   }
   return tokens;
 }
@@ -543,64 +585,90 @@ function parseStyle(value: string): DescriptorValue {
 }
 
 const FORMAT_KEYWORDS = new Set(['collection', 'embedded-opentype', 'opentype', 'svg', 'truetype', 'woff', 'woff2']);
-const SUPPORTED_FORMATS = new Set(['woff2', 'woff', 'truetype', 'opentype']);
+/** Formats the fallback grammar treats as supported (CSS Fonts 4 §4.3.1: an
+ * entry with an unsupported format is dropped at parse time). Chosen to match
+ * Chrome, the reference engine: svg and embedded-opentype are unsupported,
+ * and the legacy `-variations` strings are accepted. */
+const FALLBACK_SUPPORTED_FORMATS = new Set([
+  'woff2', 'woff', 'truetype', 'opentype', 'collection',
+  'woff2-variations', 'woff-variations', 'truetype-variations', 'opentype-variations',
+]);
+/** Formats whose file the library registers (a collection is not). */
+const ACCEPTED_FORMATS = new Set([
+  'woff2', 'woff', 'truetype', 'opentype',
+  'woff2-variations', 'woff-variations', 'truetype-variations', 'opentype-variations',
+]);
 const TECH_KEYWORDS = new Set([
   'features-opentype', 'features-aat', 'features-graphite', 'color-colrv0', 'color-colrv1', 'color-svg',
   'color-sbix', 'color-cbdt', 'variations', 'palettes', 'incremental-patch', 'incremental-range', 'incremental-auto',
 ]);
 
-/**
- * `src` (CSS Fonts 4 §4.3): `[ <url> [format(<font-format>)]? [tech(<font-tech>#)]? | local(<family-name>) ]#`.
- * Parsed forgivingly as CSS Fonts 4 specifies: invalid entries (a bad url
- * included) are dropped, and the descriptor is invalid (null) only when no
- * entry is valid. `url` is the first valid entry the library accepts (a url
- * whose format is absent or supported, without `tech()`), or null when the
- * valid descriptor offers none (for example only `local()`), which drops the
- * rule.
- */
-function parseSrc(value: string): { readonly url: string | null } | null {
-  const tokens = tokenizeValue(value);
-  let valid = false;
-  let accepted: string | null = null;
-  for (const entry of commaSeparated(tokens)) {
-    const [head, ...rest] = entry;
-    if (!head) continue;
-    if (head.type === 'function' && head.name === 'local') {
-      if (rest.length === 0 && parseFamily(head.args) !== null) valid = true;
-      continue;
-    }
-    let url: string | null = null;
-    if (head.type === 'url') url = head.value;
-    else if (head.type === 'function' && head.name === 'url') {
-      const args = tokenizeValue(head.args);
-      url = args.length === 1 && args[0].type === 'string' ? args[0].value : null;
-    }
-    if (!url) continue;
-    let index = 0;
-    let supported = true;
-    if (rest[index]?.type === 'function' && (rest[index] as { name: string }).name === 'format') {
-      const args = tokenizeValue((rest[index] as { args: string }).args);
-      const formats = commaSeparated(args);
-      const names = formats.map((group) => (group.length === 1
-        && (group[0].type === 'string' || (group[0].type === 'ident' && formats.length === 1))
-        ? (group[0] as { value: string }).value.toLowerCase() : null));
-      if (!names.length || names.some((name) => name === null)) continue;
-      if (args[0]?.type === 'ident' && !FORMAT_KEYWORDS.has(names[0] as string)) continue;
-      supported = names.some((name) => SUPPORTED_FORMATS.has(name as string));
-      index++;
-    }
-    if (rest[index]?.type === 'function' && (rest[index] as { name: string }).name === 'tech') {
-      const args = tokenizeValue((rest[index] as { args: string }).args);
-      const techs = commaSeparated(args);
-      if (!techs.every((group) => group.length === 1 && TECH_KEYWORDS.has(keyword(group[0]) ?? ''))) continue;
-      supported = false;
-      index++;
-    }
-    if (index !== rest.length) continue;
-    valid = true;
-    if (supported && accepted === null) accepted = url;
+/** One `src` entry by the fallback grammar: null when invalid, else whether
+ * it is a url entry the library can register, and that url. */
+function srcEntry(entry: readonly ValueToken[]): { readonly url: string | null } | null {
+  const [head, ...rest] = entry;
+  if (!head) return null;
+  if (head.type === 'function' && head.name === 'local') {
+    return rest.length === 0 && parseFamily(head.args) !== null ? { url: null } : null;
   }
-  return valid ? { url: accepted } : null;
+  let url: string | null = null;
+  if (head.type === 'url') url = head.value;
+  else if (head.type === 'function' && head.name === 'url') {
+    const args = tokenizeValue(head.args);
+    url = args.length === 1 && args[0].type === 'string' ? args[0].value : null;
+    if (url === null) return null;
+  } else {
+    return null;
+  }
+  let index = 0;
+  let accepted = url !== '';
+  const next = rest[index];
+  if (next?.type === 'function' && next.name === 'format') {
+    // Exactly one argument: a string or a format keyword.
+    const args = tokenizeValue(next.args);
+    if (args.length !== 1) return null;
+    const [format] = args;
+    if (format.type !== 'string' && !(format.type === 'ident' && FORMAT_KEYWORDS.has(format.value.toLowerCase()))) {
+      return null;
+    }
+    const name = format.value.toLowerCase();
+    if (!FALLBACK_SUPPORTED_FORMATS.has(name)) return null;
+    accepted &&= ACCEPTED_FORMATS.has(name);
+    index++;
+  }
+  const tech = rest[index];
+  if (tech?.type === 'function' && tech.name === 'tech') {
+    const groups = commaSeparated(tokenizeValue(tech.args));
+    if (!groups.every((group) => group.length === 1 && TECH_KEYWORDS.has(keyword(group[0]) ?? ''))) return null;
+    // Support for a font technology cannot be evaluated here.
+    accepted = false;
+    index++;
+  }
+  if (index !== rest.length) return null;
+  return { url: accepted ? url : null };
+}
+
+/**
+ * `src` (CSS Fonts 4 §4.3): `[ <url> [format(<font-format>)]? [tech(<font-tech>#)]? | local(<family-name>) ]#`,
+ * parsed forgivingly: an invalid entry is dropped, and the declaration is
+ * invalid (null) only when no entry is valid. Entry validity is the host's
+ * (`entryValid`, a probe FontFace per entry) where the realm has FontFace,
+ * the fallback grammar otherwise. `url` is the first valid entry the library
+ * registers (a non-empty url with an accepted or absent format and no
+ * `tech()`), or null when the valid declaration offers none (only `local()`,
+ * say), which drops the rule.
+ */
+function parseSrc(value: string, entryValid: ((text: string) => boolean) | null): { readonly url: string | null } | null {
+  let valid = false;
+  let url: string | null = null;
+  for (const text of splitTopLevel(value, ',')) {
+    const parsed = srcEntry(tokenizeValue(text));
+    const isValid = entryValid ? entryValid(cssTrim(text)) : parsed !== null;
+    if (!isValid) continue;
+    valid = true;
+    if (url === null && parsed?.url) url = parsed.url;
+  }
+  return valid ? { url } : null;
 }
 
 /** `unicode-range` (CSS Fonts 4 §4.5): valid only when every range parses.
@@ -636,24 +704,35 @@ const PROBE_FAMILY = 'ooxml-descriptor-probe';
  * FontFaceSet entry; main thread and worker) is checked by
  * `tests/patterns/font-descriptor-host-validation.spec.ts`.
  */
-function hostDescriptorValidator(): ((key: FaceDescriptorKey, text: string) => DescriptorValue) | null {
+interface HostValidator {
+  descriptor(key: FaceDescriptorKey, text: string): DescriptorValue;
+  /** One `src` entry, probed as the whole source (`new FontFace(family, src)`
+   * parses src without fetching until `load()`). */
+  srcEntry(text: string): boolean;
+}
+
+function hostDescriptorValidator(): HostValidator | null {
   const Face = (globalThis as { FontFace?: typeof FontFace }).FontFace;
   if (typeof Face !== 'function') return null;
   const memo = new Map<string, boolean>();
-  return (key, text) => {
-    const memoKey = `${key}\n${text}`;
+  const probe = (memoKey: string, create: () => FontFace) => {
     let valid = memo.get(memoKey);
     if (valid === undefined) {
       try {
-        const probe = new Face(PROBE_FAMILY, `local(${PROBE_FAMILY})`, { [key]: text });
-        probe.loaded?.catch(() => undefined);
-        valid = probe.status !== 'error';
+        const face = create();
+        face.loaded?.catch(() => undefined);
+        valid = face.status !== 'error';
       } catch {
         valid = false;
       }
       memo.set(memoKey, valid);
     }
-    return valid ? { value: text } : null;
+    return valid;
+  };
+  return {
+    descriptor: (key, text) => (probe(`${key}\n${text}`,
+      () => new Face(PROBE_FAMILY, `local(${PROBE_FAMILY})`, { [key]: text })) ? { value: text } : null),
+    srcEntry: (text) => probe(`src\n${text}`, () => new Face(PROBE_FAMILY, text)),
   };
 }
 
@@ -669,10 +748,10 @@ function parseFontFaceBody(
   body: string,
   stylesheetUrl: string,
   location: string,
-  validateHost: ((key: FaceDescriptorKey, text: string) => DescriptorValue) | null,
+  validateHost: HostValidator | null,
 ): FontFaceDeclaration | null {
   let family: string | null = null;
-  let src: string | null = null;
+  const srcCandidates: string[] = [];
   const candidates: Record<FaceDescriptorKey, string[]> = { weight: [], style: [], stretch: [], unicodeRange: [] };
   for (const raw of splitTopLevel(body, ';')) {
     const declaration = stripComments(raw);
@@ -687,11 +766,7 @@ function parseFontFaceBody(
     if (scanUntil(value, 0, '{') < value.length || /!\s*important\s*$/i.test(value)) continue;
     switch (name) {
       case 'font-family': family = parseFamily(value) ?? family; break;
-      case 'src': {
-        const parsed = parseSrc(value);
-        if (parsed) src = parsed.url;
-        break;
-      }
+      case 'src': srcCandidates.push(value); break;
       case 'font-weight': candidates.weight.push(cssTrim(value)); break;
       case 'font-style': candidates.style.push(cssTrim(value)); break;
       case 'font-stretch': candidates.stretch.push(cssTrim(value)); break;
@@ -706,11 +781,20 @@ function parseFontFaceBody(
   for (const key of Object.keys(candidates) as FaceDescriptorKey[]) {
     const texts = candidates[key];
     for (let index = texts.length - 1; index >= 0; index--) {
-      const parsed = validateHost ? validateHost(key, texts[index]) : GRAMMAR[key](texts[index]);
+      const parsed = validateHost ? validateHost.descriptor(key, texts[index]) : GRAMMAR[key](texts[index]);
       if (parsed === null) continue;
       if (parsed.value !== undefined) descriptors[key] = parsed.value;
       break;
     }
+  }
+  // src: the last valid declaration wins likewise (walking back), then the
+  // url to register is extracted from it with the library's own tokenizer.
+  let src: string | null = null;
+  for (let index = srcCandidates.length - 1; index >= 0; index--) {
+    const parsed = parseSrc(srcCandidates[index], validateHost ? validateHost.srcEntry : null);
+    if (parsed === null) continue;
+    src = parsed.url;
+    break;
   }
   if (!family || !src) return null;
   let resolved = src;
@@ -756,27 +840,26 @@ export function parseFontFaceCss(css: string, stylesheetUrl: string): FontFaceDe
   }
   // CSS Syntax §3.3 input preprocessing: CR LF, CR and FF become LF; NUL and
   // lone surrogates become U+FFFD.
-  css = css.replace(/\r\n?|\f/g, '\n')
-    .replace(/\0|[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g, REPLACEMENT);
+  css = preprocessCss(css);
   const declarations: FontFaceDeclaration[] = [];
   const validateHost = hostDescriptorValidator();
   let index = 0;
   while (index < css.length) {
-    const unit = css.charCodeAt(index);
-    if (isWhitespace(unit)) { index++; continue; }
-    if (css[index] === '/' && css[index + 1] === '*') { index = skipComment(css, index); continue; }
-    if (css.startsWith('<!--', index)) { index += 4; continue; }
-    if (css.startsWith('-->', index)) { index += 3; continue; }
-    const isAtRule = unit === 0x40;
-    // An at-keyword's name is an identifier (escapes decoded).
-    const atName = isAtRule && startsIdentifier(css, index + 1) ? consumeIdent(css, index + 1) : undefined;
-    const nameEnd = atName ? atName.end : index + 1;
+    // CSS Syntax §5.4.1 consume a list of rules (top level): white space,
+    // comments, CDO and CDC are skipped; an at-keyword starts an at-rule,
+    // anything else a qualified rule.
+    const { token, end: tokenEnd } = consumeToken(css, index);
+    const type = token.type;
+    if (type === 'whitespace' || type === 'comment' || type === 'CDO' || type === 'CDC') { index = tokenEnd; continue; }
+    const atName = token.type === 'at-keyword' ? token.value : undefined;
+    const isAtRule = atName !== undefined;
+    const nameEnd = isAtRule ? tokenEnd : index;
     // An at-rule prelude ends at `;` or `{`; a qualified rule's only at `{`.
-    const stop = scanUntil(css, isAtRule ? nameEnd : index, isAtRule ? ';{' : '{');
+    const stop = scanUntil(css, nameEnd, isAtRule ? ';{' : '{');
     if (stop >= css.length) break;
     if (css[stop] === ';') { index = stop + 1; continue; }
     const end = blockEnd(css, stop);
-    const isFontFace = atName?.value.toLowerCase() === 'font-face'
+    const isFontFace = atName?.toLowerCase() === 'font-face'
       && stripComments(css.slice(nameEnd, stop)).trim() === '';
     if (isFontFace && end >= 0) {
       const declaration = parseFontFaceBody(css.slice(stop + 1, end), stylesheetUrl,

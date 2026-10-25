@@ -4,7 +4,7 @@ import {
   HARD_MAX_FONT_SOURCE_DECLARATIONS,
   HARD_MAX_FONT_SOURCE_STYLESHEET_BYTES,
 } from '../worker/resource-policy.generated.js';
-import { fetchFontStylesheet, parseFontFaceCss, parseUnicodeRange } from './css-source.js';
+import { fetchFontStylesheet, parseFontFaceCss, parseUnicodeRange, tokenizeCss } from './css-source.js';
 
 const SHEET = 'https://cdn.internal.example/styles/office.css';
 
@@ -83,6 +83,70 @@ describe('parseFontFaceCss', () => {
     expect(parseFontFaceCss(face('font-family: X; font-family: serif; src: url(a.woff2);'), SHEET)[0].family).toBe('X');
   });
 
+  it('parses src by the fallback grammar as Chrome does (one format argument, unsupported formats dropped)', () => {
+    const base = 'https://cdn.internal.example/styles/';
+    const url = (body: string) => parseFontFaceCss(face(`font-family: X; src: url(a.woff2); ${body}`), SHEET)[0]?.url;
+    // An invalid later declaration leaves the earlier source.
+    expect(url('src: url(b.woff2) format("bogus");')).toBe(`${base}a.woff2`);
+    expect(url('src: url(b.woff2) format("woff2", "woff");')).toBe(`${base}a.woff2`);
+    expect(url('src: url(b.woff2) format(svg);')).toBe(`${base}a.woff2`);
+    expect(url('src: url(b.woff2) format("embedded-opentype");')).toBe(`${base}a.woff2`);
+    expect(url('src: url(b.woff2) format("truetype-aat");')).toBe(`${base}a.woff2`);
+    expect(url('src: local(x) format(woff2);')).toBe(`${base}a.woff2`);
+    expect(url('src: url(b.woff2) tech(bogus);')).toBe(`${base}a.woff2`);
+    // Invalid entries are dropped inside a valid declaration.
+    expect(url('src: url(b.woff2) format(bogus), url(c.woff2);')).toBe(`${base}c.woff2`);
+    expect(url('src: url(b c), url(d.woff2);')).toBe(`${base}d.woff2`);
+    expect(url('src: url(b.woff2) format("woff2-variations");')).toBe(`${base}b.woff2`);
+    expect(url('src: url(b.woff2) format(WOFF2);')).toBe(`${base}b.woff2`);
+    // Valid declarations with nothing the library registers drop the rule.
+    expect(url('src: url();')).toBeUndefined();
+    expect(url('src: url(b.ttc) format(collection);')).toBeUndefined();
+  });
+
+  it('tokenizes per CSS Syntax §4.3.1', () => {
+    expect(tokenizeCss('#url( #-x #1 # @font-face @1 @ <!-- --> -->x')).toEqual([
+      { type: 'hash', value: 'url', id: true }, { type: '(' }, { type: 'whitespace' },
+      { type: 'hash', value: '-x', id: true }, { type: 'whitespace' },
+      { type: 'hash', value: '1', id: false }, { type: 'whitespace' },
+      { type: 'delim', value: '#' }, { type: 'whitespace' },
+      { type: 'at-keyword', value: 'font-face' }, { type: 'whitespace' },
+      { type: 'delim', value: '@' }, { type: 'number', value: 1 }, { type: 'whitespace' },
+      { type: 'delim', value: '@' }, { type: 'whitespace' },
+      { type: 'CDO' }, { type: 'whitespace' }, { type: 'CDC' }, { type: 'whitespace' },
+      { type: 'CDC' }, { type: 'ident', value: 'x' },
+    ]);
+    expect(tokenizeCss('+.5 -1e3 1e 10% 5px -x - + . 1.')).toEqual([
+      { type: 'number', value: 0.5 }, { type: 'whitespace' },
+      { type: 'number', value: -1000 }, { type: 'whitespace' },
+      { type: 'dimension', value: 1, unit: 'e' }, { type: 'whitespace' },
+      { type: 'percentage', value: 10 }, { type: 'whitespace' },
+      { type: 'dimension', value: 5, unit: 'px' }, { type: 'whitespace' },
+      { type: 'ident', value: '-x' }, { type: 'whitespace' },
+      { type: 'delim', value: '-' }, { type: 'whitespace' },
+      { type: 'delim', value: '+' }, { type: 'whitespace' },
+      { type: 'delim', value: '.' }, { type: 'whitespace' },
+      { type: 'number', value: 1 }, { type: 'delim', value: '.' },
+    ]);
+    expect(tokenizeCss('u\\72l(a{b) url( "q" ) f(x) url(a b) "s\\\nt" "bad\n\\\nx \\ y /*c*/;:,[]{}')).toEqual([
+      { type: 'url', value: 'a{b' }, { type: 'whitespace' },
+      { type: 'function', value: 'url' }, { type: 'whitespace' }, { type: 'string', value: 'q' }, { type: 'whitespace' }, { type: ')' },
+      { type: 'whitespace' }, { type: 'function', value: 'f' }, { type: 'ident', value: 'x' }, { type: ')' },
+      { type: 'whitespace' }, { type: 'bad-url' }, { type: 'whitespace' },
+      { type: 'string', value: 'st' }, { type: 'whitespace' }, { type: 'bad-string' }, { type: 'whitespace' },
+      // A backslash before a newline is a delim; before a space it escapes it.
+      { type: 'delim', value: '\\' }, { type: 'whitespace' }, { type: 'ident', value: 'x' }, { type: 'whitespace' },
+      { type: 'ident', value: ' y' }, { type: 'whitespace' },
+      { type: 'comment' }, { type: ';' }, { type: ':' }, { type: ',' }, { type: '[' }, { type: ']' }, { type: '{' }, { type: '}' },
+    ]);
+  });
+
+  it('keeps a hash token before "(" structural, as Chrome does', () => {
+    expect(parseFontFaceCss('@media print { --x:#url({) } @font-face{font-family:Y;src:url(y)} }', SHEET)).toEqual([]);
+    expect(parseFontFaceCss('@media print { --x:#u } @font-face{font-family:Y;src:url(y)}', SHEET).map((entry) => entry.family))
+      .toEqual(['Y']);
+  });
+
   it('accepts math functions in the fallback grammar', () => {
     const parse = (body: string) => parseFontFaceCss(face(`font-family: X; src: url(a.woff2); ${body}`), SHEET)[0];
     expect(parse('font-weight: 400; font-weight: calc(700);').weight).toBe('calc(700)');
@@ -102,7 +166,7 @@ describe('parseFontFaceCss', () => {
       status: FontFaceLoadStatus = 'unloaded';
       readonly loaded: Promise<unknown>;
       private readonly probe: (typeof probes)[number];
-      constructor(_family: string, _source: string, descriptors: FontFaceDescriptors) {
+      constructor(_family: string, _source: string, descriptors: FontFaceDescriptors = {}) {
         if (descriptors.weight === 'heavy') throw new DOMException('bad', 'SyntaxError');
         this.probe = { descriptors, loads: 0, observed: false };
         probes.push(this.probe);

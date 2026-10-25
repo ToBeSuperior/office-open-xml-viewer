@@ -35,6 +35,64 @@ const CASES: readonly (readonly [string, Record<string, string | undefined>])[] 
 const sheet = CASES.map(([body], index) =>
   `@font-face { font-family: Case${index}; src: url(https://fonts.example/f${index}.woff2); ${body} }`).join('\n');
 
+/** src declarations after a valid `url(a)`; Chrome's CSSOM is the reference. */
+const SRC_CASES = [
+  'url(https://fonts.example/b.woff2) format("bogus")',
+  'url(https://fonts.example/b.woff2) format("woff2", "woff")',
+  'url(https://fonts.example/b.woff2) format(bogus), url(https://fonts.example/c.woff2)',
+  'url(https://fonts.example/b.woff2) format(svg), url(https://fonts.example/c.woff2)',
+  'url(https://fonts.example/b.woff2) format("embedded-opentype")',
+  'url(https://fonts.example/b.woff2) format("woff2-variations")',
+  'url(https://fonts.example/b.woff2) format(WOFF2)',
+  'url(https://fonts.example/b.woff2) tech(bogus)',
+  'url(https://fonts.example/b.woff2) tech(variations), url(https://fonts.example/c.woff2)',
+  'url(https://fonts.example/b c.woff2), url(https://fonts.example/d.woff2)',
+  'local(x) format(woff2)',
+  'local(x)',
+];
+
+/** Stylesheets whose rule structure Chrome's CSSOM decides. */
+const STRUCTURE_CASES = [
+  '@media print { --x:#url({) } @font-face{font-family:Y;src:url(https://fonts.example/y.woff2)} }',
+  '@media print { --x:#u } @font-face{font-family:Y;src:url(https://fonts.example/y.woff2)}',
+  '@font\\-face{font-family:E;src:u\\72l(https://fonts.example/x{y.woff2)}',
+  '@font-face{font-family:H;src:url(https://fonts.example/h.woff2);--x:#a(}) } @font-face{font-family:I;src:url(https://fonts.example/i.woff2)}',
+];
+
+const SHEETS = [
+  ...SRC_CASES.map((src) => `@font-face{font-family:S;src:url(https://fonts.example/a.woff2);src:${src}}`),
+  ...STRUCTURE_CASES,
+];
+
+interface Face { readonly family: string; readonly url: string | undefined }
+
+/** Chrome's own reading of each sheet: top-level @font-face rules with the
+ * url the library would register from the surviving src (first url entry
+ * without tech() whose format is absent or registrable). */
+function chromeReference(sheets: readonly string[]): Face[][] {
+  const accepted = ['woff2', 'woff', 'truetype', 'opentype', 'woff2-variations', 'woff-variations',
+    'truetype-variations', 'opentype-variations'];
+  return sheets.map((css) => {
+    const style = document.createElement('style');
+    style.textContent = css;
+    document.head.append(style);
+    const faces: Face[] = [];
+    for (const rule of Array.from((style.sheet as CSSStyleSheet).cssRules)) {
+      if (!(rule instanceof CSSFontFaceRule)) continue;
+      const family = rule.style.getPropertyValue('font-family').replace(/^"(.*)"$/, '$1');
+      const entries = rule.style.getPropertyValue('src').split(/,\s*(?=url\(|local\()/);
+      const url = entries.map((entry) => {
+        const match = /^url\("([^"]*)"\)(?:\s+format\("([^"]*)"\))?$/.exec(entry.trim());
+        return match && match[1] && (!match[2] || accepted.includes(match[2].toLowerCase())) ? new URL(match[1], 'https://fonts.example/kit.css').href : undefined;
+      }).find((entry) => entry !== undefined);
+      faces.push({ family, url });
+    }
+    style.remove();
+    // The library drops a rule it cannot register.
+    return faces.filter((entry) => entry.url !== undefined);
+  });
+}
+
 interface Outcome {
   readonly host: boolean;
   readonly declarations: readonly Record<string, string | undefined>[];
@@ -42,10 +100,11 @@ interface Outcome {
   readonly resources: number;
   readonly rejections: readonly string[];
   readonly controlStatus: string;
+  readonly sheets: readonly Face[][];
 }
 
 /** Runs in either realm (`self` is the window or the worker global). */
-function runInRealm(css: string): Promise<Outcome> {
+function runInRealm(css: string, sheets: readonly string[]): Promise<Outcome> {
   const scope = self as unknown as {
     cssSource: { parseFontFaceCss(css: string, url: string): Record<string, string | undefined>[] };
     document?: { fonts: FontFaceSet };
@@ -55,6 +114,8 @@ function runInRealm(css: string): Promise<Outcome> {
   const rejections: string[] = [];
   self.addEventListener('unhandledrejection', (event) => { rejections.push(String(event.reason)); });
   const declarations = scope.cssSource.parseFontFaceCss(css, 'https://fonts.example/kit.css');
+  const parsedSheets = sheets.map((sheet) => scope.cssSource.parseFontFaceCss(sheet, 'https://fonts.example/kit.css')
+    .map(({ family, url }) => ({ family: family as string, url })));
   // Control: an invalid face whose rejected `loaded` nobody observes must be
   // reported, proving the detector works and that the engine does reject it.
   void new FontFace('control-probe', 'local(control-probe)', { weight: '1001' }).loaded;
@@ -67,6 +128,7 @@ function runInRealm(css: string): Promise<Outcome> {
     resources: scope.performance.getEntriesByType('resource').length,
     rejections,
     controlStatus: new FontFace('control-probe', 'local(control-probe)', { weight: '1001' }).status,
+    sheets: parsedSheets,
   }), 500));
 }
 
@@ -78,28 +140,33 @@ test('host FontFace validates @font-face descriptors in the main thread and a wo
   const script = await parserScript();
 
   await page.addScriptTag({ content: script });
-  const main = await page.evaluate(`(${runInRealm.toString()})(${JSON.stringify(sheet)})`) as Outcome;
+  const main = await page.evaluate(`(${runInRealm.toString()})(${JSON.stringify(sheet)}, ${JSON.stringify(SHEETS)})`) as Outcome;
+  const reference = await page.evaluate(`(${chromeReference.toString()})(${JSON.stringify(SHEETS)})`) as Face[][];
 
-  const worker = await page.evaluate(async ({ script, sheet, run }) => {
-    const source = `${script}\nconst run = ${run};\nself.onmessage = async (event) => self.postMessage(await run(event.data));`;
+  const worker = await page.evaluate(async ({ script, sheet, sheets, run }) => {
+    const source = `${script}\nconst run = ${run};\nself.onmessage = async (event) => self.postMessage(await run(event.data.sheet, event.data.sheets));`;
     const url = URL.createObjectURL(new Blob([source], { type: 'text/javascript' }));
     try {
       const w = new Worker(url);
       return await new Promise((resolve, reject) => {
         w.onmessage = (event) => resolve(event.data);
         w.onerror = (event) => reject(new Error(event.message));
-        w.postMessage(sheet);
+        w.postMessage({ sheet, sheets });
       });
     } finally {
       URL.revokeObjectURL(url);
     }
-  }, { script, sheet, run: runInRealm.toString() }) as Outcome;
+  }, { script, sheet, sheets: SHEETS, run: runInRealm.toString() }) as Outcome;
 
   for (const [realm, outcome] of [['main', main], ['worker', worker]] as const) {
     expect(outcome.host, realm).toBe(true);
     expect(outcome.declarations, realm).toHaveLength(CASES.length);
     CASES.forEach(([body, expected], index) => {
       expect(outcome.declarations[index], `${realm}: ${body}`).toMatchObject(expected);
+    });
+    // src validity and rule structure follow Chrome's own CSSOM.
+    SHEETS.forEach((css, index) => {
+      expect(outcome.sheets[index], `${realm}: ${css}`).toEqual(reference[index]);
     });
     expect(outcome.fontsSize, `${realm}: probes never enter the FontFaceSet`).toBe(0);
     expect(outcome.resources, `${realm}: probes fetch nothing`).toBe(0);
