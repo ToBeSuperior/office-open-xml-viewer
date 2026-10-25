@@ -13,6 +13,7 @@ import {
   fontFaceCss,
   fontFiles,
   fontResolver,
+  dataUrlDecodedByteLength,
   fontResolverFunction,
   validateFontFaceDeclaration,
   type FontResolveFn,
@@ -107,13 +108,53 @@ describe('font source descriptors', () => {
     expect(limitOf(() => fontFiles({ faces: Array.from({ length: HARD_MAX_FONT_SOURCE_DECLARATIONS + 1 },
       () => ({ family: 'A', url: 'https://a.example/a.woff2' })) })))
       .toMatchObject({ quota: 'declarations', metric: 'entry-count' });
-    // A data: URL is charged against the face byte ceiling (base64 expansion),
-    // not the URL length ceiling, so small inline faces are accepted.
+    // A data: URL is charged against the face byte ceiling, not the URL
+    // length ceiling, so small inline faces are accepted.
     const inline = `data:font/woff2;base64,${'A'.repeat(HARD_MAX_FONT_SOURCE_URL_LENGTH * 2)}`;
     expect(fontFiles({ faces: [{ family: 'A', url: inline }] }).faces[0].url).toBe(inline);
-    const oversized = `data:font/woff2;base64,${'A'.repeat(Math.ceil(HARD_MAX_FONT_SOURCE_FACE_BYTES * 4 / 3))}`;
-    expect(limitOf(() => validateFontFaceDeclaration({ family: 'A', url: oversized })))
-      .toMatchObject({ quota: 'face', metric: 'bytes', limit: HARD_MAX_FONT_SOURCE_FACE_BYTES });
+  });
+
+  it('charges a data: URL its decoded body size in either encoding, never its header', () => {
+    const face = HARD_MAX_FONT_SOURCE_FACE_BYTES;
+    const accepts = (url: string) => expect(validateFontFaceDeclaration({ family: 'A', url }).url).toBe(url);
+    const rejects = (url: string, observed: number) =>
+      expect(limitOf(() => validateFontFaceDeclaration({ family: 'A', url })))
+        .toEqual({ resource: 'font-source', quota: 'face', metric: 'bytes', limit: face, observed });
+    // base64: exactly the ceiling (face is a multiple of 3) vs one byte more.
+    accepts(`data:font/woff2;base64,${'A'.repeat(face / 3 * 4)}`);
+    rejects(`data:font/woff2;base64,${'A'.repeat(face / 3 * 4 + 2)}==`, face + 1);
+    // Percent-encoded (non-base64) bodies decode one byte per character.
+    accepts(`data:font/woff2,${'A'.repeat(face)}`);
+    rejects(`data:font/woff2,${'A'.repeat(face + 1)}`, face + 1);
+    expect(() => validateFontFaceDeclaration({ family: 'A', url: 'data:font/woff2;base64' })).toThrow(TypeError);
+  });
+
+  it('counts data: bodies as the URL parser and Fetch decode them', () => {
+    // Fragment, header, tab/newline and base64 whitespace/padding excluded;
+    // %XX is one byte, non-ASCII its UTF-8 length (lone surrogate → U+FFFD).
+    expect(dataUrlDecodedByteLength('data:,ab%41%zz#ignored')).toBe(6);
+    expect(dataUrlDecodedByteLength('data:,\u00e9\u4e00\u{1f600}\ud800')).toBe(2 + 3 + 4 + 3);
+    expect(dataUrlDecodedByteLength('DATA:text/plain ; BASE64 ,QU\tJD %20 RA==')).toBe(4);
+    expect(dataUrlDecodedByteLength('data:;base64,QUJD%3D')).toBe(3);
+    expect(dataUrlDecodedByteLength('data:no-comma')).toBeUndefined();
+  });
+
+  it('brands face buffers by their internal slots, not by tags or own properties', () => {
+    const spoofed = { [Symbol.toStringTag]: 'ArrayBuffer', byteLength: 4 };
+    expect(() => fontFiles({ faces: [{ family: 'A', data: spoofed as unknown as ArrayBuffer }] })).toThrow(TypeError);
+    expect(() => fontFiles({ faces: [{ family: 'A',
+      data: new Proxy(new ArrayBuffer(4), {}) }] })).toThrow(TypeError);
+    const oversized = new ArrayBuffer(HARD_MAX_FONT_SOURCE_FACE_BYTES + 1);
+    Object.defineProperty(oversized, 'byteLength', { value: 1 });
+    expect(limitOf(() => fontFiles({ faces: [{ family: 'A', data: oversized }] })))
+      .toMatchObject({ quota: 'face', observed: HARD_MAX_FONT_SOURCE_FACE_BYTES + 1 });
+    const detached = new ArrayBuffer(4);
+    structuredClone(detached, { transfer: [detached] });
+    const resizable = new (ArrayBuffer as unknown as new (n: number, o: object) => ArrayBuffer)(4, { maxByteLength: 8 });
+    for (const data of [new Uint8Array(4), new DataView(new ArrayBuffer(4)), new SharedArrayBuffer(4),
+      detached, resizable]) {
+      expect(() => fontFiles({ faces: [{ family: 'A', data: data as ArrayBuffer }] })).toThrow(TypeError);
+    }
   });
 
   it('keeps the resolver function in this realm and shares one id per function', () => {
@@ -159,5 +200,20 @@ describe('css-api request composition', () => {
         substitution: { for: 'Franklin Gothic Book', use: 'Libre Franklin' } },
     ]);
     expect(cssApiRequests(source, 'Comic Sans MS')).toEqual([]);
+  });
+
+  it('bounds every completed request URL, including encoding expansion', () => {
+    const template = 'https://fonts.example/css?family={family}:{query}';
+    expect(limitOf(() => cssApi({ urlTemplate: template, query: 'q'.repeat(9000) })))
+      .toMatchObject({ quota: 'url', metric: 'length' });
+    // The URL parser percent-encodes a non-ASCII query (é → %C3%A9).
+    expect(limitOf(() => cssApi({ urlTemplate: template, query: '\u00e9'.repeat(2100) })))
+      .toMatchObject({ quota: 'url', limit: HARD_MAX_FONT_SOURCE_URL_LENGTH });
+    expect(limitOf(() => cssApi({ urlTemplate: template, families: { [`F${'\u4e00'.repeat(1000)}`]: '400' } })))
+      .toMatchObject({ quota: 'url' });
+    // A document-supplied family is checked when its request is composed.
+    const source = cssApi({ urlTemplate: template, query: '400' });
+    expect(limitOf(() => cssApiRequests(source, '\u4e00'.repeat(1000)))).toMatchObject({ quota: 'url' });
+    expect(cssApiRequests(source, 'A\ud800')[0].url).toBe('https://fonts.example/css?family=A%EF%BF%BD:400');
   });
 });

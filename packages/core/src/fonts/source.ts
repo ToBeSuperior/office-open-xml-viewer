@@ -183,8 +183,128 @@ function optionalCredentials(value: unknown, location: string): FontSourceCreden
   throw new TypeError(`${location} must be 'omit' or 'same-origin'`);
 }
 
-function isArrayBuffer(value: unknown): value is ArrayBuffer {
-  return Object.prototype.toString.call(value) === '[object ArrayBuffer]';
+// Intrinsic ArrayBuffer accessors, read once: brand checks must not trust
+// Symbol.toStringTag, own properties or a Proxy (none of which structured clone
+// or FontFace would accept), and the size charged must be the internal one.
+type Getter = (this: unknown) => unknown;
+function intrinsicGetter(prototype: object | undefined, name: string): Getter | undefined {
+  return prototype ? Object.getOwnPropertyDescriptor(prototype, name)?.get as Getter | undefined : undefined;
+}
+const ARRAY_BUFFER_BYTE_LENGTH = intrinsicGetter(ArrayBuffer.prototype, 'byteLength') as Getter;
+const ARRAY_BUFFER_DETACHED = intrinsicGetter(ArrayBuffer.prototype, 'detached');
+const ARRAY_BUFFER_RESIZABLE = intrinsicGetter(ArrayBuffer.prototype, 'resizable');
+const SHARED_ARRAY_BUFFER_BYTE_LENGTH = intrinsicGetter(
+  (globalThis as { SharedArrayBuffer?: { prototype: object } }).SharedArrayBuffer?.prototype, 'byteLength');
+
+function hasBrand(getter: Getter | undefined, value: object): boolean {
+  if (!getter) return false;
+  try {
+    Reflect.apply(getter, value, []);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The internal byte length of a genuine, owned, fixed-length `ArrayBuffer`.
+ * Views, `SharedArrayBuffer`s (shared memory cannot be owned or transferred),
+ * resizable buffers (they could grow past the ceiling after admission),
+ * detached and empty buffers, and look-alike objects are rejected.
+ */
+function requireOwnedArrayBuffer(value: unknown, location: string): number {
+  if (typeof value !== 'object' || value === null) throw new TypeError(`${location} must be an ArrayBuffer`);
+  if (ArrayBuffer.isView(value)) throw new TypeError(`${location} must be an ArrayBuffer, not a view`);
+  if (hasBrand(SHARED_ARRAY_BUFFER_BYTE_LENGTH, value)) {
+    throw new TypeError(`${location} must be an ArrayBuffer, not a SharedArrayBuffer`);
+  }
+  if (!hasBrand(ARRAY_BUFFER_BYTE_LENGTH, value)) throw new TypeError(`${location} must be an ArrayBuffer`);
+  if (ARRAY_BUFFER_DETACHED && Reflect.apply(ARRAY_BUFFER_DETACHED, value, []) === true) {
+    throw new TypeError(`${location} must not be detached`);
+  }
+  if (ARRAY_BUFFER_RESIZABLE && Reflect.apply(ARRAY_BUFFER_RESIZABLE, value, []) === true) {
+    throw new TypeError(`${location} must not be resizable`);
+  }
+  const byteLength = Reflect.apply(ARRAY_BUFFER_BYTE_LENGTH, value, []) as number;
+  if (byteLength === 0) throw new TypeError(`${location} must not be empty or detached`);
+  return byteLength;
+}
+
+const isAsciiWhitespace = (byte: number) =>
+  byte === 0x09 || byte === 0x0a || byte === 0x0c || byte === 0x0d || byte === 0x20;
+const hexValue = (unit: number) =>
+  unit >= 0x30 && unit <= 0x39 ? unit - 0x30
+    : unit >= 0x41 && unit <= 0x46 ? unit - 0x37
+      : unit >= 0x61 && unit <= 0x66 ? unit - 0x57 : -1;
+
+/**
+ * Decoded body size of a `data:` URL, computed in one pass without
+ * materialising the body, following the URL parser (outer C0/space trimmed,
+ * tab/LF/CR removed, fragment excluded, non-ASCII UTF-8 encoded) and the Fetch
+ * data: URL processor (header up to the first comma; body percent-decoded;
+ * `;base64` bodies forgiving-base64 decoded: ASCII whitespace removed, up to
+ * two trailing `=` dropped when the length is a multiple of four, 3 bytes per
+ * 4 characters). The header never counts. Returns undefined without a comma
+ * (not a data: URL any fetch would accept).
+ */
+export function dataUrlDecodedByteLength(url: string): number | undefined {
+  let end = url.length;
+  while (end > 0 && url.charCodeAt(end - 1) <= 0x20) end--;
+  let start = 0;
+  while (start < end && url.charCodeAt(start) <= 0x20) start++;
+  const units: number[] = [];
+  let position = start;
+  // Next code unit after URL-parser tab/newline removal, or -1 at the end.
+  const next = (): number => {
+    while (position < end) {
+      const unit = url.charCodeAt(position++);
+      if (unit !== 0x09 && unit !== 0x0a && unit !== 0x0d) return unit;
+    }
+    return -1;
+  };
+  for (let index = 0; index < 5; index++) units.push(next());
+  if (String.fromCharCode(...units).toLowerCase() !== 'data:') return undefined;
+  let header = '';
+  for (let unit = next(); ; unit = next()) {
+    if (unit === -1 || unit === 0x23 /* # */) return undefined;
+    if (unit === 0x2c /* , */) break;
+    if (header.length > HARD_MAX_FONT_SOURCE_URL_LENGTH) {
+      throw fontSourceLimitError('url', HARD_MAX_FONT_SOURCE_URL_LENGTH, header.length);
+    }
+    header += String.fromCharCode(unit);
+  }
+  const base64 = /;\u0020*base64$/i.test(header.replace(/^[\t\n\f\r ]+|[\t\n\f\r ]+$/g, ''));
+  let bytes = 0;
+  let trailingEquals = 0;
+  const add = (byte: number) => {
+    if (!base64) { bytes++; return; }
+    if (isAsciiWhitespace(byte)) return;
+    bytes++;
+    trailingEquals = byte === 0x3d ? trailingEquals + 1 : 0;
+  };
+  for (let unit = next(); unit !== -1 && unit !== 0x23; unit = next()) {
+    if (unit === 0x25 /* % */) {
+      const save = position;
+      const high = hexValue(next());
+      const low = high < 0 ? -1 : hexValue(next());
+      if (low >= 0) { add(high * 16 + low); continue; }
+      position = save;
+      add(0x25);
+    } else if (unit < 0x80) {
+      add(unit);
+    } else {
+      // Non-ASCII is UTF-8 percent-encoded by the URL parser; a lone
+      // surrogate becomes U+FFFD. None of these bytes is whitespace or '='.
+      const pair = unit >= 0xd800 && unit <= 0xdbff && position < end
+        && url.charCodeAt(position) >= 0xdc00 && url.charCodeAt(position) <= 0xdfff;
+      if (pair) position++;
+      const length = pair ? 4 : unit < 0x800 ? 2 : 3;
+      for (let index = 0; index < length; index++) add(0x80);
+    }
+  }
+  if (!base64) return bytes;
+  if (bytes % 4 === 0) bytes -= Math.min(trailingEquals, 2);
+  return Math.floor(bytes * 3 / 4);
 }
 
 /** The calling realm's base for relative application URLs; undefined in a
@@ -197,9 +317,10 @@ function realmBaseUrl(): string | undefined {
 
 /**
  * Validate one URL. Non-`data:` URLs are bounded by
- * `HARD_MAX_FONT_SOURCE_URL_LENGTH`. A `data:` URL is bounded by the face byte
- * ceiling instead: its length may not exceed `FACE_BYTES × 4/3` (the base64
- * expansion), so inline faces obey the same byte budget as `data` buffers.
+ * `HARD_MAX_FONT_SOURCE_URL_LENGTH` (as written and after URL-parser
+ * encoding). A `data:` URL is bounded by the face byte ceiling instead,
+ * charged its decoded body size ({@link dataUrlDecodedByteLength}), so inline
+ * faces obey the same byte budget as `data` buffers.
  */
 function requireUrl(
   value: unknown,
@@ -212,9 +333,10 @@ function requireUrl(
   }
   const isData = /^data:/i.test(value);
   if (isData && protocols.includes('data:')) {
-    const maxLength = Math.ceil(HARD_MAX_FONT_SOURCE_FACE_BYTES * 4 / 3);
-    if (value.length > maxLength) {
-      throw fontSourceLimitError('face', HARD_MAX_FONT_SOURCE_FACE_BYTES, Math.ceil(value.length * 3 / 4));
+    const decoded = dataUrlDecodedByteLength(value);
+    if (decoded === undefined) throw new TypeError(`${location} must be a data: URL with a body`);
+    if (decoded > HARD_MAX_FONT_SOURCE_FACE_BYTES) {
+      throw fontSourceLimitError('face', HARD_MAX_FONT_SOURCE_FACE_BYTES, decoded);
     }
   } else if (value.length > HARD_MAX_FONT_SOURCE_URL_LENGTH) {
     throw fontSourceLimitError('url', HARD_MAX_FONT_SOURCE_URL_LENGTH, value.length);
@@ -282,12 +404,11 @@ export function validateFontFaceDeclaration(
   if (hasUrl) {
     url = requireUrl(fields.url, `${location}.url`, FACE_PROTOCOLS, base);
   } else {
-    if (!isArrayBuffer(fields.data)) throw new TypeError(`${location}.data must be an ArrayBuffer`);
-    data = fields.data;
-    if (data.byteLength === 0) throw new TypeError(`${location}.data must not be empty or detached`);
-    if (data.byteLength > HARD_MAX_FONT_SOURCE_FACE_BYTES) {
-      throw fontSourceLimitError('face', HARD_MAX_FONT_SOURCE_FACE_BYTES, data.byteLength);
+    const byteLength = requireOwnedArrayBuffer(fields.data, `${location}.data`);
+    if (byteLength > HARD_MAX_FONT_SOURCE_FACE_BYTES) {
+      throw fontSourceLimitError('face', HARD_MAX_FONT_SOURCE_FACE_BYTES, byteLength);
     }
+    data = fields.data as ArrayBuffer;
   }
   const weight = optionalDescriptor(fields.weight, `${location}.weight`);
   const style = optionalDescriptor(fields.style, `${location}.style`);
@@ -352,6 +473,16 @@ function normalizeCssApi(fields: Fields, location: string): CssApiSource {
   if (placeholders.includes('{query}') && query === undefined
     && (!families || Object.values(families).some((value) => value === true))) {
     throw new TypeError(`${location}.query is required when urlTemplate contains {query}`);
+  }
+  // Fail at the factory for every request whose family is known now: each
+  // allow-listed family, or the default query with an empty family. Requests
+  // for document-supplied families are checked again when composed.
+  if (families) {
+    for (const [family, value] of Object.entries(families)) {
+      composeCssApiUrl(urlTemplate, family, value === true ? query : value);
+    }
+  } else {
+    composeCssApiUrl(urlTemplate, '', query);
   }
   const substitutes = normalizeSubstitutes(fields.substitutes, `${location}.substitutes`);
   const credentials = optionalCredentials(fields.credentials, `${location}.credentials`);
@@ -520,9 +651,27 @@ function fillTemplate(template: string, family: string, query: string): string {
   return template.split('{family}').join(family).split('{query}').join(query);
 }
 
-/** CSS API family encoding: percent-encoding with `+` for spaces. */
+/** CSS API family encoding: percent-encoding with `+` for spaces. A lone
+ * surrogate (possible in document-supplied names) is sent as U+FFFD, as the
+ * URL parser would, instead of throwing. */
 function encodeCssApiFamily(family: string): string {
-  return encodeURIComponent(family).replace(/%20/g, '+');
+  const wellFormed = family.replace(/[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g, '\ufffd');
+  return encodeURIComponent(wellFormed).replace(/%20/g, '+');
+}
+
+/** The request URL exactly as fetched (URL-parser serialization), bounded by
+ * `HARD_MAX_FONT_SOURCE_URL_LENGTH` after family encoding and any further
+ * percent-encoding of the query. */
+function composeCssApiUrl(template: string, family: string, query: string | undefined): string {
+  const filled = fillTemplate(template, encodeCssApiFamily(family), query ?? '');
+  if (filled.length > HARD_MAX_FONT_SOURCE_URL_LENGTH) {
+    throw fontSourceLimitError('url', HARD_MAX_FONT_SOURCE_URL_LENGTH, filled.length);
+  }
+  const href = new URL(filled).href;
+  if (href.length > HARD_MAX_FONT_SOURCE_URL_LENGTH) {
+    throw fontSourceLimitError('url', HARD_MAX_FONT_SOURCE_URL_LENGTH, href.length);
+  }
+  return href;
 }
 
 /** One stylesheet request a {@link CssApiSource} issues for a demanded family. */
@@ -537,7 +686,9 @@ export interface CssApiRequest {
 /**
  * Requests for one demanded family, in precedence order: the family itself,
  * then each declared substitute's `use`, keeping only families that pass the
- * allow-list. One request per served family; duplicates are dropped.
+ * allow-list. One request per served family; duplicates are dropped. Throws
+ * `OoxmlError('font-source-limit')` when a completed URL exceeds
+ * `HARD_MAX_FONT_SOURCE_URL_LENGTH`.
  */
 export function cssApiRequests(source: CssApiSource, demandedFamily: string): readonly CssApiRequest[] {
   const candidates: { family: string; substitution?: FontSubstitution }[] = [
@@ -559,7 +710,7 @@ export function cssApiRequests(source: CssApiSource, demandedFamily: string): re
       served = entry[0];
       if (entry[1] !== true) query = entry[1];
     }
-    const url = fillTemplate(source.urlTemplate, encodeCssApiFamily(served), query ?? '');
+    const url = composeCssApiUrl(source.urlTemplate, served, query);
     if (urls.has(url)) continue;
     urls.add(url);
     requests.push({
