@@ -632,6 +632,9 @@ const PROBE_FAMILY = 'ooxml-descriptor-probe';
  * instead; both count as invalid). The probe uses a `local()` source and is
  * never added to a FontFaceSet or loaded, so it fetches nothing; its
  * rejected `loaded` promise is observed. Results are memoized per parse.
+ * Chrome's behaviour (status "error", a rejected `loaded`, no request, no
+ * FontFaceSet entry; main thread and worker) is checked by
+ * `tests/patterns/font-descriptor-host-validation.spec.ts`.
  */
 function hostDescriptorValidator(): ((key: FaceDescriptorKey, text: string) => DescriptorValue) | null {
   const Face = (globalThis as { FontFace?: typeof FontFace }).FontFace;
