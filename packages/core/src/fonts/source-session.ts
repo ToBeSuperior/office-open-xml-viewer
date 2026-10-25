@@ -525,7 +525,7 @@ export class FontSourceSession {
         const own = batch.get(key) ?? { kind: 'absent' };
         batch.delete(key);
         return own;
-      }, signal);
+      }, signal, cache);
       return [key, answer] as const;
     }));
     return new Map(entries);

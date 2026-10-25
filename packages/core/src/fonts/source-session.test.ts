@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { OoxmlError } from '../errors/ooxml-error.js';
 import { HARD_MAX_FONT_SOURCE_FAMILIES } from '../worker/resource-policy.generated.js';
 import { googleFonts } from './presets/google-fonts.js';
-import { liveSourceCacheCount } from './source-cache.js';
+import { liveSourceCacheCount, sourceCacheEntryCount } from './source-cache.js';
 import { FontSourceSession, retainedFontSourceBytes } from './source-session.js';
 import {
   cssApi,
@@ -411,7 +411,7 @@ describe('FontSourceSession: limits fail closed', () => {
 });
 
 describe('FontSourceSession: retained bytes held by shared caches', () => {
-  it('charges cached resolver bytes for as long as any session keeps the cache', async () => {
+  it('charges cached resolver bytes while the requesting session holds them', async () => {
     vi.resetModules();
     vi.doMock('../worker/resource-policy.generated.js', async (importOriginal) => ({
       ...await importOriginal<Record<string, unknown>>(),
@@ -423,19 +423,24 @@ describe('FontSourceSession: retained bytes held by shared caches', () => {
       const source = sourceModule.fontResolver((request) =>
         request.families.map((family) => ({ family, data: new Uint8Array(30).buffer })));
       const set = fakeSet();
-      // An idle session keeps the source's cache (and its resolutions) alive.
       const idle = new fresh.FontSourceSession({ sources: [source], fontSet: asSet(set) });
       const cycle = async (family: string) => {
         const session = new fresh.FontSourceSession({ sources: [source], fontSet: asSet(set) });
         try { await session.ensure(demand([family])); } finally { session.release(); }
       };
+      // A released session's cached resolutions go with it, even while an
+      // idle session keeps the source's cache alive.
       await cycle('A');
       await cycle('B');
-      // Two cached 30-byte buffers stay in memory after their faces left.
-      expect(set.faces).toHaveLength(0);
+      expect(fresh.retainedFontSourceBytes()).toBe(0);
+      // While held, the cached copy and the registered copy both count:
+      // 30 + 30 for one open session; a second one exceeds 100.
+      const open1 = new fresh.FontSourceSession({ sources: [source], fontSet: asSet(set) });
+      await open1.ensure(demand(['C']));
       expect(fresh.retainedFontSourceBytes()).toBe(60);
-      // A third: 90 cached + 30 registered exceeds the 100-byte ceiling.
-      await expect(cycle('C')).rejects.toMatchObject({ code: 'font-source-limit', violation: { quota: 'retained' } });
+      const open2 = new fresh.FontSourceSession({ sources: [source], fontSet: asSet(set) });
+      await expect(open2.ensure(demand(['D']))).rejects.toMatchObject({ code: 'font-source-limit', violation: { quota: 'retained' } });
+      open1.release();
       idle.release();
       expect(fresh.retainedFontSourceBytes()).toBe(0);
     } finally {
@@ -578,6 +583,35 @@ describe('FontSourceSession: shared resolver work survives a released waiter', (
     expect((await surviving).faces.map((face) => face.family)).toEqual(['Shared']);
     expect(set.faces).toHaveLength(1);
     expect(calls).toBe(1);
+  });
+});
+
+describe('FontSourceSession: cached resolutions are bounded by live requesters', () => {
+  it.each([
+    ['font-face-css', () => fontFaceCss({ url: 'https://fonts.example/kit.css' })],
+    ['css-api allow-list', () => cssApi({ urlTemplate: 'https://fonts.example/css?family={family}', families: { Brand: true } })],
+  ] as const)('evicts what released sessions requested while another session holds the source (%s)', async (_kind, make) => {
+    installFetch({
+      'https://fonts.example/kit.css': { css: rule('Brand', 'brand.woff2') },
+      'https://fonts.example/css?family=Brand': { css: rule('Brand', 'brand.woff2') },
+    });
+    const source = make();
+    const set = fakeSet();
+    const idle = open([source], set);
+    const missing = (batch: number) => Array.from({ length: HARD_MAX_FONT_SOURCE_FAMILIES - 1 }, (_, index) => `Missing ${batch}-${index}`);
+    for (let batch = 0; batch < 100; batch++) {
+      const session = open([source], set);
+      await session.ensure(demand(['Brand', ...missing(batch)], [0x41]));
+      // While open: its families (present and absent) plus at most one stylesheet.
+      expect(sourceCacheEntryCount()).toBeLessThanOrEqual(HARD_MAX_FONT_SOURCE_FAMILIES + 1);
+      session.release();
+      expect(sourceCacheEntryCount()).toBe(0);
+    }
+    // A session still open keeps exactly what it requested.
+    await idle.ensure(demand(['Brand', 'Missing']));
+    expect(sourceCacheEntryCount()).toBe(3);
+    idle.release();
+    expect(sourceCacheEntryCount()).toBe(0);
   });
 });
 

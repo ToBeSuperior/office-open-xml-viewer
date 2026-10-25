@@ -979,14 +979,19 @@ export async function fetchFontStylesheet(
   return { ok: true, declarations, finalUrl };
 }
 
+/** Join the stylesheet on behalf of `holder` (the family resolution using it). */
 function joinStylesheet(
   cache: SourceCache,
   url: string,
   credentials: FontSourceCredentials | undefined,
   signal: AbortSignal,
+  holder: object,
 ): Promise<FontStylesheet | FontSourceFailure> {
-  return cache.stylesheets.join(url, (taskSignal) => fetchFontStylesheet(url, credentials, taskSignal), signal);
+  return cache.stylesheets.join(url, (taskSignal) => fetchFontStylesheet(url, credentials, taskSignal), signal, holder);
 }
+
+/** Family index of a parsed stylesheet, living exactly as long as it. */
+const stylesheetIndexes = new WeakMap<FontStylesheet, ReadonlyMap<string, readonly FontFaceDeclaration[]>>();
 
 // ---- adapters -----------------------------------------------------------------------
 
@@ -1002,11 +1007,12 @@ async function resolveCssApiFamily(
   cache: SourceCache,
   family: string,
   signal: AbortSignal,
+  holder: object,
 ): Promise<FamilyResolution> {
   const requests = cssApiRequests(source, family);
   if (requests.length === 0) return { kind: 'absent' };
   const sheets = await Promise.all(requests.map((request) =>
-    joinStylesheet(cache, request.url, source.credentials, signal)));
+    joinStylesheet(cache, request.url, source.credentials, signal, holder)));
   const reasons: string[] = [];
   for (let index = 0; index < requests.length; index++) {
     const request = requests[index];
@@ -1034,15 +1040,18 @@ async function resolveFontFaceCssFamily(
   cache: SourceCache,
   family: string,
   signal: AbortSignal,
+  holder: object,
 ): Promise<FamilyResolution> {
-  const sheet = await joinStylesheet(cache, source.url, source.credentials, signal);
+  const sheet = await joinStylesheet(cache, source.url, source.credentials, signal, holder);
   if (!sheet.ok) return { kind: 'failed', reason: sheet.reason };
-  cache.index ??= indexFontDeclarations(sheet.declarations);
-  return claimFromIndex(cache.index, family, source.substitutes);
+  let index = stylesheetIndexes.get(sheet);
+  if (!index) { index = indexFontDeclarations(sheet.declarations); stylesheetIndexes.set(sheet, index); }
+  return claimFromIndex(index, family, source.substitutes);
 }
 
 /** Resolve demanded families against a CSS source through the shared
- * resolution cache (one in-flight resolution per source identity × family). */
+ * resolution cache (one in-flight resolution per source identity × family),
+ * held by `cache` (the requesting session's handle) until it releases. */
 export async function resolveCssSource(
   source: CssApiSource | FontFaceCssSource,
   cache: SourceCache,
@@ -1051,9 +1060,9 @@ export async function resolveCssSource(
 ): Promise<ReadonlyMap<string, FamilyResolution>> {
   const entries = await Promise.all(families.map(async (family) => {
     const key = fontFamilyKey(family);
-    const resolution = await cache.families.join(key, (taskSignal) => source.kind === 'css-api'
-      ? resolveCssApiFamily(source, cache, family, taskSignal)
-      : resolveFontFaceCssFamily(source, cache, family, taskSignal), signal);
+    const resolution = await cache.families.join(key, (taskSignal, task) => source.kind === 'css-api'
+      ? resolveCssApiFamily(source, cache, family, taskSignal, task)
+      : resolveFontFaceCssFamily(source, cache, family, taskSignal, task), signal, cache);
     return [key, resolution] as const;
   }));
   return new Map(entries);

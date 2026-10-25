@@ -10,11 +10,15 @@
  * nothing, so a misbehaving or failing origin can never answer for another
  * (#1497: per-origin isolation, no retry against another origin).
  *
- * Entries live while at least one session holds the source
- * ({@link acquireSourceCache} / {@link SourceCache.release}): memory is bounded
- * by the live sessions, not by the number of documents ever opened. Sequential
- * reopening of the same document re-issues stylesheet requests, which the
- * browser HTTP cache answers.
+ * Every entry is refcounted by its requesters: a family resolution (present
+ * or absent) lives while a session that asked for it is open, and a
+ * stylesheet while a family resolution that used it lives
+ * ({@link SharedTaskMap.release}). A source's cache itself lives while any
+ * session holds the source ({@link acquireSourceCache}). The entry count is
+ * therefore bounded by live sessions (at most HARD_MAX_FONT_SOURCE_FAMILIES
+ * resolutions each), never by the documents ever opened. A document opened
+ * after every earlier requester of a family closed re-issues that request,
+ * which the browser HTTP cache answers.
  *
  * Work in the caches is shared through {@link SharedTask}: each waiter joins
  * with its own `AbortSignal`, the underlying fetch is aborted only when every
@@ -256,10 +260,18 @@ export class SharedTaskMap<T> {
   /** Bytes charged per task (not per key): a retry after an eviction is a
    * different task, so charge and refund always pair one-to-one. */
   private readonly charged = new Map<SharedTask<T>, number>();
+  /** Who asked for each key (sessions for family resolutions, family
+   * resolutions for stylesheets). An entry is kept only while at least one
+   * holder needs it, so the map is bounded by its live holders' demand. */
+  private readonly holders = new Map<string, Set<object>>();
+  private readonly held = new Map<object, Set<string>>();
 
   constructor(
     private readonly evict: (value: T) => boolean = () => false,
     private readonly weigh: (value: T) => number = () => 0,
+    /** Called once a task leaves the map (and again if its producer finishes
+     * afterwards), so work it held elsewhere is released too. */
+    private readonly onDrop: (task: object) => void = () => undefined,
   ) {}
 
   /** Forget `task` (if it is still the entry for `key`) and refund its
@@ -271,18 +283,40 @@ export class SharedTaskMap<T> {
       this.charged.delete(task);
       refundRetainedBytes(bytes);
     }
+    this.onDrop(task);
   }
 
-  join(key: string, produce: (signal: AbortSignal) => Promise<T>, signal: AbortSignal): Promise<T> {
+  private hold(key: string, holder: object): void {
+    let keyHolders = this.holders.get(key);
+    if (!keyHolders) { keyHolders = new Set(); this.holders.set(key, keyHolders); }
+    keyHolders.add(holder);
+    let keys = this.held.get(holder);
+    if (!keys) { keys = new Set(); this.held.set(holder, keys); }
+    keys.add(key);
+  }
+
+  /**
+   * Join (or start) the task for `key` on behalf of `holder`. The producer
+   * receives the task's signal and the task itself, which it uses as the
+   * holder of whatever it joins in other maps.
+   */
+  join(
+    key: string,
+    produce: (signal: AbortSignal, task: object) => Promise<T>,
+    signal: AbortSignal,
+    holder: object,
+  ): Promise<T> {
+    // Never create or hold work for a waiter that has already left.
+    if (signal.aborted) return Promise.reject(createAbortError('Font source request abandoned'));
+    this.hold(key, holder);
     let task = this.tasks.get(key);
     if (!task) {
-      // Never create work for a waiter that has already left.
-      if (signal.aborted) return Promise.reject(createAbortError('Font source request abandoned'));
       const created: SharedTask<T> = new SharedTask(async (taskSignal) => {
         try {
-          const value = await produce(taskSignal);
-          // Abandoned while producing: nothing keeps the value, charge nothing.
-          if (this.tasks.get(key) !== created) return value;
+          const value = await produce(taskSignal, created);
+          // Dropped while producing: nothing keeps the value, charge nothing,
+          // and release what the producer held after the drop.
+          if (this.tasks.get(key) !== created) { this.onDrop(created); return value; }
           if (this.evict(value)) { this.drop(key, created); return value; }
           const bytes = this.weigh(value);
           chargeRetainedBytes(bytes);
@@ -299,8 +333,27 @@ export class SharedTaskMap<T> {
     return task.join(signal);
   }
 
+  /** `holder` no longer needs anything here: every entry it alone held is
+   * dropped (and refunded). */
+  release(holder: object): void {
+    const keys = this.held.get(holder);
+    if (!keys) return;
+    this.held.delete(holder);
+    for (const key of keys) {
+      const keyHolders = this.holders.get(key);
+      keyHolders?.delete(holder);
+      if (keyHolders && keyHolders.size > 0) continue;
+      this.holders.delete(key);
+      const task = this.tasks.get(key);
+      if (task) this.drop(key, task);
+    }
+  }
+
   /** Whether a task (in flight or settled and kept) exists for `key`. */
   has(key: string): boolean { return this.tasks.has(key); }
+
+  /** Entries currently kept (tests and leak checks). */
+  get size(): number { return this.tasks.size; }
 
   clear(): void {
     for (const [key, task] of [...this.tasks]) this.drop(key, task);
@@ -308,6 +361,8 @@ export class SharedTaskMap<T> {
     // charged can remain without an entry.
     for (const bytes of this.charged.values()) refundRetainedBytes(bytes);
     this.charged.clear();
+    this.holders.clear();
+    this.held.clear();
   }
 }
 
@@ -350,7 +405,8 @@ export interface SourceCache {
   readonly stylesheets: SharedTaskMap<FontStylesheet | FontSourceFailure>;
   /** Resolutions keyed by lower-cased demanded family. */
   readonly families: SharedTaskMap<FamilyResolution>;
-  /** Family index of a `font-files` source (computed once). */
+  /** Family index of a `font-files` source (computed once; it references
+   * only the descriptor's own declarations). */
   index?: ReadonlyMap<string, readonly FontFaceDeclaration[]>;
   release(): void;
 }
@@ -370,20 +426,21 @@ export function acquireSourceCache(source: FontSource): SourceCache {
     existing.refs++;
     return handle(existing);
   }
+  // Cached content is charged where the cache is its only holder: inline
+  // data: faces of a stylesheet, and the buffers a resolver returned. (A
+  // font-files index references the descriptor's own buffers.) Entry counts
+  // are bounded by holders: a family resolution lives while a session that
+  // requested it is open (at most HARD_MAX_FONT_SOURCE_FAMILIES per session),
+  // a stylesheet while a family resolution that used it lives.
+  const stylesheets = new SharedTaskMap<FontStylesheet | FontSourceFailure>((value) => !value.ok,
+    (value) => (value.ok ? declarationBytes(value.declarations) : 0));
+  const families = new SharedTaskMap<FamilyResolution>((value) => value.kind === 'failed',
+    (value) => (source.kind === 'font-resolver' && value.kind === 'claimed'
+      ? declarationBytes(value.declarations) : 0),
+    (task) => stylesheets.release(task));
   const entry: CacheEntry = {
     refs: 1,
-    cache: {
-      id,
-      // Cached content is charged where the cache is its only holder: inline
-      // data: faces of a stylesheet, and the buffers a resolver returned.
-      // (A font-files index references the descriptor's own buffers.)
-      stylesheets: new SharedTaskMap((value) => !value.ok,
-        (value) => (value.ok ? declarationBytes(value.declarations) : 0)),
-      families: new SharedTaskMap((value) => value.kind === 'failed',
-        (value) => (source.kind === 'font-resolver' && value.kind === 'claimed'
-          ? declarationBytes(value.declarations) : 0)),
-      release: () => undefined,
-    },
+    cache: { id, stylesheets, families, release: () => undefined },
   };
   caches.set(id, entry);
   return handle(entry);
@@ -393,7 +450,7 @@ export function acquireSourceCache(source: FontSource): SourceCache {
 function handle(entry: CacheEntry): SourceCache {
   let released = false;
   const { cache } = entry;
-  return {
+  const view: SourceCache = {
     id: cache.id,
     stylesheets: cache.stylesheets,
     families: cache.families,
@@ -402,6 +459,9 @@ function handle(entry: CacheEntry): SourceCache {
     release() {
       if (released) return;
       released = true;
+      // Family resolutions only this holder requested go now, with the
+      // stylesheets they alone used.
+      cache.families.release(view);
       entry.refs--;
       if (entry.refs > 0 || caches.get(cache.id) !== entry) return;
       caches.delete(cache.id);
@@ -413,9 +473,18 @@ function handle(entry: CacheEntry): SourceCache {
       cache.index = undefined;
     },
   };
+  return view;
 }
 
 /** Number of source identities with live holders (tests and leak checks). */
 export function liveSourceCacheCount(): number {
   return caches.size;
+}
+
+/** Cached stylesheet and family entries across all live sources (tests and
+ * leak checks). */
+export function sourceCacheEntryCount(): number {
+  let count = 0;
+  for (const { cache } of caches.values()) count += cache.stylesheets.size + cache.families.size;
+  return count;
 }
