@@ -19,8 +19,11 @@
       const buf = await resp.arrayBuffer();
       // ?substitute=1: the deck names a face no source serves by name; the
       // source declares the fixture family as its substitute.
+      // ?substitute=bullet: an Arabic-scoped substitute for the bullet face.
       const substitutes = params.get('substitute') === '1'
-        ? [{ for: 'Absent Office Face', use: 'Ooxml Fixture' }] : undefined;
+        ? [{ for: 'Absent Office Face', use: 'Ooxml Fixture' }]
+        : params.get('substitute') === 'bullet'
+          ? [{ for: 'Absent Bullet Face', use: 'Ooxml Fixture', script: 'arabic' }] : undefined;
       const fonts = mode === 'none' ? undefined
         : [fontFaceCss({ url: new URL('/generated/fixture-fonts.css', location.href).href, ...(substitutes ? { substitutes } : {}) })];
       const pres = await PptxPresentation.load(buf, {

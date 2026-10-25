@@ -29,10 +29,15 @@ const fixtureRun = (family: string, text: string) => `<a:r><a:rPr lang="en-US" s
 const fixtureDeck = (family: string) =>
   deck(textBox(para(fixtureRun(family, 'Fixture text ABC 123')) + para(fixtureRun(family, 'kanji 一二三'))));
 
-interface Variant { readonly progressive: boolean; readonly substitute: boolean }
+interface Variant { readonly progressive: boolean; readonly substitute: boolean | 'bullet' }
+
+// Latin body text; an Arabic character bullet (§21.1.2.4.3 buChar) in a face
+// the host lacks, served only by an Arabic-scoped substitute.
+const BULLET_PPTX = deck(textBox(para(fixtureRun('Body Face', 'Latin body'),
+  '<a:pPr marL="342900" indent="-342900"><a:buFont typeface="Absent Bullet Face"/><a:buChar char="ا"/></a:pPr>')));
 
 async function renderMode(page: Page, mode: 'main' | 'worker' | 'none', { progressive, substitute }: Variant) {
-  const FIXTURE_PPTX = fixtureDeck(substitute ? 'Absent Office Face' : 'Ooxml Fixture');
+  const FIXTURE_PPTX = substitute === 'bullet' ? BULLET_PPTX : fixtureDeck(substitute ? 'Absent Office Face' : 'Ooxml Fixture');
   const requests: Record<string, number> = {};
   const count = (key: string) => { requests[key] = (requests[key] ?? 0) + 1; };
   await page.route('**/generated/font-source.pptx', (route) => route.fulfill({
@@ -47,7 +52,7 @@ async function renderMode(page: Page, mode: 'main' | 'worker' | 'none', { progre
     count(name);
     return route.fulfill({ status: 200, contentType: 'font/ttf', body: FILES[name] });
   });
-  await page.goto(`/tests/visual/font-source-fixture.html?mode=${mode}${progressive ? '&progressive=1' : ''}${substitute ? '&substitute=1' : ''}`);
+  await page.goto(`/tests/visual/font-source-fixture.html?mode=${mode}${progressive ? '&progressive=1' : ''}${substitute === 'bullet' ? '&substitute=bullet' : substitute ? '&substitute=1' : ''}`);
   await page.waitForFunction(
     () => document.body.dataset.status === 'ready' || document.body.dataset.status === 'error',
     { timeout: 60_000 },
@@ -102,3 +107,22 @@ for (const variant of VARIANTS) {
     expect(mainVsNone).toBeGreaterThan(0.5);
   });
 }
+
+test('fonts: a marker\'s script proves its scoped substitute in main and worker mode', async ({ browser }) => {
+  const results = [];
+  for (const mode of ['main', 'worker'] as const) {
+    const context = await browser.newContext();
+    try {
+      results.push(await renderMode(await context.newPage(), mode, { progressive: false, substitute: 'bullet' }));
+    } finally {
+      await context.close();
+    }
+  }
+  const [main, worker] = results;
+  console.log(`  bullet font requests: main ${JSON.stringify(main.requests)}, worker ${JSON.stringify(worker.requests)}`);
+  expect(main.requests).toEqual(worker.requests);
+  // The Arabic marker text proves the bullet face's Arabic-scoped substitute,
+  // so the served family's faces load (bullets make scalar demand 'all').
+  const files = Object.entries(main.requests).filter(([key]) => key !== 'stylesheet');
+  expect(files.length).toBeGreaterThan(0);
+});

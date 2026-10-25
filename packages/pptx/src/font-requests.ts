@@ -4,8 +4,10 @@ import {
   cjkFallbackForText,
   scriptPreloadNamesForText,
   substituteEntryCoversText,
+  symbolFontToUnicode,
   type OfficeFontFallbackRequest,
 } from '@silurus/ooxml-core';
+import { formatAutoNum } from './autonum-label.js';
 import { ScriptPreloadAccumulator } from '@silurus/ooxml-core/internal/script-preload-accumulator';
 import {
   FONT_SUBSTITUTE_SCRIPTS,
@@ -200,18 +202,41 @@ export class PptxFontPreloadAccumulator {
    * renderer's `cssFontStack` admits a scoped substitute for the whole run. */
   private proveSubstituteScripts(textBody: TextBody | null | undefined): void {
     const scripts = (this.demand as DemandFactState).scripts;
+    const prove = (text: string, families: readonly (string | null | undefined)[]) => {
+      if (!text) return;
+      for (const script of FONT_SUBSTITUTE_SCRIPTS) {
+        if (!substituteEntryCoversText({ script }, text, 'any')) continue;
+        for (const family of families) {
+          // The renderer's family resolution: a ",<generic>" hint is dropped
+          // (theme tokens resolve to theme fonts, which admit every script).
+          const name = family?.split(',')[0]?.trim();
+          if (!name) continue;
+          const key = fontFamilyKey(name);
+          scripts.set(key, (scripts.get(key) ?? new Set()).add(script));
+        }
+      }
+    };
     for (const paragraph of textBody?.paragraphs ?? []) {
       for (const run of paragraph.runs) {
-        if (run.type !== 'text' || !run.text) continue;
-        const families = [run.fontFamily ?? paragraph.defFontFamily, run.fontFamilyEa, run.fontFamilyCs, run.fontFamilySym];
-        for (const script of FONT_SUBSTITUTE_SCRIPTS) {
-          if (!substituteEntryCoversText({ script }, run.text, 'any')) continue;
-          for (const family of families) {
-            if (!family) continue;
-            const key = fontFamilyKey(family);
-            scripts.set(key, (scripts.get(key) ?? new Set()).add(script));
-          }
-        }
+        if (run.type !== 'text') continue;
+        prove(run.text, [run.fontFamily ?? paragraph.defFontFamily, run.fontFamilyEa, run.fontFamilyCs, run.fontFamilySym]);
+      }
+      // Synthesized marker text paints with the marker's resolved family
+      // (renderer paragraphBullet, §21.1.2.4): a character bullet with its
+      // a:buFont (a theme font without one), unless its symbol code was mapped
+      // to a Unicode symbol painted in the generic sans-serif; an auto-number
+      // label with its a:buFont, else the first run's family. Field text is
+      // the run text above; line breaks and paragraph marks paint no glyph.
+      const bullet = paragraph.bullet;
+      if (bullet.type === 'char' && bullet.char
+        && symbolFontToUnicode(bullet.char, bullet.fontFamily ?? null) === bullet.char) {
+        prove(bullet.char, [bullet.fontFamily]);
+      } else if (bullet.type === 'autoNum') {
+        const firstRunFamily = paragraph.runs.find((run) => run.type === 'text' && !!run.fontFamily);
+        // Each scheme labels every counter in one script.
+        prove(formatAutoNum(bullet.startAt ?? 1, bullet.numType), [
+          bullet.fontFamily ?? (firstRunFamily?.type === 'text' ? firstRunFamily.fontFamily : null) ?? paragraph.defFontFamily,
+        ]);
       }
     }
   }

@@ -423,4 +423,23 @@ describe('font-source demand facts (LoadOptions.fonts)', () => {
     expect(full.fontPreloadNames.slice(0, full.fontPreloadFacts!.familyCount))
       .toEqual(expect.arrayContaining(['BodyFace', 'BulletFace', 'BreakFace', 'EndFace']));
   });
+
+  it('proves a marker\'s script under the marker\'s own family', () => {
+    // Latin body text; an Arabic character bullet in its own face, and an
+    // auto-number (ASCII labels) whose face proves nothing.
+    const marked: Slide = {
+      ...slide(0, 'Latin'),
+      elements: [{ type: 'shape', textBody: { paragraphs: [
+        { bullet: { type: 'char', char: 'ا', fontFamily: 'Bullet Face' },
+          runs: [{ type: 'text', text: 'Latin body', fontFamily: 'Body Face' }] },
+        { bullet: { type: 'autoNum', numType: 'arabicPeriod', fontFamily: 'Number Face' },
+          runs: [{ type: 'text', text: 'Item', fontFamily: 'Body Face' }] },
+      ] } }] as Slide['elements'],
+    };
+    const builder = new PresentationPreflightBuilder({ ...bootstrap, majorFont: null, minorFont: null },
+      { collectFontDemand: () => 'all' });
+    builder.addSlide(marked);
+    builder.addSlide(slide(1, 'B', { elements: [] }));
+    expect(builder.finish().fontPreloadFacts?.substituteScripts).toEqual({ 'bullet face': ['arabic'] });
+  });
 });
