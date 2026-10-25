@@ -45,3 +45,12 @@ export {
   type GoogleFontsOptions,
 } from '../fonts/presets/google-fonts.js';
 export { fontSourceLimitError } from '../errors/font-source-limit.js';
+export {
+  FontSourceSession,
+  normalizeFontDemand,
+  type FontResolverRunner,
+  type FontSourceSessionOptions,
+  type LoadedFontSources,
+  type LoadedSourceFace,
+} from '../fonts/source-session.js';
+export { fetchFontStylesheet, parseFontFaceCss, parseUnicodeRange } from '../fonts/css-source.js';

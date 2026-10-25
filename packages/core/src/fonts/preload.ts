@@ -53,6 +53,10 @@ export interface FontPreloadEntry {
  */
 const HARD_CEILING_MS = 15000;
 
+/** The same safety-net ceiling for loaders that abort instead of racing
+ * (`source-session.ts`). */
+export const FONT_LOAD_CEILING_MS = HARD_CEILING_MS;
+
 /** Race a font-load promise against a generous hard ceiling so a wedged network
  *  or a `FontFace.load()` that never settles cannot hang the caller forever.
  *  Shared by the Google-Fonts and embedded-font loaders (same first-paint
