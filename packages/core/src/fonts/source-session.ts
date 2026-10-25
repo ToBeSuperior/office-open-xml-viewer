@@ -46,7 +46,6 @@ import {
   HARD_MAX_FONT_DEMAND_SCALARS,
   HARD_MAX_FONT_SOURCE_DECLARATIONS,
   HARD_MAX_FONT_SOURCE_FAMILIES,
-  HARD_MAX_FONT_SOURCE_RETAINED_BYTES,
 } from '../worker/resource-policy.generated.js';
 import { parseUnicodeRange, resolveCssSource } from './css-source.js';
 import { claimFromIndex, indexFontDeclarations, resolveFontFiles } from './files-source.js';
@@ -54,7 +53,10 @@ import { releaseFaces, retainFace } from './font-registry.js';
 import { activeFontSet, FONT_LOAD_CEILING_MS } from './preload.js';
 import {
   acquireSourceCache,
+  chargeRetainedBytes,
   fontContentKey,
+  refundRetainedBytes,
+  retainedFontSourceBytes,
   SharedTask,
   type FamilyResolution,
   type SourceCache,
@@ -238,40 +240,34 @@ function until<T>(promise: Promise<T>, signal: AbortSignal): Promise<T | undefin
   });
 }
 
-// ---- realm byte accounting --------------------------------------------------------
+// ---- registration byte accounting -----------------------------------------------
 
 /** Decoded bytes of `data` faces and `data:` URL faces registered in this
  * realm, per FontFaceSet and signature (a face shared by two documents is
- * charged once; each realm's set holds its own copy). */
-const retainedBytes = new WeakMap<FontFaceSet, Map<string, { bytes: number; refs: number }>>();
-let retainedTotal = 0;
+ * charged once; each realm's set holds its own copy). The realm total is
+ * shared with the source caches (`source-cache.ts`). */
+const registeredBytes = new WeakMap<FontFaceSet, Map<string, { bytes: number; refs: number }>>();
 
 function chargeBytes(set: FontFaceSet, signature: string, bytes: number): void {
   if (bytes === 0) return;
-  let bySignature = retainedBytes.get(set);
+  let bySignature = registeredBytes.get(set);
   const existing = bySignature?.get(signature);
   if (existing) { existing.refs++; return; }
-  if (retainedTotal + bytes > HARD_MAX_FONT_SOURCE_RETAINED_BYTES) {
-    throw fontSourceLimitError('retained', HARD_MAX_FONT_SOURCE_RETAINED_BYTES, retainedTotal + bytes);
-  }
-  if (!bySignature) { bySignature = new Map(); retainedBytes.set(set, bySignature); }
+  chargeRetainedBytes(bytes);
+  if (!bySignature) { bySignature = new Map(); registeredBytes.set(set, bySignature); }
   bySignature.set(signature, { bytes, refs: 1 });
-  retainedTotal += bytes;
 }
 
 function refundBytes(set: FontFaceSet, signature: string): void {
-  const bySignature = retainedBytes.get(set);
+  const bySignature = registeredBytes.get(set);
   const entry = bySignature?.get(signature);
   if (!bySignature || !entry) return;
   if (--entry.refs > 0) return;
   bySignature.delete(signature);
-  retainedTotal -= entry.bytes;
+  refundRetainedBytes(entry.bytes);
 }
 
-/** Bytes this realm currently retains for source faces (tests, leak checks). */
-export function retainedFontSourceBytes(): number {
-  return retainedTotal;
-}
+export { retainedFontSourceBytes };
 
 // ---- session ------------------------------------------------------------------------
 
@@ -303,7 +299,7 @@ export class FontSourceSession {
   private readonly fontSet: FontFaceSet | null;
   private readonly runResolver: FontResolverRunner;
   private readonly controller = new AbortController();
-  private readonly detachSignal: () => void;
+  private detachSignal: () => void = () => undefined;
   private closed = false;
   private abortedByCaller = false;
   private failure: unknown = undefined;
@@ -324,10 +320,10 @@ export class FontSourceSession {
     if (signal) {
       const onAbort = () => { this.abortedByCaller = true; this.release(); };
       if (signal.aborted) onAbort();
-      else signal.addEventListener('abort', onAbort, { once: true });
-      this.detachSignal = () => signal.removeEventListener('abort', onAbort);
-    } else {
-      this.detachSignal = () => undefined;
+      else {
+        signal.addEventListener('abort', onAbort, { once: true });
+        this.detachSignal = () => signal.removeEventListener('abort', onAbort);
+      }
     }
   }
 

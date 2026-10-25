@@ -191,22 +191,56 @@ function splitTopLevel(text: string, separator: string): string[] {
   return parts;
 }
 
-/** Decode CSS escapes (CSS Syntax §4.3.7): `\` + 1–6 hex digits and one
- * optional white space, `\` + newline (a string line continuation, removed),
- * or `\` + any other code point. Zero, surrogates and values beyond U+10FFFF
- * become U+FFFD. */
-function unescapeCss(text: string): string {
+const isNewline = (char: string | undefined) => char === '\n' || char === '\r' || char === '\f';
+const isHexDigit = (unit: number) =>
+  (unit >= 0x30 && unit <= 0x39) || (unit >= 0x41 && unit <= 0x46) || (unit >= 0x61 && unit <= 0x66);
+const REPLACEMENT = String.fromCharCode(0xfffd);
+
+/**
+ * Consume an escaped code point (CSS Syntax §4.3.7); `at` is the backslash,
+ * already known to start a valid escape (not followed by a newline). One to
+ * six hex digits are followed by one optional white space, which belongs to
+ * the escape (CR LF counts as one, as input preprocessing makes it one LF);
+ * zero, a surrogate or a value beyond U+10FFFF is U+FFFD. A backslash at end
+ * of input is U+FFFD; otherwise the next code point stands for itself (NUL is
+ * U+FFFD after preprocessing).
+ */
+function consumeEscape(text: string, at: number): { value: string; end: number } {
+  let index = at + 1;
+  if (index >= text.length) return { value: REPLACEMENT, end: index };
+  let digits = 0;
+  while (digits < 6 && index + digits < text.length && isHexDigit(text.charCodeAt(index + digits))) digits++;
+  if (digits === 0) {
+    const code = text.codePointAt(index) as number;
+    return { value: code === 0 ? REPLACEMENT : String.fromCodePoint(code), end: index + (code > 0xffff ? 2 : 1) };
+  }
+  const code = parseInt(text.slice(index, index + digits), 16);
+  index += digits;
+  if (text.startsWith('\r\n', index)) index += 2;
+  else if (index < text.length && isWhitespace(text.charCodeAt(index))) index++;
+  const value = code === 0 || (code >= 0xd800 && code <= 0xdfff) || code > 0x10ffff
+    ? REPLACEMENT : String.fromCodePoint(code);
+  return { value, end: index };
+}
+
+/** Decode the escapes of a CSS string's contents: an escaped newline is a line
+ * continuation (removed) and a backslash at end of input contributes nothing
+ * (CSS Syntax §4.3.5). */
+function unescapeCssString(text: string): string {
   if (!text.includes('\\')) return text;
-  return text.replace(/\\(?:([0-9a-fA-F]{1,6})[ \t\n\f]?|(\r\n|[\n\f\r])|([\s\S])|$)/g,
-    (_match, hex: string | undefined, newline: string | undefined, other: string | undefined) => {
-      if (hex !== undefined) {
-        const code = parseInt(hex, 16);
-        return code === 0 || (code >= 0xd800 && code <= 0xdfff) || code > 0x10ffff
-          ? '�' : String.fromCodePoint(code);
-      }
-      if (newline !== undefined) return '';
-      return other ?? '�';
-    });
+  let out = '';
+  let index = 0;
+  while (index < text.length) {
+    const char = text[index];
+    if (char !== '\\') { out += char; index++; continue; }
+    const next = text[index + 1];
+    if (next === undefined) break;
+    if (isNewline(next)) { index += text.startsWith('\r\n', index + 1) ? 3 : 2; continue; }
+    const escape = consumeEscape(text, index);
+    out += escape.value;
+    index = escape.end;
+  }
+  return out;
 }
 
 /** The contents of `text` when it is exactly one terminated CSS string
@@ -217,14 +251,12 @@ function cssString(text: string): string | null {
   let index = 1;
   while (index < text.length) {
     const char = text[index];
-    if (char === quote) return index === text.length - 1 ? unescapeCss(text.slice(1, -1)) : null;
+    if (char === quote) return index === text.length - 1 ? unescapeCssString(text.slice(1, -1)) : null;
     if (char === '\n' || char === '\f' || char === '\r') return null;
     index += char === '\\' ? 2 : 1;
   }
   return null;
 }
-
-const IDENT = /^(?:--|-?(?:[A-Za-z_\u0080-￿]|\\[^\n\r\f]))(?:[-\w\u0080-￿]|\\[^\n\r\f])*$/;
 
 /** Reserved words a `<family-name>` cannot be spelled as unquoted (CSS-wide
  * keywords, `default`, and the generic families). */
@@ -233,6 +265,45 @@ const RESERVED_FAMILY_IDENTS = new Set([
   'serif', 'sans-serif', 'monospace', 'cursive', 'fantasy', 'system-ui', 'math', 'emoji', 'fangsong',
 ]);
 
+const isNameStart = (char: string | undefined) =>
+  char !== undefined && (/[A-Za-z_]/.test(char) || char.charCodeAt(0) >= 0x80);
+const startsValidEscape = (text: string, at: number) => text[at] === '\\' && !isNewline(text[at + 1]);
+
+/** Whether an identifier starts at `at` (CSS Syntax §4.3.9). */
+function startsIdentifier(text: string, at: number): boolean {
+  if (text[at] === '-') {
+    return text[at + 1] === '-' || isNameStart(text[at + 1]) || startsValidEscape(text, at + 1);
+  }
+  return isNameStart(text[at]) || startsValidEscape(text, at);
+}
+
+/** The decoded identifiers of a white-space separated identifier sequence,
+ * tokenized as CSS does (the white space ending a hex escape belongs to the
+ * escape), or null when anything else appears. */
+function identifierSequence(text: string): string[] | null {
+  const idents: string[] = [];
+  let index = 0;
+  while (index < text.length) {
+    if (isWhitespace(text.charCodeAt(index))) { index++; continue; }
+    if (!startsIdentifier(text, index)) return null;
+    let ident = '';
+    while (index < text.length) {
+      if (startsValidEscape(text, index)) {
+        const escape = consumeEscape(text, index);
+        ident += escape.value;
+        index = escape.end;
+      } else if (isNameUnit(text.charCodeAt(index))) {
+        ident += text[index++];
+      } else {
+        break;
+      }
+    }
+    if (index < text.length && !isWhitespace(text.charCodeAt(index))) return null;
+    idents.push(ident);
+  }
+  return idents;
+}
+
 /** `font-family` descriptor: one string, or identifiers joined by single spaces. */
 function parseFamily(value: string): string | null {
   const text = value.trim();
@@ -240,10 +311,10 @@ function parseFamily(value: string): string | null {
     const family = cssString(text)?.trim();
     return family ? family : null;
   }
-  const idents = text.split(/[ \t\n\f\r]+/);
-  if (!idents.every((ident) => IDENT.test(ident))) return null;
+  const idents = identifierSequence(text);
+  if (!idents?.length) return null;
   if (idents.length === 1 && RESERVED_FAMILY_IDENTS.has(idents[0].toLowerCase())) return null;
-  const family = idents.map(unescapeCss).join(' ').trim();
+  const family = idents.join(' ').trim();
   return family || null;
 }
 
@@ -270,7 +341,7 @@ function srcEntryUrl(entry: string): string | null {
     if (unquotedEnd === text.length && text.at(-1) !== ')') return null;
     // Escaped code points are part of the URL.
     if (/["'(\s\u0000-\u0008\u000b\u000e-\u001f\u007f]/.test(raw.replace(/\\[^\n\r\f]/g, ''))) return null;
-    url = unescapeCss(raw);
+    url = unescapeCssString(raw);
     text = text.slice(unquotedEnd).trim();
   } else {
     const call = leadingFunction(text);
@@ -422,14 +493,27 @@ interface StylesheetResponse {
   readonly status?: number;
   readonly url?: string;
   readonly headers?: { get(name: string): string | null };
-  readonly body?: { getReader(): ByteReader } | null;
+  readonly body?: { getReader(): ByteReader; cancel?(reason?: unknown): Promise<void> } | null;
   text(): Promise<string>;
+}
+
+/** Cancel an unread response body (the caller also aborts the request), so a
+ * rejected response stops downloading. */
+function discardBody(response: StylesheetResponse): void {
+  try {
+    response.body?.cancel?.().catch(() => undefined);
+  } catch {
+    /* a locked or consumed body: the request abort still stops it */
+  }
 }
 
 async function readBoundedText(response: StylesheetResponse): Promise<string> {
   const limit = HARD_MAX_FONT_SOURCE_STYLESHEET_BYTES;
   const declared = Number(response.headers?.get('content-length') ?? NaN);
-  if (Number.isSafeInteger(declared) && declared > limit) throw fontSourceLimitError('stylesheet', limit, declared);
+  if (Number.isSafeInteger(declared) && declared > limit) {
+    discardBody(response);
+    throw fontSourceLimitError('stylesheet', limit, declared);
+  }
   const reader = typeof response.body?.getReader === 'function' ? response.body.getReader() : null;
   if (!reader) {
     const text = await response.text();
@@ -467,16 +551,30 @@ export async function fetchFontStylesheet(
   signal: AbortSignal,
 ): Promise<FontStylesheet | FontSourceFailure> {
   if (typeof fetch !== 'function') return { ok: false, reason: 'fetch is unavailable' };
+  // A request of our own, so every early rejection below aborts the download
+  // even while the caller's signal stays live.
+  const request = new AbortController();
+  const onAbort = () => request.abort();
+  signal.addEventListener('abort', onAbort, { once: true });
+  if (signal.aborted) request.abort();
+  let complete = false;
   let response: StylesheetResponse;
   let text: string;
   try {
-    response = await fetch(url, { credentials: credentials ?? 'same-origin', signal }) as StylesheetResponse;
-    if (!response.ok) return { ok: false, reason: `HTTP ${response.status ?? 'error'}` };
+    response = await fetch(url, { credentials: credentials ?? 'same-origin', signal: request.signal }) as StylesheetResponse;
+    if (!response.ok) {
+      discardBody(response);
+      return { ok: false, reason: `HTTP ${response.status ?? 'error'}` };
+    }
     text = await readBoundedText(response);
+    complete = true;
   } catch (error) {
     if (error instanceof OoxmlError) throw error;
     if (signal.aborted) throw error;
     return { ok: false, reason: error instanceof Error ? error.message : String(error) };
+  } finally {
+    signal.removeEventListener('abort', onAbort);
+    if (!complete) request.abort();
   }
   const finalUrl = response.url || url;
   if (!/^https?:/i.test(finalUrl)) return { ok: false, reason: 'stylesheet redirected off http(s)' };

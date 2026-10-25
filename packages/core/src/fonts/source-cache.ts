@@ -21,8 +21,10 @@
  * waiter has abandoned it, and a task that fails is evicted so a later session
  * retries the same source (never another).
  */
+import { fontSourceLimitError } from '../errors/font-source-limit.js';
 import { createAbortError } from '../internal/abort.js';
-import type { FontFaceDeclaration, FontSource } from './source.js';
+import { HARD_MAX_FONT_SOURCE_RETAINED_BYTES } from '../worker/resource-policy.generated.js';
+import { dataUrlDecodedByteLength, type FontFaceDeclaration, type FontSource } from './source.js';
 import type { FontSubstitution } from './substitutions.js';
 
 // ---- identity -------------------------------------------------------------------
@@ -129,29 +131,42 @@ function follow(signal: AbortSignal, onAbort: () => void): () => void {
 }
 
 /**
- * One piece of work joined by any number of waiters. The producer receives a
- * signal that aborts only when every waiter has abandoned the task before it
- * settled; `onAbandon` then evicts it from its cache so the next waiter starts
- * afresh.
+ * One piece of work joined by any number of waiters. The producer starts on
+ * the first live join, never before, and receives a signal that aborts as soon
+ * as the waiter count returns to zero before the task settled; `onAbandon`
+ * then evicts it from its cache so the next waiter starts afresh.
  */
 export class SharedTask<T> {
   private readonly controller = new AbortController();
-  private readonly promise: Promise<T>;
+  private promise: Promise<T> | undefined;
   private waiters = 0;
   private settled = false;
 
-  constructor(produce: (signal: AbortSignal) => Promise<T>, private readonly onAbandon: () => void) {
-    this.promise = Promise.resolve()
-      .then(() => produce(this.controller.signal))
+  constructor(private readonly produce: (signal: AbortSignal) => Promise<T>, private readonly onAbandon: () => void) {}
+
+  private start(): Promise<T> {
+    const signal = this.controller.signal;
+    const promise = Promise.resolve()
+      .then(() => {
+        // Every waiter may have left between the join and this microtask.
+        if (signal.aborted) throw createAbortError('Font source request abandoned');
+        return this.produce(signal);
+      })
       .finally(() => { this.settled = true; });
     // The task's own rejection is observed by each joiner; never unhandled here.
-    this.promise.catch(() => undefined);
+    promise.catch(() => undefined);
+    return promise;
   }
 
-  /** Await the task, or reject with an `AbortError` as soon as `signal` aborts. */
+  /** Await the task, or reject with an `AbortError` as soon as `signal` aborts.
+   * Joining with an aborted signal neither starts nor keeps the task. */
   join(signal: AbortSignal): Promise<T> {
-    if (signal.aborted) return Promise.reject(createAbortError('Font source request abandoned'));
+    if (signal.aborted || this.controller.signal.aborted) {
+      if (this.waiters === 0 && !this.settled) this.abandon();
+      return Promise.reject(createAbortError('Font source request abandoned'));
+    }
     this.waiters++;
+    const promise = this.promise ??= this.start();
     return new Promise<T>((resolve, reject) => {
       let done = false;
       const leave = () => {
@@ -162,34 +177,92 @@ export class SharedTask<T> {
       const detach = follow(signal, () => {
         if (done) return;
         leave();
-        if (this.waiters === 0 && !this.settled) {
-          this.controller.abort();
-          this.onAbandon();
-        }
+        if (this.waiters === 0 && !this.settled) this.abandon();
         reject(createAbortError('Font source request abandoned'));
       });
-      this.promise.then(
+      promise.then(
         (value) => { detach(); if (!done) { leave(); resolve(value); } },
         (error: unknown) => { detach(); if (!done) { leave(); reject(error); } },
       );
     });
   }
+
+  private abandon(): void {
+    this.controller.abort();
+    this.onAbandon();
+  }
 }
 
-/** A keyed map of shared tasks. Rejections and results `evict` accepts are
- * removed once settled, so failures are never cached. */
+// ---- realm byte accounting -------------------------------------------------------
+
+/** Decoded bytes of font data the library keeps alive in this realm: cached
+ * resolver buffers and cached `data:` URLs (charged by their cache entries)
+ * plus registered `data` / `data:` faces (charged by their registrations, see
+ * `source-session.ts`). Both are real copies in memory, so both count against
+ * `HARD_MAX_FONT_SOURCE_RETAINED_BYTES`. */
+let retainedTotal = 0;
+
+/** Charge `bytes` or reject with `OoxmlError('font-source-limit')`. */
+export function chargeRetainedBytes(bytes: number): void {
+  if (bytes <= 0) return;
+  if (retainedTotal + bytes > HARD_MAX_FONT_SOURCE_RETAINED_BYTES) {
+    throw fontSourceLimitError('retained', HARD_MAX_FONT_SOURCE_RETAINED_BYTES, retainedTotal + bytes);
+  }
+  retainedTotal += bytes;
+}
+
+export function refundRetainedBytes(bytes: number): void {
+  if (bytes > 0) retainedTotal -= bytes;
+}
+
+/** Bytes this realm currently retains for font sources (tests, leak checks). */
+export function retainedFontSourceBytes(): number {
+  return retainedTotal;
+}
+
+/** Decoded bytes a declaration list holds: `data` buffers (each distinct
+ * buffer once) and `data:` URLs. */
+export function declarationBytes(declarations: readonly FontFaceDeclaration[]): number {
+  const buffers = new Set<ArrayBuffer>();
+  let bytes = 0;
+  for (const declaration of declarations) {
+    if (declaration.data) {
+      if (!buffers.has(declaration.data)) { buffers.add(declaration.data); bytes += declaration.data.byteLength; }
+    } else if (declaration.url && /^\s*data:/i.test(declaration.url)) {
+      bytes += dataUrlDecodedByteLength(declaration.url) ?? 0;
+    }
+  }
+  return bytes;
+}
+
+/**
+ * A keyed map of shared tasks. Rejections and results `evict` accepts are
+ * removed once settled, so failures are never cached. A kept result is charged
+ * `weigh(result)` retained bytes for as long as the map keeps it; a charge
+ * beyond the realm ceiling rejects every joiner and keeps nothing.
+ */
 export class SharedTaskMap<T> {
   private readonly tasks = new Map<string, SharedTask<T>>();
+  private readonly charged = new Map<string, number>();
 
-  constructor(private readonly evict: (value: T) => boolean = () => false) {}
+  constructor(
+    private readonly evict: (value: T) => boolean = () => false,
+    private readonly weigh: (value: T) => number = () => 0,
+  ) {}
 
   join(key: string, produce: (signal: AbortSignal) => Promise<T>, signal: AbortSignal): Promise<T> {
     let task = this.tasks.get(key);
     if (!task) {
+      // Never create work for a waiter that has already left.
+      if (signal.aborted) return Promise.reject(createAbortError('Font source request abandoned'));
       const created: SharedTask<T> = new SharedTask(async (taskSignal) => {
         try {
           const value = await produce(taskSignal);
-          if (this.evict(value) && this.tasks.get(key) === created) this.tasks.delete(key);
+          if (this.tasks.get(key) !== created) return value;
+          if (this.evict(value)) { this.tasks.delete(key); return value; }
+          const bytes = this.weigh(value);
+          chargeRetainedBytes(bytes);
+          if (bytes > 0) this.charged.set(key, bytes);
           return value;
         } catch (error) {
           if (this.tasks.get(key) === created) this.tasks.delete(key);
@@ -205,7 +278,11 @@ export class SharedTaskMap<T> {
   /** Whether a task (in flight or settled and kept) exists for `key`. */
   has(key: string): boolean { return this.tasks.has(key); }
 
-  clear(): void { this.tasks.clear(); }
+  clear(): void {
+    this.tasks.clear();
+    for (const bytes of this.charged.values()) refundRetainedBytes(bytes);
+    this.charged.clear();
+  }
 }
 
 // ---- per-source cache ------------------------------------------------------------
@@ -271,8 +348,14 @@ export function acquireSourceCache(source: FontSource): SourceCache {
     refs: 1,
     cache: {
       id,
-      stylesheets: new SharedTaskMap((value) => !value.ok),
-      families: new SharedTaskMap((value) => value.kind === 'failed'),
+      // Cached content is charged where the cache is its only holder: inline
+      // data: faces of a stylesheet, and the buffers a resolver returned.
+      // (A font-files index references the descriptor's own buffers.)
+      stylesheets: new SharedTaskMap((value) => !value.ok,
+        (value) => (value.ok ? declarationBytes(value.declarations) : 0)),
+      families: new SharedTaskMap((value) => value.kind === 'failed',
+        (value) => (source.kind === 'font-resolver' && value.kind === 'claimed'
+          ? declarationBytes(value.declarations) : 0)),
       release: () => undefined,
     },
   };

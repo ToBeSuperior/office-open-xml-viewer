@@ -113,6 +113,27 @@ body { font-family: "A"; src: url(no.woff2); }
     expect(family('"unterminated')).toBeUndefined();
   });
 
+  it('consumes escapes per CSS Syntax §4.3.7', () => {
+    const family = (value: string) => parseFontFaceCss(face(`font-family: ${value}; src: url(a.woff2);`), SHEET)[0]?.family;
+    // The white space ending a hex escape belongs to the escape.
+    expect(family('\\49 nter')).toBe('Inter');
+    expect(family('\\49\r\nnter')).toBe('Inter');
+    expect(family('\\49  nter')).toBe('I nter');
+    expect(family('\\000049nter')).toBe('Inter');
+    expect(family('A\\0 B')).toBe('A\uFFFDB');
+    expect(family('A\\D800 B')).toBe('A\uFFFDB');
+    expect(family('A\\110000 B')).toBe('A\uFFFDB');
+    expect(family('A\\1F600 B')).toBe('A\u{1F600}B');
+    expect(family('A\\\u{1F600}B')).toBe('A\u{1F600}B');
+    expect(family('A\\ B')).toBe('A B');
+    expect(family('"A\\49 nter"')).toBe('AInter');
+    // A string line continuation is removed.
+    expect(family('"Line\\\nCont"')).toBe('LineCont');
+    // A backslash at end of input is U+FFFD in an identifier.
+    expect(parseFontFaceCss('@font-face { src: url(a.woff2); font-family: X\\}', SHEET)).toEqual([]);
+    expect(parseFontFaceCss('@font-face { src: url(a.woff2); font-family: X\\', SHEET)).toEqual([]);
+  });
+
   it('drops invalid, !important and block-valued descriptors as CSS does', () => {
     const [declaration] = parseFontFaceCss(face(`
       font-family: X; src: url(a.woff2);
@@ -180,6 +201,7 @@ describe('fetchFontStylesheet', () => {
 
   function streamed(chunks: Uint8Array[], init: { url?: string; contentLength?: number } = {}) {
     let cancelled = false;
+    let bodyCancelled = false;
     let index = 0;
     return {
       response: {
@@ -190,10 +212,12 @@ describe('fetchFontStylesheet', () => {
             read: async () => index < chunks.length ? { done: false, value: chunks[index++] } : { done: true },
             cancel: async () => { cancelled = true; },
           }),
+          cancel: async () => { bodyCancelled = true; },
         },
         text: async () => { throw new Error('body must be streamed'); },
       },
       cancelled: () => cancelled,
+      bodyCancelled: () => bodyCancelled,
       reads: () => index,
     };
   }
@@ -217,19 +241,27 @@ describe('fetchFontStylesheet', () => {
   it('stops reading once the byte ceiling is exceeded', async () => {
     const chunk = new Uint8Array(256 * 1024).fill(0x20);
     const stream = streamed([chunk, chunk, chunk, chunk, chunk, chunk, chunk, chunk]);
-    G.fetch = async () => stream.response;
-    await expect(fetchFontStylesheet('https://fonts.example/a.css', 'omit', new AbortController().signal))
+    let requestSignal: AbortSignal | undefined;
+    G.fetch = async (_url: string, init: RequestInit) => { requestSignal = init.signal ?? undefined; return stream.response; };
+    const caller = new AbortController();
+    await expect(fetchFontStylesheet('https://fonts.example/a.css', 'omit', caller.signal))
       .rejects.toMatchObject({ code: 'font-source-limit', violation: { quota: 'stylesheet' } });
     expect(stream.reads()).toBe(5);
     expect(stream.cancelled()).toBe(true);
+    // The request is aborted although the caller's signal stays live.
+    expect(requestSignal?.aborted).toBe(true);
+    expect(caller.signal.aborted).toBe(false);
   });
 
   it('rejects a declared Content-Length beyond the ceiling before reading', async () => {
     const stream = streamed([], { contentLength: HARD_MAX_FONT_SOURCE_STYLESHEET_BYTES + 1 });
-    G.fetch = async () => stream.response;
+    let requestSignal: AbortSignal | undefined;
+    G.fetch = async (_url: string, init: RequestInit) => { requestSignal = init.signal ?? undefined; return stream.response; };
     await expect(fetchFontStylesheet('https://fonts.example/a.css', undefined, new AbortController().signal))
       .rejects.toMatchObject({ code: 'font-source-limit' });
     expect(stream.reads()).toBe(0);
+    expect(stream.bodyCancelled()).toBe(true);
+    expect(requestSignal?.aborted).toBe(true);
   });
 
   it('reports transport failures and empty stylesheets as failures, not errors', async () => {

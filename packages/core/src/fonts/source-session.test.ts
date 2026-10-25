@@ -323,7 +323,8 @@ describe('FontSourceSession: claim-once chaining', () => {
       families: ['Private', 'Calibri'], fallbackFamilies: ['Noto Sans JP'], tuples: [], scalars: [0x61, 0x62],
     }]);
     expect(loaded.faces.map((face) => face.family)).toEqual(['Private', 'Carlito']);
-    expect(retainedFontSourceBytes()).toBe(3);
+    // The cached resolution and the registered face are both real copies.
+    expect(retainedFontSourceBytes()).toBe(6);
     // Noto Sans JP passed through the resolver to the preset.
     expect(calls.map((call) => new URL(call.url).searchParams.get('family')))
       .toEqual(['Carlito:ital,wght@0,400;0,700;1,400;1,700', 'Noto Sans JP:wght@400;700']);
@@ -407,7 +408,65 @@ describe('FontSourceSession: limits fail closed', () => {
   });
 });
 
+describe('FontSourceSession: retained bytes held by shared caches', () => {
+  it('charges cached resolver bytes for as long as any session keeps the cache', async () => {
+    vi.resetModules();
+    vi.doMock('../worker/resource-policy.generated.js', async (importOriginal) => ({
+      ...await importOriginal<Record<string, unknown>>(),
+      HARD_MAX_FONT_SOURCE_RETAINED_BYTES: 100,
+    }));
+    try {
+      const fresh = await import('./source-session.js');
+      const sourceModule = await import('./source.js');
+      const source = sourceModule.fontResolver((request) =>
+        request.families.map((family) => ({ family, data: new Uint8Array(30).buffer })));
+      const set = fakeSet();
+      // An idle session keeps the source's cache (and its resolutions) alive.
+      const idle = new fresh.FontSourceSession({ sources: [source], fontSet: asSet(set) });
+      const cycle = async (family: string) => {
+        const session = new fresh.FontSourceSession({ sources: [source], fontSet: asSet(set) });
+        try { await session.ensure(demand([family])); } finally { session.release(); }
+      };
+      await cycle('A');
+      await cycle('B');
+      // Two cached 30-byte buffers stay in memory after their faces left.
+      expect(set.faces).toHaveLength(0);
+      expect(fresh.retainedFontSourceBytes()).toBe(60);
+      // A third: 90 cached + 30 registered exceeds the 100-byte ceiling.
+      await expect(cycle('C')).rejects.toMatchObject({ code: 'font-source-limit', violation: { quota: 'retained' } });
+      idle.release();
+      expect(fresh.retainedFontSourceBytes()).toBe(0);
+    } finally {
+      vi.doUnmock('../worker/resource-policy.generated.js');
+      vi.resetModules();
+    }
+  });
+});
+
 describe('FontSourceSession: release balance and cancellation', () => {
+  it('accepts an already-aborted signal: inert, cache released, ensures reject', async () => {
+    const { fetchMock } = installFetch({});
+    const session = new FontSourceSession({
+      sources: [fontFaceCss({ url: 'https://fonts.example/a.css' })], fontSet: asSet(fakeSet()), signal: AbortSignal.abort(),
+    });
+    expect(liveSourceCacheCount()).toBe(0);
+    await expect(session.ensure(demand(['Brand']))).rejects.toMatchObject({ name: 'AbortError' });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it.each([0, 1, 2, 3, 4])('starts no live fetch when released %i microtasks into an ensure', async (ticks) => {
+    const { calls } = installFetch({ 'https://fonts.example/a.css': { css: rule('Brand', 'b.woff2') } });
+    const set = fakeSet();
+    const session = open([fontFaceCss({ url: 'https://fonts.example/a.css' })], set);
+    const pending = session.ensure(demand(['Brand']));
+    for (let tick = 0; tick < ticks; tick++) await Promise.resolve();
+    session.release();
+    expect((await pending).faces).toEqual([]);
+    // A request may only run while a waiter wants it.
+    expect(calls.filter((call) => !call.init?.signal?.aborted)).toEqual([]);
+    expect(set.faces).toHaveLength(0);
+  });
+
   it('releases exactly what it retained, once, including faces two families share', async () => {
     installFetch({});
     const set = fakeSet();
