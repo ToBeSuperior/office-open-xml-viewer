@@ -253,3 +253,16 @@ export type {
   // RenderSlideToBitmapOptions.dim) — the translucent overlay mechanism.
   DimOptions,
 } from './types';
+// Shared `LoadOptions.fonts` descriptor types. This entry still loads fonts
+// through `useGoogleFonts`; the font-source factories are exported here once
+// this format consumes `fonts`.
+export type {
+  CssApiSource,
+  FontFaceCssSource,
+  FontFaceDeclaration,
+  FontFilesSource,
+  FontResolverSource,
+  FontSource,
+  FontSourceCredentials,
+  FontSubstitution,
+} from '@silurus/ooxml-core/internal/font-sources';

@@ -65,15 +65,32 @@ export function fontFamilyKey(family: string): string {
   return family.trim().replace(/^(['"])(.*)\1$/s, '$2').trim().toLocaleLowerCase('en-US');
 }
 
+/** The substitute scripts one demanded family's text proves
+ * (`FontDemand.substituteScripts`), or `'all'` when demand does not restrict
+ * scoped substitutions. */
+export type FontSubstituteScripts = 'all' | readonly FontSubstituteScript[];
+
 /** Substitutions a source declares for one authored family, in declaration
- * order (the first is preferred). */
+ * order (the first is preferred). A script-scoped substitution is admissible
+ * only when `scripts` proves its script: it limits when the substitute is
+ * requested, never whether the authored family itself is. */
 export function substitutionsFor(
   substitutes: readonly FontSubstitution[] | undefined,
   authoredFamily: string,
+  scripts: FontSubstituteScripts = 'all',
 ): readonly FontSubstitution[] {
   if (!substitutes || substitutes.length === 0) return [];
   const key = fontFamilyKey(authoredFamily);
-  return substitutes.filter((entry) => fontFamilyKey(entry.for) === key);
+  return substitutes.filter((entry) => fontFamilyKey(entry.for) === key
+    && (entry.script === undefined || scripts === 'all' || scripts.includes(entry.script)));
+}
+
+/** Resolution-cache key of one family under one substitution scope: a family
+ * resolved without its scoped substitutes is a different answer from one
+ * resolved with them, so they never share a cached resolution. */
+export function scopedFamilyKey(family: string, scripts: FontSubstituteScripts): string {
+  const key = fontFamilyKey(family);
+  return scripts === 'all' ? key : `${key}\u0000${[...scripts].sort().join(',')}`;
 }
 
 /** How a declared face family satisfies one demanded family. */

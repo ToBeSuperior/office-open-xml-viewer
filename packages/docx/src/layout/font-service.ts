@@ -9,7 +9,7 @@ import {
   type FontSubstituteScript,
 } from '@silurus/ooxml-core';
 
-export type FontResolutionSource = 'embedded' | 'local' | 'css' | 'google' | 'substitute' | 'native' | 'generic';
+export type FontResolutionSource = 'embedded' | 'local' | 'css' | 'source' | 'substitute' | 'native' | 'generic';
 export type FontStyle = 'normal' | 'italic';
 
 export interface FontRequest {
@@ -154,7 +154,7 @@ export function createFontResolver(
     embedded: 0,
     local: 1,
     css: 2,
-    google: 3,
+    source: 3,
     substitute: 4,
   };
   const faces = inventory

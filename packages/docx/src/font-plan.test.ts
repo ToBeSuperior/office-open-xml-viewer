@@ -1,38 +1,21 @@
 import { describe, expect, it } from 'vitest';
-import type { FontPreloadEntry } from '@silurus/ooxml-core';
+import { googleFonts } from '@silurus/ooxml-core/internal/font-sources';
 import {
-  DOCX_GOOGLE_FONTS,
-  docxFontPreloadNames,
-  docxGoogleFontPlan,
+  declaredFontSubstitutions,
+  docxFontDemandCandidates,
+  docxFontFamilyPlan,
   docxOfficeFontFallbackRequests,
-} from './google-fonts.js';
+} from './font-plan.js';
 import type { DocxDocumentModel } from './types.js';
 
-// Verbatim snapshot of the DOCX Office-font substitute map BEFORE the shared
-// registry consolidation (PR #-, Phase 3 C7), excluding the SCRIPT_GOOGLE_FONTS
-// spread (unchanged, shared already). Frozen as the oracle so the consolidated
-// map's effective entries can only ADD keys, never drop or alter one.
-const DOCX_GOOGLE_FONTS_OLD: Record<string, FontPreloadEntry> = {
-  'calibri':           { url: 'https://fonts.googleapis.com/css2?family=Carlito:ital,wght@0,400;0,700;1,400;1,700&display=swap', loadFamily: 'Carlito' },
-  'cambria':           { url: 'https://fonts.googleapis.com/css2?family=Caladea:ital,wght@0,400;0,700;1,400;1,700&display=swap', loadFamily: 'Caladea' },
-  'nunito sans':       { url: 'https://fonts.googleapis.com/css2?family=Nunito+Sans:ital,wght@0,400;0,700;1,400;1,700&display=swap' },
-  'nunito':            { url: 'https://fonts.googleapis.com/css2?family=Nunito:ital,wght@0,400;0,700;1,400;1,700&display=swap' },
-  'open sans':         { url: 'https://fonts.googleapis.com/css2?family=Open+Sans:ital,wght@0,400;0,700;1,400;1,700&display=swap' },
-  'roboto':            { url: 'https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,700;1,400;1,700&display=swap' },
-  'lato':              { url: 'https://fonts.googleapis.com/css2?family=Lato:ital,wght@0,400;0,700;1,400;1,700&display=swap' },
-  'montserrat':        { url: 'https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@0,400;0,700;1,400;1,700&display=swap' },
-  'poppins':           { url: 'https://fonts.googleapis.com/css2?family=Poppins:ital,wght@0,400;0,700;1,400;1,700&display=swap' },
-  'raleway':           { url: 'https://fonts.googleapis.com/css2?family=Raleway:ital,wght@0,400;0,700;1,400;1,700&display=swap' },
-  'playfair display':  { url: 'https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;1,400;1,700&display=swap' },
-  'ubuntu':            { url: 'https://fonts.googleapis.com/css2?family=Ubuntu:ital,wght@0,400;0,700;1,400;1,700&display=swap' },
-  'sakkal majalla':      { url: 'https://fonts.googleapis.com/css2?family=Noto+Naskh+Arabic:wght@400;700&display=swap', loadFamily: 'Noto Naskh Arabic' },
-  'traditional arabic':  { url: 'https://fonts.googleapis.com/css2?family=Noto+Naskh+Arabic:wght@400;700&display=swap', loadFamily: 'Noto Naskh Arabic' },
-  'simplified arabic':   { url: 'https://fonts.googleapis.com/css2?family=Noto+Naskh+Arabic:wght@400;700&display=swap', loadFamily: 'Noto Naskh Arabic' },
-  'arabic typesetting':  { url: 'https://fonts.googleapis.com/css2?family=Noto+Naskh+Arabic:wght@400;700&display=swap', loadFamily: 'Noto Naskh Arabic' },
-  'univers next arabic': { url: 'https://fonts.googleapis.com/css2?family=Noto+Sans+Arabic:wght@400;700&display=swap', loadFamily: 'Noto Sans Arabic' },
-  'noto naskh arabic':   { url: 'https://fonts.googleapis.com/css2?family=Noto+Naskh+Arabic:wght@400;700&display=swap', loadFamily: 'Noto Naskh Arabic' },
-  'noto sans arabic':    { url: 'https://fonts.googleapis.com/css2?family=Noto+Sans+Arabic:wght@400;700&display=swap', loadFamily: 'Noto Sans Arabic' },
-};
+const GOOGLE = [googleFonts()];
+const SUBSTITUTES = declaredFontSubstitutions(GOOGLE);
+
+/** Demanded names before the installed check: authored, then fallback. */
+function docxFontPreloadNames(doc: DocxDocumentModel, fallback?: Parameters<typeof docxFontDemandCandidates>[2]): string[] {
+  const candidates = docxFontDemandCandidates(doc, SUBSTITUTES, fallback);
+  return [...candidates.authored, ...candidates.fallback];
+}
 
 /** Build a minimal model whose body is a single paragraph with one text run. */
 function docWith(text: string, major = 'Calibri', minor = 'Calibri'): DocxDocumentModel {
@@ -54,7 +37,7 @@ function docWith(text: string, major = 'Calibri', minor = 'Calibri'): DocxDocume
 describe('docxFontPreloadNames — script-aware preload', () => {
   it('pure-Latin doc preloads ONLY the theme fonts (no CJK / script faces)', () => {
     const names = docxFontPreloadNames(docWith('Hello, world.'));
-    expect(names).toEqual(['Calibri', 'Calibri']);
+    expect(names).toEqual(['Calibri']);
     // The expensive CJK faces must NOT be queued for a Latin document.
     expect(names).not.toContain('Noto Sans JP');
     expect(names).not.toContain('Noto Sans KR');
@@ -110,7 +93,7 @@ it('also requests the catalogued regular face of a styled tuple the catalog lack
   expect(requests).toContainEqual({ family: 'MS Mincho', weight: 400, style: 'normal' });
 });
 
-it('preloads every registered rendered family without theme names and omits unregistered ones', () => {
+it('demands every rendered authored family, whatever a source serves', () => {
   const doc = docWith('body');
   doc.majorFont = undefined;
   doc.minorFont = undefined;
@@ -119,9 +102,7 @@ it('preloads every registered rendered family without theme names and omits unre
     { type: 'text', text: 'b', fontFamily: 'Arial', fontFamilyEastAsia: 'Roboto' },
     { type: 'text', text: 'c', fontFamily: 'Arial', fontFamilyCs: 'Franklin Gothic Book' },
   ];
-  expect(docxFontPreloadNames(doc)).toEqual([
-    undefined, undefined, 'Ubuntu', 'Roboto', 'Franklin Gothic Book',
-  ]);
+  expect(docxFontPreloadNames(doc)).toEqual(['Ubuntu', 'Arial', 'Roboto', 'Franklin Gothic Book']);
 });
 
 it('checks substitute family presence independent of the styles used', () => {
@@ -134,7 +115,7 @@ it('checks substitute family presence independent of the styles used', () => {
   // The bold tuple, plus the catalogued regular face the uncatalogued bold
   // is compared with (LIBRARY_SYNTHESIZED_FACE_LINE_GEOMETRY), are style
   // requests; presence is asked for the family.
-  const requests = docxOfficeFontFallbackRequests(doc, { useGoogleFonts: true });
+  const requests = docxOfficeFontFallbackRequests(doc, { fontDemand: true });
   expect(requests.filter((request) => request.family === 'Franklin Gothic Book')).toEqual([
     { family: 'Franklin Gothic Book', weight: 700, style: 'normal' },
     { family: 'Franklin Gothic Book', weight: 400, style: 'normal' },
@@ -149,11 +130,16 @@ it('checks substitute family presence independent of the styles used', () => {
     { routes: {}, installed: ['franklin gothic book'] },
     { routes: { 'franklin gothic book:700:normal': {} } },
   ]) {
-    const plan = docxGoogleFontPlan(doc, undefined, officeFonts);
-    expect(plan.names).not.toContain('Franklin Gothic Book');
+    const plan = docxFontFamilyPlan(doc, GOOGLE, undefined, officeFonts);
+    expect(plan.families).not.toContain('Franklin Gothic Book');
     expect(plan.installedSubstituteFamilies).toEqual(['franklin gothic book']);
   }
-  expect(docxGoogleFontPlan(doc, undefined, { routes: {} }).names).toContain('Franklin Gothic Book');
+  const absent = docxFontFamilyPlan(doc, GOOGLE, undefined, { routes: {} });
+  expect(absent.families).toContain('Franklin Gothic Book');
+  expect(absent.tuples).toContainEqual({ family: 'Franklin Gothic Book', weight: 700, style: 'normal' });
+  // An installed family without a declared substitute is not demanded either.
+  expect(docxFontFamilyPlan(doc, [], undefined, { routes: {}, installed: ['franklin gothic book'] }).families)
+    .toEqual([]);
 });
 
 it('loads the themed bold face when a run inherits its family', () => {
@@ -188,66 +174,27 @@ it('does not load the theme face for an explicitly authored Latin face', () => {
   expect(requests).toContainEqual({ family: 'Meiryo', weight: 700, style: 'normal' });
 });
 
-describe('DOCX_GOOGLE_FONTS — theme typeface coverage', () => {
-  // Templates whose theme minorFont is Ubuntu (e.g. sample-11) emit runs with
-  // family "Ubuntu". Without an explicit mapping the preloader skips the name
-  // and the renderer falls back to a system sans whose metrics are narrower
-  // than Ubuntu's — table cells sized against the Ubuntu width then fail to
-  // wrap where Word would. The map entry resolves Ubuntu against Google Fonts
-  // so the canvas measures glyphs with the actual face.
-  it('resolves Ubuntu to a Google Fonts Ubuntu stylesheet', () => {
-    const entry = DOCX_GOOGLE_FONTS['ubuntu'];
-    expect(entry).toBeDefined();
-    expect(entry.url).toMatch(/^https:\/\/fonts\.googleapis\.com\/css2\?/);
-    expect(entry.url).toMatch(/family=Ubuntu(?:[:&]|$)/);
-    // No loadFamily override — Google Fonts ships the same family name, so
-    // the renderer's canvas font stack can use "Ubuntu" directly.
-    expect(entry.loadFamily).toBeUndefined();
-  });
-
-  it('includes Ubuntu in the preload list when the theme minorFont is Ubuntu', () => {
-    const names = docxFontPreloadNames(docWith('City or Town', 'Calibri', 'Ubuntu'));
-    expect(names).toContain('Ubuntu');
-  });
+it('demands a theme minorFont such as Ubuntu', () => {
+  expect(docxFontPreloadNames(docWith('City or Town', 'Calibri', 'Ubuntu'))).toContain('Ubuntu');
 });
 
-describe('DOCX_GOOGLE_FONTS — shared registry consolidation (oracle)', () => {
-  it('preserves complete loading entries with explicit Arabic scope metadata', () => {
-    for (const [key, entry] of Object.entries(DOCX_GOOGLE_FONTS_OLD)) {
-      // Loading entries remain the frozen oracle; only these five authored
-      // visual alternatives carry the explicitly expected Arabic scope tag.
-      const scoped = new Set(['sakkal majalla', 'traditional arabic', 'simplified arabic',
-        'arabic typesetting', 'univers next arabic']);
-      expect(DOCX_GOOGLE_FONTS[key], `entry "${key}"`)
-        .toEqual(scoped.has(key) ? { ...entry, script: 'arabic' } : entry);
-    }
-  });
-
-  it('adds only supported text-face alternatives', () => {
-    // Consolidating everything into the shared GOOGLE_FONT_SUBSTITUTES pulls the
-    // The Franklin Gothic faces share Libre Franklin. Calibri Light needs a
-    // distinct light face, and Cambria Math needs mathematical font support.
-    const oldScriptKeys = new Set(Object.keys(DOCX_GOOGLE_FONTS_OLD));
-    const added = Object.keys(DOCX_GOOGLE_FONTS).filter(
-      (k) => !oldScriptKeys.has(k) && !k.startsWith('noto '),
-    );
-    expect(new Set(added)).toEqual(new Set([
-      'franklin gothic book',
-      'franklin gothic medium',
-    ]));
-    expect(DOCX_GOOGLE_FONTS['calibri light']).toBeUndefined();
-    expect(DOCX_GOOGLE_FONTS['cambria math']).toBeUndefined();
-    expect(DOCX_GOOGLE_FONTS['franklin gothic medium']).toMatchObject({
-      loadFamily: 'Libre Franklin',
-    });
-  });
+it('demands a family with Arabic-scoped substitutes, admitting the substitute only for Arabic text', () => {
+  const doc = docWith('body', 'Aptos', 'Aptos');
+  (doc.body[0] as { runs: object[] }).runs = [
+    { type: 'text', text: 'Latin only', fontFamily: 'Sakkal Majalla' },
+  ];
+  // The authored family is always demanded (a source may serve it by name);
+  // only its Arabic-scoped substitute waits for Arabic text.
+  expect(docxFontPreloadNames(doc)).toContain('Sakkal Majalla');
+  expect(docxFontDemandCandidates(doc, SUBSTITUTES).substituteScripts['sakkal majalla']).toEqual([]);
+  (doc.body[0] as { runs: object[] }).runs.push({ type: 'text', text: 'مرحبا', fontFamily: 'Sakkal Majalla' });
+  expect(docxFontDemandCandidates(doc, SUBSTITUTES).substituteScripts['sakkal majalla']).toEqual(['arabic']);
 });
-
 
 it('preloads the configured fallback only for ambiguous Han', () => {
   expect(docxFontPreloadNames(docWith('漢字'), 'sc')).toContain('Noto Sans SC');
   expect(docxFontPreloadNames(docWith('漢字'), 'sc')).not.toContain('Noto Sans JP');
-  expect(docxFontPreloadNames(docWith('Hello'), 'sc')).toEqual(['Calibri', 'Calibri']);
+  expect(docxFontPreloadNames(docWith('Hello'), 'sc')).toEqual(['Calibri']);
   expect(docxFontPreloadNames(docWith('漢字', 'Meiryo'), 'sc')).toContain('Noto Sans JP');
   expect(docxFontPreloadNames(docWith('漢字かな'), 'sc')).toContain('Noto Sans JP');
 });
@@ -275,7 +222,7 @@ it('keeps default native preflight at its existing slot projection', () => {
     fontFamily: 'Arial', fontSlots: { direct: { ascii: 'Arial', highAnsi: 'Cambria',
       eastAsia: 'Arial', complexScript: 'Arial' }, themePresent: {} } }];
   expect(docxOfficeFontFallbackRequests(doc).some((request) => request.family === 'Cambria')).toBe(false);
-  expect(docxOfficeFontFallbackRequests(doc, { useGoogleFonts: true }))
+  expect(docxOfficeFontFallbackRequests(doc, { fontDemand: true }))
     .toContainEqual({ family: 'Cambria', weight: 400, style: 'normal' });
   expect(docxFontPreloadNames(doc)).toContain('Cambria');
 });

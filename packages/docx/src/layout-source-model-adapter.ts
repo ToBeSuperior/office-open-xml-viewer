@@ -1,6 +1,6 @@
 import type { DocParagraph, DocRun, DocxDocumentModel, HeadersFooters } from './types.js';
 import { docxRenderedFontFamilies } from './document-content.js';
-import { docxFontPreloadNames, docxScriptCjkLanguage } from './google-fonts.js';
+import { docxScriptCjkLanguage } from './font-plan.js';
 import { resolveDocumentLayoutSettings } from './layout-context.js';
 import { getDefaultFontSize } from './line-layout.js';
 import { docDefaultFontSizePt } from './layout/measurement-environment.js';
@@ -503,7 +503,6 @@ function buildLayoutSourceModelAdapter(
     minorFamily: privateDocument.minorFont ?? null,
     embeddedFonts: [...(privateDocument.embeddedFonts ?? [])],
     renderedFamilies: docxRenderedFontFamilies(privateDocument),
-    preloadNames: docxFontPreloadNames(privateDocument),
     scriptCjkLanguage: docxScriptCjkLanguage(privateDocument),
     defaultBodyFontSizePt: docDefaultFontSizePt(privateDocument),
   };

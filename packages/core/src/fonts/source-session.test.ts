@@ -826,3 +826,30 @@ describe('FontSourceSession: demand contract', () => {
     session.release();
   });
 });
+
+describe('FontSourceSession: script-scoped substitution proof (FontDemand.substituteScripts)', () => {
+  const NASKH = 'https://fonts.googleapis.com/css2?family=Noto+Naskh+Arabic:wght@400;700&display=swap';
+
+  it('consults a scoped substitute only for families whose text proves its script, caching the scopes apart', async () => {
+    const { calls } = installFetch({ [NASKH]: { css: rule('Noto Naskh Arabic', 'https://fonts.gstatic.example/n.woff2') } });
+    const preset = googleFonts();
+    const set = fakeSet();
+    const latin = await open([preset], set).ensure({
+      ...demand(['Sakkal Majalla'], [0x61]), substituteScripts: { 'sakkal majalla': [] },
+    });
+    expect(latin.substitutions.size).toBe(0);
+    expect(calls).toEqual([]);
+    // Same source identity, Arabic proven: the earlier unscoped answer is not reused.
+    const arabic = await open([preset], set).ensure({
+      ...demand(['Sakkal Majalla'], [0x645]), substituteScripts: { 'sakkal majalla': ['arabic'] },
+    });
+    expect(arabic.substitutions.get('sakkal majalla')).toEqual({ family: 'Noto Naskh Arabic', script: 'arabic' });
+    expect(calls.map(({ url }) => url)).toEqual([NASKH]);
+    // Unscoped substitutions and the family's own faces are never restricted.
+    const files = fontFiles({ faces: [{ family: 'Sakkal Majalla', url: 'https://app.example/s.woff2' }] });
+    const own = await open([files, preset], set).ensure({
+      ...demand(['Sakkal Majalla'], [0x61]), substituteScripts: {},
+    });
+    expect(own.faces.map((face) => face.family)).toEqual(['Sakkal Majalla']);
+  });
+});

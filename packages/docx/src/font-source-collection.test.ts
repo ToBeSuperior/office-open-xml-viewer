@@ -6,16 +6,18 @@ import { storeZip } from './conformance/generate.js';
 import { createLayoutServices } from './layout-runtime.js';
 import { normalizeInternalDocumentModel, paragraphMarkShapeInput } from './parser-model.js';
 import { renderDocumentToCanvas } from './renderer.js';
-import { docxFontPreloadNames } from './google-fonts.js';
+import { fontFiles, googleFonts } from '@silurus/ooxml-core/internal/font-sources';
+import { declaredFontSubstitutions, docxFontDemandCandidates } from './font-plan.js';
+import { sourceFontLayoutOptions } from './testing/font-sources.js';
 import { LineMeasurementAdapter } from './line-breaker/measurement-adapter.js';
 import type { LayoutTextSeg } from './line-breaker/model.js';
 import { createLayoutServicesRuntimeView } from './layout/runtime-state.js';
 import { assertTextShapeRunContext, sliceTextShapeRequest, textScopeScanStats } from './layout/text.js';
 import type { DocxDocumentModel } from './types.js';
 
-// useGoogleFonts substitutes (Calibri → Carlito, Cambria → Caladea) are fetched
-// only for names in docxFontPreloadNames, and the layout font inventory routes
-// only those names to a loaded substitute. Each case parses a synthetic DOCX
+// Font-source substitutes (googleFonts(): Calibri → Carlito, Cambria → Caladea)
+// are fetched only for families in the document's demand, and the layout font
+// inventory routes only demanded names to a loaded substitute. Each case parses a synthetic DOCX
 // with NO theme part (so theme names cannot mask the gap) and asserts that the
 // family production shaping requests is both collected and painted with the
 // loaded substitute.
@@ -150,11 +152,8 @@ async function paintedFamilies(
     dpr: 1,
     width: 612,
     layoutServices: createLayoutServices(model, {
-      useGoogleFonts: true,
-      googleFaces: WEB_FACES.map(loaded),
+      ...sourceFontLayoutOptions(model, WEB_FACES.map(loaded), { installed: options.installedSubstituteFamilies }),
       measureContext: canvas.getContext('2d') as CanvasRenderingContext2D,
-      ...(options.installedSubstituteFamilies
-        ? { installedSubstituteFamilies: options.installedSubstituteFamilies } : {}),
     }),
   });
   return texts.map((text) => calls.find((entry) => entry.text.includes(text))?.face);
@@ -162,6 +161,20 @@ async function paintedFamilies(
 
 async function paintedFamily(model: DocxDocumentModel, text: string): Promise<string | undefined> {
   return (await paintedFamilies(model, [text]))[0];
+}
+
+const GOOGLE_SUBSTITUTES = declaredFontSubstitutions([googleFonts()]);
+/** Demanded names before the installed check. */
+function docxFontPreloadNames(model: DocxDocumentModel): string[] {
+  const candidates = docxFontDemandCandidates(model, GOOGLE_SUBSTITUTES);
+  return [...candidates.authored, ...candidates.fallback];
+}
+
+/** Whether demand admits the Arabic-scoped substitute for Sakkal Majalla. */
+function arabicSubstituteAdmitted(model: DocxDocumentModel): boolean {
+  const candidates = docxFontDemandCandidates(model, GOOGLE_SUBSTITUTES);
+  return candidates.authored.includes('Sakkal Majalla')
+    && (candidates.substituteScripts['sakkal majalla'] ?? []).includes('arabic');
 }
 
 beforeAll(async () => {
@@ -235,8 +248,7 @@ describe('script-scoped Arabic visual substitutes', () => {
     await renderDocumentToCanvas(model, canvas, 0, {
       dpr: 1, width: 612,
       layoutServices: createLayoutServices(model, {
-        useGoogleFonts,
-        ...(useGoogleFonts ? { googleFaces: WEB_FACES.map(loaded) } : {}),
+        ...(useGoogleFonts ? sourceFontLayoutOptions(model, WEB_FACES.map(loaded)) : {}),
         measureContext: canvas.getContext('2d') as CanvasRenderingContext2D,
       }),
     });
@@ -260,7 +272,7 @@ describe('script-scoped Arabic visual substitutes', () => {
     const options = { measureContext: canvas.getContext('2d') as CanvasRenderingContext2D,
       installedSubstituteFamilies: ['sakkal majalla'] };
     const services = createLayoutServices(model, {
-      ...options, useGoogleFonts: true, googleFaces: faces.map(loaded),
+      ...options, ...sourceFontLayoutOptions(model, faces.map(loaded), { installed: ['sakkal majalla'] }),
     });
     await renderDocumentToCanvas(model, canvas, 0, { dpr: 1, width: 612, layoutServices: services });
     expect(calls.some(({ text, face }) => text.includes('مرحبا') && face === 'Noto Sans Arabic')).toBe(true);
@@ -291,7 +303,7 @@ describe('script-scoped Arabic visual substitutes', () => {
     await renderDocumentToCanvas(model, canvas, 0, {
       dpr: 1, width: 612,
       layoutServices: createLayoutServices(model, {
-        useGoogleFonts: true, googleFaces: WEB_FACES.map(loaded),
+        ...sourceFontLayoutOptions(model, WEB_FACES.map(loaded)),
         measureContext: canvas.getContext('2d') as CanvasRenderingContext2D,
       }),
     });
@@ -309,7 +321,7 @@ describe('script-scoped Arabic visual substitutes', () => {
       const { canvas, calls, measurements } = recordingCanvas(new Set([...WEB_FACES, alias, 'Arial']));
       if (source === 'css') vi.stubGlobal('self', { fonts: new Set([loaded('Sakkal Majalla')]) });
       const services = createLayoutServices(model, {
-        useGoogleFonts: true, googleFaces: WEB_FACES.map(loaded),
+        ...sourceFontLayoutOptions(model, WEB_FACES.map(loaded)),
         measureContext: canvas.getContext('2d') as CanvasRenderingContext2D,
         ...(source === 'embedded' ? { embeddedRoutes: [{ requestedFamily: 'Sakkal Majalla',
           resolvedFamily: alias, weight: 400, style: 'normal' as const, resourceIdentity: 'embedded:test' }] } : {}),
@@ -325,7 +337,8 @@ describe('script-scoped Arabic visual substitutes', () => {
             sourceIdentity: 'local:test', lineHeightRatio: 1,
           } } : {}),
         },
-        ...(source === 'installed' ? { installedSubstituteFamilies: ['sakkal majalla'] } : {}),
+        ...(source === 'installed'
+          ? sourceFontLayoutOptions(model, WEB_FACES.map(loaded), { installed: ['sakkal majalla'] }) : {}),
       });
       if (source === 'css') vi.unstubAllGlobals();
       await renderDocumentToCanvas(model, canvas, 0, { dpr: 1, width: 612, layoutServices: services });
@@ -345,7 +358,7 @@ describe('script-scoped Arabic visual substitutes', () => {
     await renderDocumentToCanvas(model, canvas, 0, {
       dpr: 1, width: 612,
       layoutServices: createLayoutServices(model, {
-        useGoogleFonts: true, googleFaces: WEB_FACES.map(loaded),
+        ...sourceFontLayoutOptions(model, WEB_FACES.map(loaded)),
         measureContext: canvas.getContext('2d') as CanvasRenderingContext2D,
       }),
     });
@@ -363,7 +376,7 @@ describe('script-scoped Arabic visual substitutes', () => {
     const model = parse(docx(sakkal('ما ١٢a')));
     const { canvas } = recordingCanvas(new Set(WEB_FACES));
     const services = createLayoutServices(model, {
-      useGoogleFonts: true, googleFaces: WEB_FACES.map(loaded),
+      ...sourceFontLayoutOptions(model, WEB_FACES.map(loaded)),
       measureContext: canvas.getContext('2d') as CanvasRenderingContext2D,
     });
     const word = sliceTextShapeRequest({ text: 'ما ١٢a', fontSizePt: 10,
@@ -401,7 +414,7 @@ describe('script-scoped Arabic visual substitutes', () => {
     await renderDocumentToCanvas(model, canvas, 0, {
       dpr: 1, width: 612,
       layoutServices: createLayoutServices(model, {
-        useGoogleFonts: true, googleFaces: WEB_FACES.map(loaded),
+        ...sourceFontLayoutOptions(model, WEB_FACES.map(loaded)),
         measureContext: canvas.getContext('2d') as CanvasRenderingContext2D,
       }),
     });
@@ -432,7 +445,7 @@ describe('script-scoped Arabic visual substitutes', () => {
     await renderDocumentToCanvas(model, canvas, 0, {
       dpr: 1, width: 612,
       layoutServices: createLayoutServices(model, {
-        useGoogleFonts: true, googleFaces: WEB_FACES.map(loaded),
+        ...sourceFontLayoutOptions(model, WEB_FACES.map(loaded)),
         measureContext: canvas.getContext('2d') as CanvasRenderingContext2D,
       }),
     });
@@ -466,7 +479,7 @@ describe('script-scoped Arabic visual substitutes', () => {
     await renderDocumentToCanvas(model, canvas, 0, {
       dpr: 1, width: 612,
       layoutServices: createLayoutServices(model, {
-        useGoogleFonts: true, googleFaces: WEB_FACES.map(loaded),
+        ...sourceFontLayoutOptions(model, WEB_FACES.map(loaded)),
         measureContext: canvas.getContext('2d') as CanvasRenderingContext2D,
       }),
     });
@@ -485,7 +498,7 @@ describe('script-scoped Arabic visual substitutes', () => {
       + `</w:rPr><w:t xml:space="preserve">${text}</w:t></w:r></w:p>`));
     const { canvas, calls } = recordingCanvas(new Set([...WEB_FACES, 'Arial']));
     const services = createLayoutServices(model, {
-      useGoogleFonts: true, googleFaces: WEB_FACES.map(loaded),
+      ...sourceFontLayoutOptions(model, WEB_FACES.map(loaded)),
       measureContext: canvas.getContext('2d') as CanvasRenderingContext2D,
     });
     await renderDocumentToCanvas(model, canvas, 0, { dpr: 1, width: 612, layoutServices: services });
@@ -504,7 +517,7 @@ describe('script-scoped Arabic visual substitutes', () => {
         + ` w:hAnsi="Sakkal Majalla"/>${transform}</w:rPr><w:t>${original}</w:t></w:r></w:p>`));
       const { canvas, calls, measurements } = recordingCanvas(new Set(WEB_FACES));
       const services = createLayoutServices(model, {
-        useGoogleFonts: true, googleFaces: WEB_FACES.map(loaded),
+        ...sourceFontLayoutOptions(model, WEB_FACES.map(loaded)),
         measureContext: canvas.getContext('2d') as CanvasRenderingContext2D,
       });
       const seen: string[] = [];
@@ -536,7 +549,7 @@ describe('script-scoped Arabic visual substitutes', () => {
       + `<w:rFonts w:ascii="${family}" w:hAnsi="${family}"/>${transform}`
       + `</w:rPr><w:t>${original}</w:t></w:r></w:p>`));
     const { canvas, calls } = recordingCanvas(new Set(WEB_FACES));
-    const services = createLayoutServices(model, { useGoogleFonts: true, googleFaces: WEB_FACES.map(loaded),
+    const services = createLayoutServices(model, { ...sourceFontLayoutOptions(model, WEB_FACES.map(loaded)),
       measureContext: canvas.getContext('2d') as CanvasRenderingContext2D });
     const ranges: string[] = [];
     const view = createLayoutServicesRuntimeView(services, { text: { ...services.text, shape(request) {
@@ -568,7 +581,7 @@ describe('script-scoped Arabic visual substitutes', () => {
     const model = parse(docx(sakkal(context)));
     const { canvas, calls, measurements } = recordingCanvas(new Set(WEB_FACES));
     const services = createLayoutServices(model, {
-      useGoogleFonts: true, googleFaces: WEB_FACES.map(loaded),
+      ...sourceFontLayoutOptions(model, WEB_FACES.map(loaded)),
       measureContext: canvas.getContext('2d') as CanvasRenderingContext2D,
     });
     const fonts = { ascii: 'Sakkal Majalla', highAnsi: 'Sakkal Majalla', complexScript: 'Sakkal Majalla' };
@@ -639,14 +652,13 @@ describe('script-scoped Arabic visual substitutes', () => {
 
   it('neither preloads nor paints Noto Naskh Arabic for Latin-only Sakkal Majalla text', async () => {
     const model = parse(docx(sakkal('Leader')));
-    expect(docxFontPreloadNames(model)).not.toContain('Sakkal Majalla');
+    expect(arabicSubstituteAdmitted(model)).toBe(false);
     // Naskh is loaded (another run's Arabic text would load it too), but the
     // missing authored face must fall back past it for Latin.
     expect(await paintedFamily(model, 'Leader')).toBe('serif');
     const { canvas } = recordingCanvas(new Set(WEB_FACES));
     const services = createLayoutServices(model, {
-      useGoogleFonts: true,
-      googleFaces: WEB_FACES.map(loaded),
+      ...sourceFontLayoutOptions(model, WEB_FACES.map(loaded)),
       measureContext: canvas.getContext('2d') as CanvasRenderingContext2D,
     });
     const slots = { ascii: 'Sakkal Majalla', highAnsi: 'Sakkal Majalla', complexScript: 'Sakkal Majalla' };
@@ -662,7 +674,7 @@ describe('script-scoped Arabic visual substitutes', () => {
 
   it('paints only the Arabic characters of a mixed ascii-slot run with the substitute', async () => {
     const model = parse(docx(sakkal('مرحبا Leader')));
-    expect(docxFontPreloadNames(model)).toContain('Sakkal Majalla');
+    expect(arabicSubstituteAdmitted(model)).toBe(true);
     expect(await paintedFamilies(model, ['مرحبا', 'Leader']))
       .toEqual(['Noto Naskh Arabic', 'serif']);
   });
@@ -683,8 +695,7 @@ describe('script-scoped Arabic visual substitutes', () => {
       await renderDocumentToCanvas(model, canvas, 0, {
         dpr: 1, width: 612,
         layoutServices: createLayoutServices(model, {
-          useGoogleFonts: true,
-          googleFaces: WEB_FACES.map(loaded),
+          ...sourceFontLayoutOptions(model, WEB_FACES.map(loaded)),
           measureContext: canvas.getContext('2d') as CanvasRenderingContext2D,
         }),
       });
@@ -700,8 +711,7 @@ describe('script-scoped Arabic visual substitutes', () => {
       await renderDocumentToCanvas(model, canvas, 0, {
         dpr: 1, width: 612,
         layoutServices: createLayoutServices(model, {
-          useGoogleFonts: true,
-          googleFaces: WEB_FACES.map(loaded),
+          ...sourceFontLayoutOptions(model, WEB_FACES.map(loaded)),
           measureContext: canvas.getContext('2d') as CanvasRenderingContext2D,
         }),
       });
@@ -736,8 +746,7 @@ describe('script-scoped Arabic visual substitutes', () => {
     expect(await paintedFamilies(model, [vocalised, 'Leader'])).toEqual(['Noto Naskh Arabic', 'serif']);
     const { canvas } = recordingCanvas(new Set(WEB_FACES));
     const services = createLayoutServices(model, {
-      useGoogleFonts: true,
-      googleFaces: WEB_FACES.map(loaded),
+      ...sourceFontLayoutOptions(model, WEB_FACES.map(loaded)),
       measureContext: canvas.getContext('2d') as CanvasRenderingContext2D,
     });
     const shaped = services.text.shape({
@@ -749,7 +758,7 @@ describe('script-scoped Arabic visual substitutes', () => {
 
   it('never lets an invisible control enable the substitute for a complex-script span', async () => {
     const model = parse(docx(sakkal('Leader\uFEFF', true)));
-    expect(docxFontPreloadNames(model)).not.toContain('Sakkal Majalla');
+    expect(arabicSubstituteAdmitted(model)).toBe(false);
     expect(await paintedFamily(model, 'Leader')).toBe('serif');
   });
 
@@ -759,5 +768,33 @@ describe('script-scoped Arabic visual substitutes', () => {
       installedSubstituteFamilies: ['sakkal majalla'],
       installedFaces: ['Sakkal Majalla'],
     })).toEqual(['Sakkal Majalla']);
+  });
+});
+
+describe('substitution relationships are keyed per authored family', () => {
+  it('serves a directly supplied family for its own Latin text although another family substitutes to it', async () => {
+    // A face supplied for A, with the Arabic-scoped pairs A → B and C → A.
+    // Being C's target must not scope A out of A's own route.
+    const sources = [fontFiles({
+      faces: [{ family: 'Alpha Face', url: 'https://app.example/alpha.woff2' }],
+      substitutes: [
+        { for: 'Alpha Face', use: 'Beta Face', script: 'arabic' },
+        { for: 'Gamma Face', use: 'Alpha Face', script: 'arabic' },
+      ],
+    })];
+    const model = parse(docx('<w:p><w:r><w:rPr><w:rFonts w:ascii="Alpha Face" w:hAnsi="Alpha Face"'
+      + ' w:cs="Alpha Face"/></w:rPr><w:t>Latin text</w:t></w:r></w:p>'));
+    const { canvas, calls } = recordingCanvas(new Set(['Alpha Face']));
+    await renderDocumentToCanvas(model, canvas, 0, {
+      dpr: 1, width: 612,
+      layoutServices: createLayoutServices(model, {
+        ...sourceFontLayoutOptions(model, [loaded('Alpha Face')], { sources }),
+        measureContext: canvas.getContext('2d') as CanvasRenderingContext2D,
+      }),
+    });
+    const painted = calls.filter((call) => call.text.includes('Latin'));
+    expect(painted.length).toBeGreaterThan(0);
+    expect(painted.map((call) => call.face)).toEqual(painted.map(() => 'Alpha Face'));
+    expect(painted.every((call) => cssFamilies(call.font)[0] === 'Alpha Face')).toBe(true);
   });
 });

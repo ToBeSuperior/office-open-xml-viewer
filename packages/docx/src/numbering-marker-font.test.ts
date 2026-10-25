@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { sourceFontLayoutOptions } from './testing/font-sources.js';
 import { createLayoutServices } from './layout-runtime.js';
 import { renderDocumentToCanvas, type DocxTextRunInfo } from './renderer.js';
 import {
@@ -293,8 +294,7 @@ describe('numbering marker + body eastAsia font routing (§17.3.2.26 / §17.9.6)
       dpr: 1,
       width: 400,
       layoutServices: createLayoutServices(model, {
-        useGoogleFonts: true,
-        googleFaces: [carlito],
+        ...sourceFontLayoutOptions(model, [carlito]),
         measureContext: canvas.getContext('2d'),
       }),
     });
@@ -444,10 +444,9 @@ describe('numbering marker + body eastAsia font routing (§17.3.2.26 / §17.9.6)
     } as unknown as NumberingInfo;
     const doc = { ...headingDoc(num), majorFont: 'Calibri' };
     const services = createLayoutServices(doc, {
-      useGoogleFonts: true,
-      googleFaces: [{
+      ...sourceFontLayoutOptions(doc, [{
         family: 'Carlito', weight: '400', style: 'normal', status: 'loaded',
-      } as FontFace],
+      }]),
       measureContext: ctx,
     });
     const state = shapeAcquisitionState(ctx, {});

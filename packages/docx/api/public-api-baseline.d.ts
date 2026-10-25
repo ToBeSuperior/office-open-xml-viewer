@@ -1171,6 +1171,21 @@ export interface CommentAnchorRange {
     readonly reference: CommentAnchorPoint;
     readonly geometryFallback?: CommentAnchorGeometryFallback;
 }
+export function cssApi(options: CssApiOptions): CssApiSource;
+export interface CssApiOptions {
+    readonly urlTemplate: string;
+    readonly query?: string;
+    readonly families?: Readonly<Record<string, string | true>>;
+    readonly substitutes?: readonly FontSubstitution[];
+    readonly credentials?: FontSourceCredentials;
+}
+export interface CssApiSource extends FontSourceBase {
+    readonly kind: 'css-api';
+    readonly urlTemplate: string;
+    readonly query?: string;
+    readonly families?: Readonly<Record<string, string | true>>;
+    readonly credentials?: FontSourceCredentials;
+}
 export type DecodedImageBudgetStrategy = 'adaptive' | 'strict';
 export interface DocComment {
     id: string;
@@ -1711,6 +1726,53 @@ export interface FindMatch<Loc = unknown> {
 export interface FindMatchesOptions {
     caseSensitive?: boolean;
 }
+const FONT_SOURCE_PROTOCOL = 'ooxml-font-source/v1';
+export function fontFaceCss(options: FontFaceCssOptions): FontFaceCssSource;
+export interface FontFaceCssOptions {
+    readonly url: string;
+    readonly substitutes?: readonly FontSubstitution[];
+    readonly credentials?: FontSourceCredentials;
+}
+export interface FontFaceCssSource extends FontSourceBase {
+    readonly kind: 'font-face-css';
+    readonly url: string;
+    readonly credentials?: FontSourceCredentials;
+}
+export interface FontFaceDeclaration {
+    readonly family: string;
+    readonly url?: string;
+    readonly data?: ArrayBuffer;
+    readonly weight?: string;
+    readonly style?: string;
+    readonly stretch?: string;
+    readonly unicodeRange?: string;
+}
+export function fontFiles(options: FontFilesOptions): FontFilesSource;
+export interface FontFilesOptions {
+    readonly faces: readonly FontFaceDeclaration[];
+    readonly substitutes?: readonly FontSubstitution[];
+}
+export interface FontFilesSource extends FontSourceBase {
+    readonly kind: 'font-files';
+    readonly faces: readonly FontFaceDeclaration[];
+}
+export interface FontResolverSource extends FontSourceBase {
+    readonly kind: 'font-resolver';
+    readonly id: string;
+}
+export type FontSource = CssApiSource | FontFaceCssSource | FontFilesSource | FontResolverSource;
+interface FontSourceBase {
+    readonly protocol: typeof FONT_SOURCE_PROTOCOL;
+    readonly kind: string;
+    readonly substitutes?: readonly FontSubstitution[];
+}
+export type FontSourceCredentials = 'omit' | 'same-origin';
+export type FontSubstituteScript = 'arabic';
+export interface FontSubstitution {
+    readonly for: string;
+    readonly use: string;
+    readonly script?: FontSubstituteScript;
+}
 export interface FramePr {
     dropCap: 'none' | 'drop' | 'margin' | string;
     lines: number;
@@ -1731,6 +1793,10 @@ export interface Glow {
     color: string;
     alpha: number;
     radius: number;
+}
+export function googleFonts(options?: GoogleFontsOptions): CssApiSource;
+export interface GoogleFontsOptions {
+    readonly cssOrigin?: string;
 }
 export interface GradientFill {
     fillType: 'gradient';
@@ -1866,6 +1932,7 @@ export interface LoadOptions extends LoadOptions__emitterCollision1 {
     currentDate?: Date | number;
 }
 interface LoadOptions__emitterCollision1 {
+    fonts?: readonly FontSource[];
     useGoogleFonts?: boolean;
     cjkFallback?: CjkFallback;
     password?: string;
@@ -2052,6 +2119,7 @@ export interface NumberingInfo {
     picBulletHeightPt?: number;
     picBulletTransform?: Pick<ImageRun, 'srcRect' | 'rotation' | 'flipH' | 'flipV'>;
 }
+export const officeFontSubstitutions: readonly FontSubstitution[];
 export class OoxmlDecodedImageLimitError extends RangeError {
     readonly metric: OoxmlDecodedImageLimitMetric;
     readonly limit: number;

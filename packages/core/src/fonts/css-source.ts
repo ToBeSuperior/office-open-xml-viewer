@@ -67,7 +67,7 @@ import {
   type FontFaceDeclaration,
   type FontSourceCredentials,
 } from './source.js';
-import { fontFamilyKey } from './substitutions.js';
+import { fontFamilyKey, scopedFamilyKey, type FontSubstituteScripts } from './substitutions.js';
 
 // ---- unicode-range ------------------------------------------------------------------
 
@@ -1008,8 +1008,9 @@ async function resolveCssApiFamily(
   family: string,
   signal: AbortSignal,
   holder: object,
+  scripts: FontSubstituteScripts,
 ): Promise<FamilyResolution> {
-  const requests = cssApiRequests(source, family);
+  const requests = cssApiRequests(source, family, scripts);
   if (requests.length === 0) return { kind: 'absent' };
   const sheets = await Promise.all(requests.map((request) =>
     joinStylesheet(cache, request.url, source.credentials, signal, holder)));
@@ -1041,12 +1042,13 @@ async function resolveFontFaceCssFamily(
   family: string,
   signal: AbortSignal,
   holder: object,
+  scripts: FontSubstituteScripts,
 ): Promise<FamilyResolution> {
   const sheet = await joinStylesheet(cache, source.url, source.credentials, signal, holder);
   if (!sheet.ok) return { kind: 'failed', reason: sheet.reason };
   let index = stylesheetIndexes.get(sheet);
   if (!index) { index = indexFontDeclarations(sheet.declarations); stylesheetIndexes.set(sheet, index); }
-  return claimFromIndex(index, family, source.substitutes);
+  return claimFromIndex(index, family, source.substitutes, scripts);
 }
 
 /** Resolve demanded families against a CSS source through the shared
@@ -1057,12 +1059,14 @@ export async function resolveCssSource(
   cache: SourceCache,
   families: readonly string[],
   signal: AbortSignal,
+  scriptsOf: (family: string) => FontSubstituteScripts = () => 'all',
 ): Promise<ReadonlyMap<string, FamilyResolution>> {
   const entries = await Promise.all(families.map(async (family) => {
     const key = fontFamilyKey(family);
-    const resolution = await cache.families.join(key, (taskSignal, task) => source.kind === 'css-api'
-      ? resolveCssApiFamily(source, cache, family, taskSignal, task)
-      : resolveFontFaceCssFamily(source, cache, family, taskSignal, task), signal, cache);
+    const scripts = scriptsOf(family);
+    const resolution = await cache.families.join(scopedFamilyKey(family, scripts), (taskSignal, task) => source.kind === 'css-api'
+      ? resolveCssApiFamily(source, cache, family, taskSignal, task, scripts)
+      : resolveFontFaceCssFamily(source, cache, family, taskSignal, task, scripts), signal, cache);
     return [key, resolution] as const;
   }));
   return new Map(entries);
