@@ -1207,6 +1207,21 @@ export function cssFontStack(
     : `${quoteCssFontFamily(normalized)}, ${subPart}${nonCjkPart}${cjkPart}${arabicPart}${generic}`;
 }
 
+/** The chart model a slide paints: with the unscoped substitutions this
+ *  presentation's font sources loaded (`ChartModel.fontSubstitutions`), so
+ *  chart text paints through the same substitution map as shape text. Chart
+ *  labels are not split by script, so script-scoped substitutes are left out.
+ *  Without one the parsed model is painted unchanged. */
+function chartWithFontSubstitutions(
+  chart: ChartElement['chart'],
+  substitutions: LoadedFontSubstitutions | undefined,
+): ChartElement['chart'] {
+  if (!substitutions?.size) return chart;
+  const unscoped: Record<string, string> = {};
+  for (const [family, substitution] of substitutions) if (!substitution.script) unscoped[family] = substitution.family;
+  return Object.keys(unscoped).length ? { ...chart, fontSubstitutions: Object.freeze(unscoped) } : chart;
+}
+
 /**
  * Stable string key for a {@link HyperlinkTarget} so adjacent same-format runs
  * that carry the SAME link still merge into one segment (classification mints a
@@ -9040,7 +9055,7 @@ async function renderSlideLeased(
         applyFrameTransform(ctx, el, scale);
         renderChart(
           ctx,
-          el.chart,
+          chartWithFontSubstitutions(el.chart, rc.fontSubstitutions),
           {
             x: emuToPx(el.x, scale),
             y: emuToPx(el.y, scale),

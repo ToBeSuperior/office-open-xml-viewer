@@ -664,6 +664,7 @@ export interface ChartModel {
     legendLinePaintAuthored?: boolean | null;
     themeMajorFontLatin?: string | null;
     themeMinorFontLatin?: string | null;
+    fontSubstitutions?: Readonly<Record<string, string>>;
     chartBorderColor?: string | null;
     chartBorderLineFill?: SolidFill | GradientFill | PatternFill | null;
     chartBorderWidthEmu?: number | null;

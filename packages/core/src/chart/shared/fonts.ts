@@ -1,5 +1,6 @@
 // Classic chart fonts helpers.
 import type { ChartModel } from '../../types/chart';
+import { fontFamilyKey } from '../../fonts/substitutions.js';
 
 
 // ─── Font-face resolution (CH10) ─────────────────────────────────────────────
@@ -24,9 +25,26 @@ export type ChartFontRole = 'major' | 'minor';
  *  than the platform's serif default. No Office measurement backs the order. */
 export const CHART_FALLBACK_FONT_STACK = 'Calibri, Arial, sans-serif';
 
+type ChartFontSubstitutions = Pick<ChartModel, 'fontSubstitutions'>;
+
+/** `"face"`, followed by the family a font source loaded for it
+ *  ({@link ChartModel.fontSubstitutions}); the authored face stays first, so an
+ *  installed authored face still wins. */
+export function chartFaceList(face: string, chart?: ChartFontSubstitutions): string {
+  const substitute = chart?.fontSubstitutions?.[fontFamilyKey(face)];
+  return substitute ? `"${face}", "${substitute.replace(/["\\]/g, '')}"` : `"${face}"`;
+}
+
+/** {@link CHART_FALLBACK_FONT_STACK} with the loaded substitute of its
+ *  Calibri head, when a font source loaded one. */
+export function chartFallbackFontStack(chart?: ChartFontSubstitutions): string {
+  const substitute = chart?.fontSubstitutions?.calibri;
+  return substitute ? `Calibri, "${substitute.replace(/["\\]/g, '')}", Arial, sans-serif` : CHART_FALLBACK_FONT_STACK;
+}
+
 /** CSS family list for a resolved chart face plus {@link CHART_FALLBACK_FONT_STACK}. */
-export function chartFaceWithFallback(face: string): string {
-  return `"${face}", ${CHART_FALLBACK_FONT_STACK}`;
+export function chartFaceWithFallback(face: string, chart?: ChartFontSubstitutions): string {
+  return `${chartFaceList(face, chart)}, ${chartFallbackFontStack(chart)}`;
 }
 
 
@@ -50,7 +68,7 @@ export function chartFontFamily(
 ): string {
   const themeFace = role === 'major' ? chart.themeMajorFontLatin : chart.themeMinorFontLatin;
   const face = resolveThemeFontRef(chart, elementFace) ?? themeFace;
-  return face ? chartFaceWithFallback(face) : 'sans-serif';
+  return face ? chartFaceWithFallback(face, chart) : 'sans-serif';
 }
 
 

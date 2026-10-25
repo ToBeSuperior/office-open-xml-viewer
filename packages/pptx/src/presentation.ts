@@ -270,6 +270,8 @@ export class PptxPresentation {
    *  the SPA (refcounted in core, so a face shared with another open deck
    *  survives until both go). */
   private _fontSources: FontSourceSession | null = null;
+  /** Presence of the authored families demanded so far (main mode). */
+  private _installedFamilies: import('./font-source-load.js').PptxInstalledFamilies | null = null;
   private readonly _officeFontLoads = new Map<FontFaceSet, Map<string, Promise<LoadedOfficeFontFallbacks>>>();
   /** Embedded Font parts registered into the main-thread FontFaceSet. */
   private _embeddedFontFaces: FontFace[] = [];
@@ -480,10 +482,16 @@ export class PptxPresentation {
     scalars: FontPreloadDemand | undefined,
   ): Promise<void> {
     if (this._destroyed || !this._fonts?.length) return;
-    const { FontSourceSession, pptxFontDemand } = await import('./font-source-load.js');
-    if (this._destroyed) return;
+    const { FontSourceSession, PptxInstalledFamilies, pptxFontDemand } = await import('./font-source-load.js');
+    if (this._destroyed || !this._fonts) return;
+    // Installed authored faces are probed before any source face of this
+    // delta registers, and never demanded (PptxInstalledFamilies).
+    this._installedFamilies ??= new PptxInstalledFamilies();
+    const demand = await this._installedFamilies.exclude(
+      pptxFontDemand(names, facts, scalars, this._embeddedFontAliases));
+    if (this._destroyed || !this._fonts) return;
     this._fontSources ??= new FontSourceSession({ sources: this._fonts });
-    await this._fontSources.ensure(pptxFontDemand(names, facts, scalars, this._embeddedFontAliases));
+    await this._fontSources.ensure(demand);
   }
 
   private async _parse(
@@ -1531,6 +1539,11 @@ export class PptxPresentation {
     const fontSources = this._fontSources;
     this._fontSources = null;
     fontSources?.release();
+    // The descriptors may hold application font bytes (fontFiles data,
+    // inline data: URLs): a destroyed presentation must not keep them
+    // reachable. In worker mode the worker's copy ends with the worker.
+    this._fonts = undefined;
+    this._installedFamilies = null;
     for (const loads of this._officeFontLoads.values()) {
       for (const pending of distinctOfficeRouteLoads(loads)) {
         void pending.then((loaded) => unloadOfficeFontFallbacks(loaded.faces));

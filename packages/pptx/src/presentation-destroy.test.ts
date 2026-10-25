@@ -1,4 +1,4 @@
-import { googleFonts } from '@silurus/ooxml-core/internal/font-sources';
+import { fontFiles, googleFonts } from '@silurus/ooxml-core/internal/font-sources';
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import {
   WorkerBridge,
@@ -351,6 +351,45 @@ describe('PptxPresentation.destroy() — rejects in-flight worker requests', () 
 
   });
 
+  it('never registers a source face for an installed authored family', async () => {
+    const { added } = installFontFaceSet();
+    for (const installed of [['arial'], []]) {
+      const { pres } = makePresentation();
+      const { PptxInstalledFamilies } = await import('./font-source-load.js');
+      Object.assign(pres, {
+        _fonts: [fontFiles({ faces: [{ family: 'Arial', url: 'https://app.example/arial.woff2' }] })],
+        _embeddedFontAliases: new Map(),
+        _installedFamilies: new PptxInstalledFamilies(async () => installed),
+      });
+      await (pres as unknown as {
+        _ensureFontSources(names: string[], facts: undefined, scalars: undefined): Promise<void>;
+      })._ensureFontSources(['Arial'], undefined, undefined);
+      expect(added.map((face) => face.family)).toEqual(installed.length ? [] : ['Arial']);
+      pres.destroy();
+    }
+  });
+
+  it('destroy() drops the font-source descriptors and their bytes', async () => {
+    installFontFaceSet();
+    const { pres } = makePresentation();
+    const bytes = new ArrayBuffer(1 << 20);
+    Object.assign(pres, { _fonts: [fontFiles({ faces: [{ family: 'Deck Face', data: bytes }] })], _embeddedFontAliases: new Map() });
+    await (pres as unknown as {
+      _ensureFontSources(names: string[], facts: undefined, scalars: undefined): Promise<void>;
+    })._ensureFontSources(['Deck Face'], undefined, undefined);
+    pres.destroy();
+    // Nothing reachable from the destroyed presentation still holds the bytes.
+    const reachable = (root: unknown, seen = new Set<unknown>()): boolean => {
+      if (root === bytes) return true;
+      if (root === null || typeof root !== 'object' || seen.has(root)) return false;
+      seen.add(root);
+      if (root instanceof Map) return [...root.entries()].some(([key, value]) => reachable(key, seen) || reachable(value, seen));
+      if (root instanceof Set) return [...root].some((value) => reachable(value, seen));
+      return Object.values(root).some((value) => reachable(value, seen));
+    };
+    expect(reachable(pres)).toBe(false);
+  });
+
   it('destroy() releases the deck’s embedded fonts from the FontFaceSet', async () => {
     const { added } = installFontFaceSet();
     const held = await registerEmbeddedFonts([{
@@ -403,7 +442,9 @@ it.each(['ordinary', 'selected-source'] as const)('filters ordinary Window prelo
     ...(variant === 'selected-source' ? { legacyPpt: source } : {}),
   });
   expect(added).toHaveLength(2);
-  expect(loads).toEqual([expect.stringContaining('a.woff2')]);
+  // The family presence probe loads local() sources first; of the source
+  // faces only the subset the demanded scalars cover loads.
+  expect(loads.filter((source) => !source.startsWith('local('))).toEqual([expect.stringContaining('a.woff2')]);
   presentation.destroy();
   expect(added).toHaveLength(0);
 });

@@ -3,7 +3,7 @@ import type { CjkLang } from '@silurus/ooxml-core';
 import init, { PptxArchive, reinit } from './wasm/pptx_parser.js';
 import type { PptxTextRunInfo } from './renderer';
 import { pptxSlideOfficeFontRequests } from './font-requests';
-import { FontSourceSession, pptxFontDemand } from './font-source-load.js';
+import { FontSourceSession, PptxInstalledFamilies, pptxFontDemand } from './font-source-load.js';
 import { assertFontSourceDescriptors, type FontSource } from '@silurus/ooxml-core/internal/font-sources';
 import { acquireOfficeRoutes, distinctOfficeRouteLoads, type AcquiredOfficeRoutes } from './office-route-acquisition.js';
 import {
@@ -236,15 +236,18 @@ async function openPresentation(request: Extract<RenderWorkerRequest, { kind: 'p
   // Same demand and session as main mode, registered into self.fonts.
   if (sources.length > 0) fontSources = new FontSourceSession({ sources });
   const session = fontSources;
+  // Installed authored faces are probed in self.fonts before any source face
+  // of a delta registers, and never demanded, exactly as in main mode.
+  const installed = new PptxInstalledFamilies();
   if (request.progressiveLayout) {
     const ensureFonts = async (): Promise<void> => {
       if (!session) return;
-      await session.ensure(pptxFontDemand(
+      await session.ensure(await installed.exclude(pptxFontDemand(
         preflightBuilder!.currentFontPreloadNames,
         preflightBuilder!.currentFontPreloadFacts,
         preflightBuilder!.currentFontPreloadDemandDelta,
         embedded.aliases,
-      ));
+      )));
     };
     for (let index = 0; index < bootstrap.slideCount; index += 1) {
       await slides.withSlide(index, () => undefined);
@@ -280,9 +283,9 @@ async function openPresentation(request: Extract<RenderWorkerRequest, { kind: 'p
     wakeSlideAvailabilityWaiters();
     fontsLoaded = (async () => {
       if (!session) return embedded.faces;
-      await session.ensure(pptxFontDemand(
+      await session.ensure(await installed.exclude(pptxFontDemand(
         preflight.fontPreloadNames, preflight.fontPreloadFacts, preflight.fontPreloadDemand, embedded.aliases,
-      ));
+      )));
       return embedded.faces;
     })();
   }

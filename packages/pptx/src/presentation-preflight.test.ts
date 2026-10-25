@@ -406,4 +406,21 @@ describe('font-source demand facts (LoadOptions.fonts)', () => {
       expect(() => normalizePresentationPreflight({ ...full, fontPreloadFacts: bad })).toThrow('font demand facts');
     }
   });
+
+  it('demands bullet, break and end-of-paragraph faces, not only run families', () => {
+    const marked: Slide = {
+      ...slide(0, 'Item'),
+      elements: [{ type: 'shape', textBody: { paragraphs: [{
+        bullet: { type: 'char', char: '•', fontFamily: 'BulletFace' },
+        runs: [{ type: 'text', text: 'Item', fontFamily: 'BodyFace' }, { type: 'break', fontFamily: 'BreakFace' }],
+        endRunProperties: { fontFamily: 'EndFace' },
+      }] } }] as Slide['elements'],
+    };
+    const builder = new PresentationPreflightBuilder(bootstrap, { collectFontDemand: () => 'all' });
+    builder.addSlide(marked);
+    builder.addSlide(slide(1, 'B', { elements: [] }));
+    const full = builder.finish();
+    expect(full.fontPreloadNames.slice(0, full.fontPreloadFacts!.familyCount))
+      .toEqual(expect.arrayContaining(['BodyFace', 'BulletFace', 'BreakFace', 'EndFace']));
+  });
 });
