@@ -178,3 +178,76 @@ test('host FontFace validates @font-face descriptors in the main thread and a wo
   }
   expect(requests).toEqual([]);
 });
+
+// ---- shared resolver work across sessions ------------------------------------
+
+const sessionEntry = fileURLToPath(new URL('../../packages/core/src/internal/font-sources.ts', import.meta.url));
+let sessionBundle: Promise<string> | undefined;
+const sessionScript = () => sessionBundle ??= build({
+  input: sessionEntry, output: { format: 'iife', name: 'fontSources' }, platform: 'browser',
+}).then((bundle) => bundle.output[0].code);
+
+interface RaceOutcome { readonly calls: number; readonly registered: number; readonly afterRelease: number }
+
+/** Two sessions share one resolver call; the session that created it is
+ * released one microtask in. The survivor must still register its face. */
+async function resolverRaceInRealm(): Promise<RaceOutcome> {
+  const scope = self as unknown as {
+    fontSources: {
+      FontSourceSession: new (options: { sources: readonly unknown[] }) => {
+        ensure(demand: unknown): Promise<unknown>;
+        release(): void;
+      };
+      fontResolver(resolve: (request: { families: readonly string[] }) => unknown[]): unknown;
+    };
+    document?: { fonts: FontFaceSet };
+    fonts?: FontFaceSet;
+  };
+  const { FontSourceSession, fontResolver } = scope.fontSources;
+  const set = scope.document?.fonts ?? scope.fonts as FontFaceSet;
+  const before = set.size;
+  let calls = 0;
+  const source = fontResolver((request) => {
+    calls++;
+    return request.families.map((family) => ({ family, url: 'data:font/woff2;base64,AAAA' }));
+  });
+  const demand = { families: ['Shared'], fallbackFamilies: [], tuples: [], scalars: 'all' };
+  const first = new FontSourceSession({ sources: [source] });
+  const second = new FontSourceSession({ sources: [source] });
+  const released = first.ensure(demand);
+  const surviving = second.ensure(demand);
+  await Promise.resolve();
+  first.release();
+  await released;
+  await surviving;
+  const registered = set.size - before;
+  second.release();
+  return { calls, registered, afterRelease: set.size - before };
+}
+
+test('a shared resolver call survives the release of the session that started it', async ({ page }) => {
+  test.setTimeout(60_000);
+  await page.goto('about:blank');
+  const script = await sessionScript();
+  // The invalid inline face fails to load; that warning is expected.
+  page.on('console', () => undefined);
+  await page.addScriptTag({ content: script });
+  const main = await page.evaluate(`(${resolverRaceInRealm.toString()})()`) as RaceOutcome;
+  const worker = await page.evaluate(async ({ script, run }) => {
+    const source = `${script}\nconst run = ${run};\nself.onmessage = async () => self.postMessage(await run());`;
+    const url = URL.createObjectURL(new Blob([source], { type: 'text/javascript' }));
+    try {
+      const w = new Worker(url);
+      return await new Promise((resolve, reject) => {
+        w.onmessage = (event) => resolve(event.data);
+        w.onerror = (event) => reject(new Error(event.message));
+        w.postMessage(null);
+      });
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  }, { script, run: resolverRaceInRealm.toString() }) as RaceOutcome;
+  for (const [realm, outcome] of [['main', main], ['worker', worker]] as const) {
+    expect(outcome, realm).toEqual({ calls: 1, registered: 1, afterRelease: 0 });
+  }
+});

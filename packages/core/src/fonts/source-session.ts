@@ -514,7 +514,8 @@ export class FontSourceSession {
         tuples: Object.freeze(tuples.filter((tuple) => neededKeys.has(fontFamilyKey(tuple.family)))),
         scalars: this.all ? 'all' : Object.freeze([...this.points].sort((a, b) => a - b)),
       });
-      call = new SharedTask((callSignal) => this.callResolver(source, demand, callSignal), () => undefined);
+      const runner = this.runResolver;
+      call = new SharedTask((callSignal) => callResolver(runner, source, demand, callSignal), () => undefined);
     }
     const entries = await Promise.all(families.map(async ({ name }) => {
       const key = fontFamilyKey(name);
@@ -528,39 +529,6 @@ export class FontSourceSession {
       return [key, answer] as const;
     }));
     return new Map(entries);
-  }
-
-  private async callResolver(
-    source: FontResolverSource,
-    demand: FontDemand,
-    signal: AbortSignal,
-  ): Promise<Map<string, FamilyResolution>> {
-    const failAll = (reason: string) => new Map(
-      [...demand.families, ...demand.fallbackFamilies].map((name) =>
-        [fontFamilyKey(name), { kind: 'failed', reason } satisfies FamilyResolution]));
-    let raw: readonly unknown[];
-    try {
-      raw = await this.runResolver(source, demand, Object.freeze({ signal }));
-    } catch (error) {
-      if (signal.aborted) throw error;
-      return failAll(error instanceof Error ? error.message : String(error));
-    }
-    if (signal.aborted) throw createAbortError('Font resolver abandoned');
-    if (!Array.isArray(raw)) return failAll('resolver did not return an array');
-    if (raw.length > HARD_MAX_FONT_SOURCE_DECLARATIONS) {
-      throw fontSourceLimitError('declarations', HARD_MAX_FONT_SOURCE_DECLARATIONS, raw.length);
-    }
-    let declarations: FontFaceDeclaration[];
-    try {
-      declarations = raw.map((entry, index) =>
-        validateFontFaceDeclaration(entry, `font resolver declaration ${index}`));
-    } catch (error) {
-      if (!(error instanceof TypeError)) throw error;
-      return failAll(error.message);
-    }
-    const index = indexFontDeclarations(declarations);
-    return new Map([...demand.families, ...demand.fallbackFamilies].map((name) =>
-      [fontFamilyKey(name), claimFromIndex(index, name, source.substitutes)]));
   }
 
   /** Admit and register one claimed family's declarations, in order. */
@@ -704,6 +672,47 @@ export class FontSourceSession {
       regularAliases: loadedRegularAliases(faces.map((face) => ({ ...face, status: 'loaded' as const }))),
     });
   }
+}
+
+/**
+ * Run one shared resolver call. Module-level and given its runner explicitly:
+ * the call is shared by every session waiting on the same families, so it
+ * must not read any session's state. The runner of the session that created
+ * the call is kept by the call until it settles, so releasing that session
+ * (which drops its own runner reference) never breaks the other waiters.
+ */
+async function callResolver(
+runResolver: FontResolverRunner,
+source: FontResolverSource,
+  demand: FontDemand,
+  signal: AbortSignal,
+): Promise<Map<string, FamilyResolution>> {
+  const failAll = (reason: string) => new Map(
+    [...demand.families, ...demand.fallbackFamilies].map((name) =>
+      [fontFamilyKey(name), { kind: 'failed', reason } satisfies FamilyResolution]));
+  let raw: readonly unknown[];
+  try {
+    raw = await runResolver(source, demand, Object.freeze({ signal }));
+  } catch (error) {
+    if (signal.aborted) throw error;
+    return failAll(error instanceof Error ? error.message : String(error));
+  }
+  if (signal.aborted) throw createAbortError('Font resolver abandoned');
+  if (!Array.isArray(raw)) return failAll('resolver did not return an array');
+  if (raw.length > HARD_MAX_FONT_SOURCE_DECLARATIONS) {
+    throw fontSourceLimitError('declarations', HARD_MAX_FONT_SOURCE_DECLARATIONS, raw.length);
+  }
+  let declarations: FontFaceDeclaration[];
+  try {
+    declarations = raw.map((entry, index) =>
+      validateFontFaceDeclaration(entry, `font resolver declaration ${index}`));
+  } catch (error) {
+    if (!(error instanceof TypeError)) throw error;
+    return failAll(error.message);
+  }
+  const index = indexFontDeclarations(declarations);
+  return new Map([...demand.families, ...demand.fallbackFamilies].map((name) =>
+    [fontFamilyKey(name), claimFromIndex(index, name, source.substitutes)]));
 }
 
 const releasedRunner: FontResolverRunner = () => {

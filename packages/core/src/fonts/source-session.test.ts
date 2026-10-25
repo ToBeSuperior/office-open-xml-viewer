@@ -560,6 +560,27 @@ describe('FontSourceSession: released sessions keep no FontFace alive', () => {
   });
 });
 
+describe('FontSourceSession: shared resolver work survives a released waiter', () => {
+  it.each([0, 1, 2, 3])('serves the surviving session when the creating one is released %i microtasks in', async (ticks) => {
+    let calls = 0;
+    const source = fontResolver((request) => {
+      calls++;
+      return request.families.map((family) => ({ family, url: 'https://app.example/shared.woff2' }));
+    });
+    const set = fakeSet();
+    const first = open([source], set);
+    const second = open([source], set);
+    const released = first.ensure(demand(['Shared']));
+    const surviving = second.ensure(demand(['Shared']));
+    for (let tick = 0; tick < ticks; tick++) await Promise.resolve();
+    first.release();
+    expect((await released).faces).toEqual([]);
+    expect((await surviving).faces.map((face) => face.family)).toEqual(['Shared']);
+    expect(set.faces).toHaveLength(1);
+    expect(calls).toBe(1);
+  });
+});
+
 describe('FontSourceSession: released sessions keep no source bytes', () => {
   it('drops its source descriptors (and their buffers) on release', async () => {
     setFlagsFromString('--expose-gc');
