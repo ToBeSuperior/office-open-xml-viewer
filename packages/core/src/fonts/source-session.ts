@@ -294,10 +294,12 @@ type FamilyState =
   | { readonly kind: 'absent'; readonly name: string };
 
 export class FontSourceSession {
-  private readonly sources: readonly FontSource[];
+  // Cleared on release: descriptors hold font bytes (fontFiles data,
+  // inline data: URLs) and the resolver runner may capture application data.
+  private sources: readonly FontSource[];
   private caches: readonly SourceCache[];
-  private readonly fontSet: FontFaceSet | null;
-  private readonly runResolver: FontResolverRunner;
+  private fontSet: FontFaceSet | null;
+  private runResolver: FontResolverRunner;
   private readonly controller = new AbortController();
   private detachSignal: () => void = () => undefined;
   private closed = false;
@@ -364,6 +366,12 @@ export class FontSourceSession {
     // A released session object the application still references must not
     // keep the caches (and what they index) reachable.
     this.caches = [];
+    // Nothing that holds bytes or FontFaces outlives the release: the source
+    // descriptors, the target set, the resolver runner, the warned names.
+    this.sources = [];
+    this.fontSet = null;
+    this.runResolver = releasedRunner;
+    this.warned.clear();
     this.snapshot = EMPTY_SNAPSHOT;
   }
 
@@ -697,6 +705,10 @@ export class FontSourceSession {
     });
   }
 }
+
+const releasedRunner: FontResolverRunner = () => {
+  throw createAbortError('Font source session released');
+};
 
 /** Main-realm resolver execution: the application function behind a
  * descriptor this realm's `fontResolver()` issued. */

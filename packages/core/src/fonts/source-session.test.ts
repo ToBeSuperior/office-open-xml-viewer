@@ -560,6 +560,38 @@ describe('FontSourceSession: released sessions keep no FontFace alive', () => {
   });
 });
 
+describe('FontSourceSession: released sessions keep no source bytes', () => {
+  it('drops its source descriptors (and their buffers) on release', async () => {
+    setFlagsFromString('--expose-gc');
+    const gc = runInNewContext('gc') as () => void;
+    let live = 0;
+    const registry = new FinalizationRegistry<undefined>(() => { live--; });
+    const set = fakeSet();
+    const kept: FontSourceSession[] = [];
+    // Each descriptor is only reachable through its session.
+    const openInline = async (index: number) => {
+      const data = new ArrayBuffer(1024 * 1024);
+      registry.register(data, undefined);
+      live++;
+      const session = new FontSourceSession({
+        sources: [fontFiles({ faces: [{ family: `Inline${index}`, data }] })], fontSet: asSet(set),
+      });
+      await session.ensure(demand([`Inline${index}`]));
+      session.release();
+      return session;
+    };
+    for (let index = 0; index < 5; index++) kept.push(await openInline(index));
+    expect(retainedFontSourceBytes()).toBe(0);
+    expect(set.faces).toHaveLength(0);
+    for (let round = 0; round < 50 && live > 0; round++) {
+      gc();
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    expect(live).toBe(0);
+    expect(kept).toHaveLength(5);
+  });
+});
+
 describe('FontSourceSession: released sessions keep no font content', () => {
   it('drops the stylesheet family index with the last release, even while session objects live on', async () => {
     setFlagsFromString('--expose-gc');
