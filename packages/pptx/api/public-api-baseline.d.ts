@@ -1447,10 +1447,19 @@ export type OoxmlDecodedImageLimitMetric = 'image-dimension' | 'image-pixels' | 
 export class OoxmlError extends Error {
     readonly code: OoxmlErrorCode;
     readonly details?: OoxmlUnsupportedContentDetails;
-    constructor(code: OoxmlErrorCode, message: string, details?: OoxmlUnsupportedContentDetails);
+    readonly violation?: OoxmlFontSourceViolation;
+    constructor(code: OoxmlErrorCode, message: string, details?: OoxmlUnsupportedContentDetails | OoxmlFontSourceViolation);
 }
-export type OoxmlErrorCode = 'encrypted' | 'invalid-password' | 'unsupported-encryption' | 'legacy-binary-format' | 'not-ooxml' | 'unsupported-image-effect' | 'invalid-numbering' | 'unsupported-content';
+export type OoxmlErrorCode = 'encrypted' | 'invalid-password' | 'unsupported-encryption' | 'legacy-binary-format' | 'not-ooxml' | 'unsupported-image-effect' | 'invalid-numbering' | 'unsupported-content' | 'font-source-limit';
 export type OoxmlErrorStage = 'container' | 'decompression' | 'parsing' | 'serialization' | 'layout' | 'rendering' | 'worker';
+export type OoxmlFontSourceQuota = 'stylesheet' | 'declarations' | 'families' | 'face' | 'retained' | 'url';
+export interface OoxmlFontSourceViolation {
+    readonly resource: 'font-source';
+    readonly quota: OoxmlFontSourceQuota;
+    readonly metric: 'bytes' | 'entry-count' | 'length';
+    readonly limit: number;
+    readonly observed: number;
+}
 export type OoxmlFormat = 'docx' | 'xlsx' | 'pptx';
 export type OoxmlResourceLimit = number | null;
 export class OoxmlResourceLimitError extends Error {

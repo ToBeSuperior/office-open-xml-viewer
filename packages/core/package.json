@@ -75,6 +75,8 @@
     "./internal/css-font-family": "./src/internal/css-font-family.ts",
     "./internal/own-key": "./src/internal/own-key.ts",
     "./internal/script-preload-accumulator": "./src/internal/script-preload-accumulator.ts",
+    "./internal/font-scalar-demand": "./src/internal/font-scalar-demand.ts",
+    "./internal/font-sources": "./src/internal/font-sources.ts",
     "./internal/wasm-runtime-generation": "./src/internal/wasm-runtime-generation.ts",
     "./internal/abort": "./src/internal/abort.ts",
     "./internal/deferred": "./src/internal/deferred.ts",
