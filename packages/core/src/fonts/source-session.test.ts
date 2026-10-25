@@ -493,6 +493,56 @@ describe('FontSourceSession: caches keep only accounted bytes', () => {
   });
 });
 
+describe('FontSourceSession: released sessions keep no font content', () => {
+  it('drops the stylesheet family index with the last release, even while session objects live on', async () => {
+    setFlagsFromString('--expose-gc');
+    const gc = runInNewContext('gc') as () => void;
+    let live = 0;
+    const registry = new FinalizationRegistry<undefined>(() => { live--; });
+    vi.resetModules();
+    vi.doMock('./files-source.js', async (importOriginal) => {
+      const original = await importOriginal<typeof import('./files-source.js')>();
+      return {
+        ...original,
+        indexFontDeclarations: (declarations: readonly FontFaceDeclaration[]) => {
+          for (const declaration of declarations) { registry.register(declaration, undefined); live++; }
+          return original.indexFontDeclarations(declarations);
+        },
+      };
+    });
+    try {
+      const fresh = await import('./source-session.js');
+      const sourceModule = await import('./source.js');
+      const dataFace = `data:font/woff2;base64,${'AAAA'.repeat(10)}`;
+      const routes: Record<string, Route> = {};
+      for (let index = 0; index < 5; index++) {
+        routes[`https://fonts.example/${index}.css`] = { css: rule('Inline', `"${dataFace}"`) };
+      }
+      installFetch(routes);
+      const kept: InstanceType<typeof fresh.FontSourceSession>[] = [];
+      for (let index = 0; index < 5; index++) {
+        const session = new fresh.FontSourceSession({
+          sources: [sourceModule.fontFaceCss({ url: `https://fonts.example/${index}.css` })], fontSet: asSet(fakeSet()),
+        });
+        await session.ensure(demand(['Inline']));
+        session.release();
+        kept.push(session);
+      }
+      expect(live).toBe(5);
+      expect(fresh.retainedFontSourceBytes()).toBe(0);
+      for (let round = 0; round < 50 && live > 0; round++) {
+        gc();
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      expect(live).toBe(0);
+      expect(kept).toHaveLength(5);
+    } finally {
+      vi.doUnmock('./files-source.js');
+      vi.resetModules();
+    }
+  });
+});
+
 describe('FontSourceSession: release balance and cancellation', () => {
   it('accepts an already-aborted signal: inert, cache released, ensures reject', async () => {
     const { fetchMock } = installFetch({});

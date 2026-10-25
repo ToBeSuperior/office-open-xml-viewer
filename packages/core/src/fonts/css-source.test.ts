@@ -52,6 +52,69 @@ describe('parseFontFaceCss', () => {
     expect(parseFontFaceCss(face(`font-family: X; src: ${src};`), SHEET)[0]?.url).toBe(expected);
   });
 
+  it('ignores invalid declarations for every descriptor, so an earlier valid one stays', () => {
+    const parse = (body: string) => parseFontFaceCss(face(`font-family: X; src: url(a.woff2); ${body}`), SHEET)[0];
+    expect(parse('font-weight: 400; font-weight: 1001;').weight).toBe('400');
+    expect(parse('font-weight: 400; font-weight: 0;').weight).toBe('400');
+    expect(parse('font-weight: 400; font-weight: 100 200 300;').weight).toBe('400');
+    expect(parse('font-weight: 400; font-weight: heavy;').weight).toBe('400');
+    expect(parse('font-weight: 400; font-weight: 100 900;').weight).toBe('100 900');
+    expect(parse('font-weight: 400; font-weight: \\62old;').weight).toBe('bold');
+    expect(parse('font-weight: 400; font-weight: auto;').weight).toBeUndefined();
+    expect(parse('font-style: italic; font-style: oblique 100deg;').style).toBe('italic');
+    expect(parse('font-style: italic; font-style: oblique 0.3turn;').style).toBe('italic');
+    expect(parse('font-style: italic; font-style: slanted;').style).toBe('italic');
+    expect(parse('font-style: italic; font-style: oblique -10deg 0.1rad;').style).toBe('oblique -10deg 0.1rad');
+    expect(parse('font-stretch: 75%; font-stretch: -5%;').stretch).toBe('75%');
+    expect(parse('font-stretch: 75%; font-stretch: narrow;').stretch).toBe('75%');
+    expect(parse('font-stretch: 75%; font-stretch: condensed 125%;').stretch).toBe('condensed 125%');
+    expect(parse('unicode-range: U+0-FF; unicode-range: U+110000;').unicodeRange).toBe('U+0-FF');
+    expect(parse('unicode-range: U+0-FF; unicode-range: U+30-20;').unicodeRange).toBe('U+0-FF');
+    expect(parse('unicode-range: U+0-FF; unicode-range: u+3000-30ff ,U+4E00;').unicodeRange).toBe('u+3000-30ff, U+4E00');
+    // src: an invalid declaration keeps the earlier source...
+    expect(parse('src: url(b.woff2) format(not-a-format);').url).toBe(`${SHEET.replace('office.css', '')}a.woff2`);
+    expect(parse('src: url(b c.woff2);').url).toBe(`${SHEET.replace('office.css', '')}a.woff2`);
+    expect(parse('src: url(b.woff2) tech(unknown-tech);').url).toBe(`${SHEET.replace('office.css', '')}a.woff2`);
+    // ...while a valid one replaces it, even when it offers nothing usable here.
+    expect(parse('src: local(X);')).toBeUndefined();
+    expect(parse('src: url(b.woff2) tech(variations);')).toBeUndefined();
+    expect(parse('src: url(b.woff2) format("woff2");').url).toBe(`${SHEET.replace('office.css', '')}b.woff2`);
+    // font-family: an invalid value keeps the earlier family.
+    expect(parseFontFaceCss(face('font-family: X; font-family: serif; src: url(a.woff2);'), SHEET)[0].family).toBe('X');
+  });
+
+  it('consumes string tokens per CSS Syntax §4.3.5', () => {
+    const family = (value: string) => parseFontFaceCss(face(`font-family: ${value}; src: url(a.woff2);`), SHEET)[0]?.family;
+    // A hex escape takes one following white space, including a newline (CR LF is one).
+    expect(family('"A\\49\nnter"')).toBe('AInter');
+    expect(family('"A\\49\r\nnter"')).toBe('AInter');
+    expect(family('"A\\49\fnter"')).toBe('AInter');
+    // An escaped newline continues the string.
+    expect(family('"A\\\nB"')).toBe('AB');
+    expect(family('"A\\\r\nB"')).toBe('AB');
+    expect(family("'A\\'B'")).toBe("A'B");
+    expect(family('"A\\"B"')).toBe('A"B');
+    // An unescaped newline is a bad string: the declaration is invalid.
+    // It ends before the newline; the quote after B opens another (bad) string
+    // ending at the next newline, so the block structure resumes after it.
+    expect(parseFontFaceCss('@font-face { font-family: X; font-family: "A\nB"\n; src: url(a.woff2); }', SHEET)[0]?.family)
+      .toBe('X');
+    // Without that second newline the string swallows the rest of the block.
+    expect(parseFontFaceCss('@font-face { font-family: X; font-family: "A\nB"; src: url(a.woff2); }', SHEET)).toEqual([]);
+    // Strings feed url() too.
+    expect(parseFontFaceCss(face('font-family: X; src: url("a\\2e woff2");'), SHEET)[0].url)
+      .toBe('https://cdn.internal.example/styles/a.woff2');
+  });
+
+  it('decodes escapes in at-keywords and descriptor names', () => {
+    expect(parseFontFaceCss('@font\\-face { font\\-family: X; s\\72 c: url(a.woff2); }', SHEET)
+      .map((entry) => entry.family)).toEqual(['X']);
+    expect(parseFontFaceCss('@\\66ont-face { font-family: Y; src: url(a.woff2); }', SHEET)
+      .map((entry) => entry.family)).toEqual(['Y']);
+    expect(parseFontFaceCss(face('font-family: X; src: u\\72l(a.woff2);'), SHEET)[0].url)
+      .toBe('https://cdn.internal.example/styles/a.woff2');
+  });
+
   it('consumes unquoted url tokens per CSS Syntax §4.3.6', () => {
     const url = (src: string) => parseFontFaceCss(face(`font-family: X; src: ${src};`), SHEET)[0]?.url;
     const base = 'https://cdn.internal.example/styles/';

@@ -10,8 +10,12 @@
  * `font-family`, `src`, `font-weight`, `font-style`, `font-stretch` and
  * `unicode-range` descriptors of top-level `@font-face` rules. Everything
  * else (other at-rules, qualified rules, `@font-face` nested in conditional
- * rules, `!important` or block-valued descriptors) is skipped. Library policy
- * on top of CSS Fonts Level 4:
+ * rules, `!important` or block-valued descriptors) is skipped. Input is
+ * preprocessed (§3.3) and tokens follow §4.3: string and url tokens, escapes
+ * (decoded in identifiers, at-keywords, descriptor names, units, strings and
+ * urls), bad strings and bad urls. Each descriptor is validated against its
+ * CSS Fonts 4 §4 grammar and an invalid declaration is ignored, never
+ * overriding an earlier valid one. Library policy on top of CSS Fonts Level 4:
  *
  * - only `url()` sources are accepted: `local()` would let a stylesheet probe
  *   or paint host fonts, which is the host-fallback path's job. The first
@@ -93,18 +97,10 @@ function skipComment(css: string, at: number): number {
   return end < 0 ? css.length : end + 2;
 }
 
-/** Index after a string starting at the quote at `at`. A string ends at its
- * unescaped quote, at an unescaped newline (bad string) or at end of input. */
+/** Index after the string token starting at the quote at `at`
+ * ({@link consumeStringToken}). */
 function skipString(css: string, at: number): number {
-  const quote = css.charCodeAt(at);
-  let index = at + 1;
-  while (index < css.length) {
-    const unit = css.charCodeAt(index);
-    if (unit === quote) return index + 1;
-    if (unit === 0x0a || unit === 0x0c || unit === 0x0d) return index;
-    index += unit === 0x5c /* \ */ ? 2 : 1;
-  }
-  return css.length;
+  return consumeStringToken(css, at).end;
 }
 
 /** When `at` starts an unquoted `url(` token, the index after it; else -1.
@@ -223,39 +219,39 @@ function consumeEscape(text: string, at: number): { value: string; end: number }
   return { value, end: index };
 }
 
-/** Decode the escapes of a CSS string's contents: an escaped newline is a line
- * continuation (removed) and a backslash at end of input contributes nothing
- * (CSS Syntax §4.3.5). */
-function unescapeCssString(text: string): string {
-  if (!text.includes('\\')) return text;
-  let out = '';
-  let index = 0;
+/**
+ * Consume a string token (CSS Syntax §4.3.5) starting at the quote at `at`.
+ * The string ends at its matching quote or at end of input (a parse error,
+ * still a string). An unescaped newline makes a bad string, ending before the
+ * newline. A backslash before a newline continues the string (both removed),
+ * a backslash at end of input contributes nothing, and any other backslash
+ * starts an escape ({@link consumeEscape}: a hex escape takes one following
+ * white space).
+ */
+function consumeStringToken(text: string, at: number): { value: string; end: number; bad: boolean } {
+  const quote = text[at];
+  let value = '';
+  let index = at + 1;
   while (index < text.length) {
     const char = text[index];
-    if (char !== '\\') { out += char; index++; continue; }
+    if (char === quote) return { value, end: index + 1, bad: false };
+    if (isNewline(char)) return { value, end: index, bad: true };
+    if (char !== '\\') { value += char; index++; continue; }
     const next = text[index + 1];
-    if (next === undefined) break;
+    if (next === undefined) { index++; continue; }
     if (isNewline(next)) { index += text.startsWith('\r\n', index + 1) ? 3 : 2; continue; }
     const escape = consumeEscape(text, index);
-    out += escape.value;
+    value += escape.value;
     index = escape.end;
   }
-  return out;
+  return { value, end: index, bad: false };
 }
 
-/** The contents of `text` when it is exactly one terminated CSS string
- * (quotes included), or null. */
+/** The value of `text` when it is exactly one (non-bad) string token, else null. */
 function cssString(text: string): string | null {
-  const quote = text[0];
-  if (quote !== '"' && quote !== "'") return null;
-  let index = 1;
-  while (index < text.length) {
-    const char = text[index];
-    if (char === quote) return index === text.length - 1 ? unescapeCssString(text.slice(1, -1)) : null;
-    if (char === '\n' || char === '\f' || char === '\r') return null;
-    index += char === '\\' ? 2 : 1;
-  }
-  return null;
+  if (text[0] !== '"' && text[0] !== "'") return null;
+  const token = consumeStringToken(text, 0);
+  return token.bad || token.end !== text.length ? null : token.value;
 }
 
 /** Reserved words a `<family-name>` cannot be spelled as unquoted (CSS-wide
@@ -277,6 +273,24 @@ function startsIdentifier(text: string, at: number): boolean {
   return isNameStart(text[at]) || startsValidEscape(text, at);
 }
 
+/** Consume an identifier sequence (CSS Syntax §4.3.11) at `at`, decoding escapes. */
+function consumeIdent(text: string, at: number): { value: string; end: number } {
+  let value = '';
+  let index = at;
+  while (index < text.length) {
+    if (startsValidEscape(text, index)) {
+      const escape = consumeEscape(text, index);
+      value += escape.value;
+      index = escape.end;
+    } else if (isNameUnit(text.charCodeAt(index))) {
+      value += text[index++];
+    } else {
+      break;
+    }
+  }
+  return { value, end: index };
+}
+
 /** The decoded identifiers of a white-space separated identifier sequence,
  * tokenized as CSS does (the white space ending a hex escape belongs to the
  * escape), or null when anything else appears. */
@@ -286,27 +300,18 @@ function identifierSequence(text: string): string[] | null {
   while (index < text.length) {
     if (isWhitespace(text.charCodeAt(index))) { index++; continue; }
     if (!startsIdentifier(text, index)) return null;
-    let ident = '';
-    while (index < text.length) {
-      if (startsValidEscape(text, index)) {
-        const escape = consumeEscape(text, index);
-        ident += escape.value;
-        index = escape.end;
-      } else if (isNameUnit(text.charCodeAt(index))) {
-        ident += text[index++];
-      } else {
-        break;
-      }
-    }
+    const ident = consumeIdent(text, index);
+    index = ident.end;
     if (index < text.length && !isWhitespace(text.charCodeAt(index))) return null;
-    idents.push(ident);
+    idents.push(ident.value);
   }
   return idents;
 }
 
-/** `font-family` descriptor: one string, or identifiers joined by single spaces. */
+/** `font-family` descriptor (CSS Fonts 4 §4.1, `<family-name>`): one string,
+ * or identifiers joined by single spaces. */
 function parseFamily(value: string): string | null {
-  const text = value.trim();
+  const text = cssTrim(value);
   if (text.startsWith('"') || text.startsWith("'")) {
     const family = cssString(text)?.trim();
     return family ? family : null;
@@ -318,45 +323,44 @@ function parseFamily(value: string): string | null {
   return family || null;
 }
 
-const SUPPORTED_FORMATS = new Set(['woff2', 'woff', 'truetype', 'opentype']);
-
-/** One CSS function at the start of `text`: its lower-cased name, argument
- * text and the remainder, or null. */
-function leadingFunction(text: string): { name: string; args: string; rest: string } | null {
-  const match = /^([A-Za-z-]+)\(/.exec(text);
-  if (!match) return null;
-  const close = scanUntil(text, match[0].length, ')');
-  if (close >= text.length) return null;
-  return { name: match[1].toLowerCase(), args: text.slice(match[0].length, close), rest: text.slice(close + 1).trim() };
-}
+const cssTrim = (text: string) => text.replace(/^[ \t\n\f\r]+|[ \t\n\f\r]+$/g, '');
 
 const isNonPrintable = (unit: number) =>
   unit <= 0x08 || unit === 0x0b || (unit >= 0x0e && unit <= 0x1f) || unit === 0x7f;
 
 /**
- * The value of an unquoted url token whose contents start at `at` (just after
- * `url(`), per CSS Syntax §4.3.6, or null for a bad-url token. Leading and
- * trailing white space is dropped; white space elsewhere, a quote, `(` or a
- * non-printable code point makes it bad, as does a backslash that does not
- * start a valid escape. Valid escapes are consumed exactly as in identifiers
- * (§4.3.7: a hex escape takes one following white space). End of input closes
- * the token.
+ * Consume a url token whose contents start at `at` (just after `url(`), per
+ * CSS Syntax §4.3.6. Leading and trailing white space is dropped; white space
+ * elsewhere, a quote, `(`, a non-printable code point or a backslash that does
+ * not start a valid escape makes a bad url, whose remnants are consumed up to
+ * the closing `)` (§4.3.14, valid escapes included). Valid escapes are
+ * consumed as in identifiers (§4.3.7). End of input closes the token.
  */
-function consumeUrlToken(text: string, at: number): string | null {
+function consumeUrlToken(text: string, at: number): { value: string | null; end: number } {
   let index = at;
   while (index < text.length && isWhitespace(text.charCodeAt(index))) index++;
   let value = '';
+  const remnants = () => {
+    while (index < text.length) {
+      if (text[index] === ')') return { value: null, end: index + 1 };
+      if (startsValidEscape(text, index)) index = consumeEscape(text, index).end;
+      else index++;
+    }
+    return { value: null, end: index };
+  };
   while (index < text.length) {
     const char = text[index];
     const unit = text.charCodeAt(index);
-    if (char === ')') return value;
+    if (char === ')') return { value, end: index + 1 };
     if (isWhitespace(unit)) {
       while (index < text.length && isWhitespace(text.charCodeAt(index))) index++;
-      return index >= text.length || text[index] === ')' ? value : null;
+      if (index >= text.length) return { value, end: index };
+      if (text[index] === ')') return { value, end: index + 1 };
+      return remnants();
     }
-    if (char === '"' || char === "'" || char === '(' || isNonPrintable(unit)) return null;
+    if (char === '"' || char === "'" || char === '(' || isNonPrintable(unit)) return remnants();
     if (char === '\\') {
-      if (!startsValidEscape(text, index)) return null;
+      if (!startsValidEscape(text, index)) return remnants();
       const escape = consumeEscape(text, index);
       value += escape.value;
       index = escape.end;
@@ -365,76 +369,264 @@ function consumeUrlToken(text: string, at: number): string | null {
     value += char;
     index++;
   }
-  return value;
+  return { value, end: index };
 }
 
-/** The URL of one `src` entry when it is an acceptable `url()`, else null. */
-function srcEntryUrl(entry: string): string | null {
-  let text = entry.trim();
-  let url: string | null = null;
-  const unquotedEnd = skipUnquotedUrl(text, 0);
-  if (unquotedEnd >= 0) {
-    url = consumeUrlToken(text, 4);
-    text = text.slice(unquotedEnd).trim();
-  } else {
-    const call = leadingFunction(text);
-    if (!call || call.name !== 'url') return null;
-    url = cssString(call.args.trim());
-    text = call.rest;
+/** The component values the descriptor grammars read (CSS Syntax §4). White
+ * space and comments are dropped; escapes are decoded in every token. */
+type ValueToken =
+  | { readonly type: 'ident'; readonly value: string }
+  | { readonly type: 'function'; readonly name: string; readonly args: string }
+  | { readonly type: 'url'; readonly value: string }
+  | { readonly type: 'string'; readonly value: string }
+  | { readonly type: 'number'; readonly value: number }
+  | { readonly type: 'percentage'; readonly value: number }
+  | { readonly type: 'dimension'; readonly value: number; readonly unit: string }
+  | { readonly type: 'comma' }
+  | { readonly type: 'delim'; readonly value: string }
+  /** A bad string, bad url or unterminated function: invalid wherever it appears. */
+  | { readonly type: 'bad' };
+
+const NUMBER = /[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?/y;
+
+/** Tokenize a descriptor value. A bad string, a bad url or an unterminated
+ * function becomes a `bad` token, which no grammar accepts. */
+function tokenizeValue(text: string): ValueToken[] {
+  const tokens: ValueToken[] = [];
+  let index = 0;
+  while (index < text.length) {
+    const char = text[index];
+    if (isWhitespace(text.charCodeAt(index))) { index++; continue; }
+    if (char === '/' && text[index + 1] === '*') { index = skipComment(text, index); continue; }
+    if (char === '"' || char === "'") {
+      const string = consumeStringToken(text, index);
+      tokens.push(string.bad ? { type: 'bad' } : { type: 'string', value: string.value });
+      index = string.end;
+      continue;
+    }
+    if (char === ',') { tokens.push({ type: 'comma' }); index++; continue; }
+    NUMBER.lastIndex = index;
+    const number = NUMBER.exec(text);
+    if (number) {
+      const value = Number(number[0]);
+      index += number[0].length;
+      if (text[index] === '%') { tokens.push({ type: 'percentage', value }); index++; }
+      else if (startsIdentifier(text, index)) {
+        const unit = consumeIdent(text, index);
+        tokens.push({ type: 'dimension', value, unit: unit.value.toLowerCase() });
+        index = unit.end;
+      } else tokens.push({ type: 'number', value });
+      continue;
+    }
+    if (startsIdentifier(text, index)) {
+      const ident = consumeIdent(text, index);
+      index = ident.end;
+      if (text[index] !== '(') { tokens.push({ type: 'ident', value: ident.value }); continue; }
+      const name = ident.value.toLowerCase();
+      let first = index + 1;
+      while (first < text.length && isWhitespace(text.charCodeAt(first))) first++;
+      if (name === 'url' && text[first] !== '"' && text[first] !== "'") {
+        const url = consumeUrlToken(text, index + 1);
+        tokens.push(url.value === null ? { type: 'bad' } : { type: 'url', value: url.value });
+        index = url.end;
+        continue;
+      }
+      const close = scanUntil(text, index + 1, ')');
+      if (close >= text.length) { tokens.push({ type: 'bad' }); break; }
+      tokens.push({ type: 'function', name, args: text.slice(index + 1, close) });
+      index = close + 1;
+      continue;
+    }
+    tokens.push({ type: 'delim', value: char });
+    index++;
   }
-  if (!url) return null;
-  while (text) {
-    const call = leadingFunction(text);
-    if (!call) return null;
-    if (call.name === 'tech') return null;
-    if (call.name !== 'format') return null;
-    const formats = call.args.split(',').map((argument) => {
-      const trimmed = argument.trim();
-      return (cssString(trimmed) ?? trimmed).toLowerCase();
-    });
-    if (!formats.some((format) => SUPPORTED_FORMATS.has(format))) return null;
-    text = call.rest;
+  return tokens;
+}
+
+/** Split tokens at top-level commas. */
+function commaSeparated(tokens: readonly ValueToken[]): ValueToken[][] {
+  const groups: ValueToken[][] = [[]];
+  for (const token of tokens) {
+    if (token.type === 'comma') groups.push([]);
+    else groups[groups.length - 1].push(token);
   }
-  return url;
+  return groups;
 }
 
-const DESCRIPTOR_VALUE = /^[A-Za-z0-9.+\-% ]+$/;
+const keyword = (token: ValueToken | undefined) => (token?.type === 'ident' ? token.value.toLowerCase() : undefined);
 
-/** `font-weight` / `font-style` / `font-stretch`: keywords, numbers, angles
- * and percentages only; the browser validates the grammar itself. */
-function plainDescriptor(value: string): string | null {
-  const text = value.trim().replace(/[ \t\n\f\r]+/g, ' ');
-  return text && DESCRIPTOR_VALUE.test(text) ? text : null;
+/**
+ * A descriptor parse: null when the declaration is invalid (CSS ignores it,
+ * so an earlier valid declaration of the descriptor stays), `{}` for `auto`
+ * (the initial value: no descriptor is passed to `FontFace`), otherwise the
+ * normalized value passed to `FontFace`.
+ */
+type DescriptorValue = { readonly value?: string } | null;
+
+/** One or two values, or the single keyword `auto`. */
+function rangeDescriptor(value: string, single: (token: ValueToken) => string | null): DescriptorValue {
+  const tokens = tokenizeValue(value);
+  if (tokens.length === 0 || tokens.length > 2) return null;
+  if (tokens.length === 1 && keyword(tokens[0]) === 'auto') return {};
+  const values = tokens.map(single);
+  return values.every((entry) => entry !== null) ? { value: values.join(' ') } : null;
 }
 
-/** Declarations of one `@font-face` body; null when the rule is unusable. */
+/** `font-weight` (CSS Fonts 4 §4.3): `auto | <font-weight-absolute>{1,2}`,
+ * absolute = `normal | bold | <number [1,1000]>`. */
+function parseWeight(value: string): DescriptorValue {
+  return rangeDescriptor(value, (token) => {
+    const word = keyword(token);
+    if (word === 'normal' || word === 'bold') return word;
+    return token.type === 'number' && token.value >= 1 && token.value <= 1000 ? String(token.value) : null;
+  });
+}
+
+const STRETCH_KEYWORDS = new Set([
+  'normal', 'ultra-condensed', 'extra-condensed', 'condensed', 'semi-condensed',
+  'semi-expanded', 'expanded', 'extra-expanded', 'ultra-expanded',
+]);
+
+/** `font-stretch` (CSS Fonts 4 §4.4, font-width): `auto | <'font-width'>{1,2}`,
+ * a keyword or a non-negative percentage. */
+function parseStretch(value: string): DescriptorValue {
+  return rangeDescriptor(value, (token) => {
+    const word = keyword(token);
+    if (word !== undefined) return STRETCH_KEYWORDS.has(word) ? word : null;
+    return token.type === 'percentage' && token.value >= 0 ? `${token.value}%` : null;
+  });
+}
+
+const DEGREES_PER_UNIT: Readonly<Record<string, number>> = { deg: 1, grad: 0.9, rad: 180 / Math.PI, turn: 360 };
+
+/** `font-style` (CSS Fonts 4 §4.2): `auto | normal | italic |
+ * oblique [ <angle [-90deg,90deg]>{1,2} ]?`. */
+function parseStyle(value: string): DescriptorValue {
+  const tokens = tokenizeValue(value);
+  if (tokens.length === 0) return null;
+  const word = keyword(tokens[0]);
+  if (tokens.length === 1 && word === 'auto') return {};
+  if (tokens.length === 1 && (word === 'normal' || word === 'italic')) return { value: word };
+  if (word !== 'oblique' || tokens.length > 3) return null;
+  const angles: string[] = [];
+  for (const token of tokens.slice(1)) {
+    if (token.type !== 'dimension' || !Object.hasOwn(DEGREES_PER_UNIT, token.unit)) return null;
+    const degrees = token.value * DEGREES_PER_UNIT[token.unit];
+    if (!(degrees >= -90 && degrees <= 90)) return null;
+    angles.push(`${token.value}${token.unit}`);
+  }
+  return { value: ['oblique', ...angles].join(' ') };
+}
+
+const FORMAT_KEYWORDS = new Set(['collection', 'embedded-opentype', 'opentype', 'svg', 'truetype', 'woff', 'woff2']);
+const SUPPORTED_FORMATS = new Set(['woff2', 'woff', 'truetype', 'opentype']);
+const TECH_KEYWORDS = new Set([
+  'features-opentype', 'features-aat', 'features-graphite', 'color-colrv0', 'color-colrv1', 'color-svg',
+  'color-sbix', 'color-cbdt', 'variations', 'palettes', 'incremental-patch', 'incremental-range', 'incremental-auto',
+]);
+
+/**
+ * `src` (CSS Fonts 4 §4.3): `[ <url> [format(<font-format>)]? [tech(<font-tech>#)]? | local(<family-name>) ]#`.
+ * Parsed forgivingly as CSS Fonts 4 specifies: invalid entries (a bad url
+ * included) are dropped, and the descriptor is invalid (null) only when no
+ * entry is valid. `url` is the first valid entry the library accepts (a url
+ * whose format is absent or supported, without `tech()`), or null when the
+ * valid descriptor offers none (for example only `local()`), which drops the
+ * rule.
+ */
+function parseSrc(value: string): { readonly url: string | null } | null {
+  const tokens = tokenizeValue(value);
+  let valid = false;
+  let accepted: string | null = null;
+  for (const entry of commaSeparated(tokens)) {
+    const [head, ...rest] = entry;
+    if (!head) continue;
+    if (head.type === 'function' && head.name === 'local') {
+      if (rest.length === 0 && parseFamily(head.args) !== null) valid = true;
+      continue;
+    }
+    let url: string | null = null;
+    if (head.type === 'url') url = head.value;
+    else if (head.type === 'function' && head.name === 'url') {
+      const args = tokenizeValue(head.args);
+      url = args.length === 1 && args[0].type === 'string' ? args[0].value : null;
+    }
+    if (!url) continue;
+    let index = 0;
+    let supported = true;
+    if (rest[index]?.type === 'function' && (rest[index] as { name: string }).name === 'format') {
+      const args = tokenizeValue((rest[index] as { args: string }).args);
+      const formats = commaSeparated(args);
+      const names = formats.map((group) => (group.length === 1
+        && (group[0].type === 'string' || (group[0].type === 'ident' && formats.length === 1))
+        ? (group[0] as { value: string }).value.toLowerCase() : null));
+      if (!names.length || names.some((name) => name === null)) continue;
+      if (args[0]?.type === 'ident' && !FORMAT_KEYWORDS.has(names[0] as string)) continue;
+      supported = names.some((name) => SUPPORTED_FORMATS.has(name as string));
+      index++;
+    }
+    if (rest[index]?.type === 'function' && (rest[index] as { name: string }).name === 'tech') {
+      const args = tokenizeValue((rest[index] as { args: string }).args);
+      const techs = commaSeparated(args);
+      if (!techs.every((group) => group.length === 1 && TECH_KEYWORDS.has(keyword(group[0]) ?? ''))) continue;
+      supported = false;
+      index++;
+    }
+    if (index !== rest.length) continue;
+    valid = true;
+    if (supported && accepted === null) accepted = url;
+  }
+  return valid ? { url: accepted } : null;
+}
+
+/** `unicode-range` (CSS Fonts 4 §4.5): valid only when every range parses.
+ * An escape in the value is treated as invalid (ignored): the face then keeps
+ * an earlier range or covers every scalar, never fewer than CSS would. */
+function parseUnicodeRangeDescriptor(value: string): DescriptorValue {
+  const text = cssTrim(stripComments(value));
+  if (text.includes('\\') || !parseUnicodeRange(text)) return null;
+  return { value: text.split(',').map(cssTrim).join(', ') };
+}
+
+/**
+ * Declarations of one `@font-face` body; null when the rule is unusable.
+ * Every descriptor follows CSS cascade within the block: an invalid
+ * declaration is ignored, so a later invalid value never replaces an earlier
+ * valid one, while a later valid value always does. Descriptors the library
+ * does not pass to `FontFace` (font-display, font-feature-settings, the
+ * metric overrides, …) are not interpreted.
+ */
 function parseFontFaceBody(body: string, stylesheetUrl: string, location: string): FontFaceDeclaration | null {
   let family: string | null = null;
   let src: string | null = null;
   const descriptors: { weight?: string; style?: string; stretch?: string; unicodeRange?: string } = {};
+  const assign = (key: keyof typeof descriptors, parsed: DescriptorValue) => {
+    if (parsed === null) return;
+    if (parsed.value === undefined) delete descriptors[key];
+    else descriptors[key] = parsed.value;
+  };
   for (const raw of splitTopLevel(body, ';')) {
     const declaration = stripComments(raw);
     const colon = scanUntil(declaration, 0, ':{');
     if (colon >= declaration.length || declaration[colon] !== ':') continue;
-    const name = declaration.slice(0, colon).trim().toLowerCase();
+    // The name is one identifier token (escapes decoded, ASCII case-insensitive).
+    const names = identifierSequence(declaration.slice(0, colon));
+    if (names?.length !== 1) continue;
+    const name = names[0].toLowerCase();
     const value = declaration.slice(colon + 1);
     // A block-valued or !important descriptor is invalid in @font-face.
     if (scanUntil(value, 0, '{') < value.length || /!\s*important\s*$/i.test(value)) continue;
     switch (name) {
       case 'font-family': family = parseFamily(value) ?? family; break;
       case 'src': {
-        const first = splitTopLevel(value, ',').map(srcEntryUrl).find((url) => url !== null);
-        if (first) src = first;
+        const parsed = parseSrc(value);
+        if (parsed) src = parsed.url;
         break;
       }
-      case 'font-weight': descriptors.weight = plainDescriptor(value) ?? descriptors.weight; break;
-      case 'font-style': descriptors.style = plainDescriptor(value) ?? descriptors.style; break;
-      case 'font-stretch': descriptors.stretch = plainDescriptor(value) ?? descriptors.stretch; break;
-      case 'unicode-range': {
-        const text = value.trim();
-        if (parseUnicodeRange(text)) descriptors.unicodeRange = text;
-        break;
-      }
+      case 'font-weight': assign('weight', parseWeight(value)); break;
+      case 'font-style': assign('style', parseStyle(value)); break;
+      case 'font-stretch': assign('stretch', parseStretch(value)); break;
+      case 'unicode-range': assign('unicodeRange', parseUnicodeRangeDescriptor(value)); break;
       default: break;
     }
   }
@@ -480,6 +672,10 @@ export function parseFontFaceCss(css: string, stylesheetUrl: string): FontFaceDe
   if (size > HARD_MAX_FONT_SOURCE_STYLESHEET_BYTES) {
     throw fontSourceLimitError('stylesheet', HARD_MAX_FONT_SOURCE_STYLESHEET_BYTES, size);
   }
+  // CSS Syntax §3.3 input preprocessing: CR LF, CR and FF become LF; NUL and
+  // lone surrogates become U+FFFD.
+  css = css.replace(/\r\n?|\f/g, '\n')
+    .replace(/\0|[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g, REPLACEMENT);
   const declarations: FontFaceDeclaration[] = [];
   let index = 0;
   while (index < css.length) {
@@ -489,14 +685,15 @@ export function parseFontFaceCss(css: string, stylesheetUrl: string): FontFaceDe
     if (css.startsWith('<!--', index)) { index += 4; continue; }
     if (css.startsWith('-->', index)) { index += 3; continue; }
     const isAtRule = unit === 0x40;
-    let nameEnd = index + 1;
-    while (isAtRule && nameEnd < css.length && isNameUnit(css.charCodeAt(nameEnd))) nameEnd++;
+    // An at-keyword's name is an identifier (escapes decoded).
+    const atName = isAtRule && startsIdentifier(css, index + 1) ? consumeIdent(css, index + 1) : undefined;
+    const nameEnd = atName ? atName.end : index + 1;
     // An at-rule prelude ends at `;` or `{`; a qualified rule's only at `{`.
     const stop = scanUntil(css, isAtRule ? nameEnd : index, isAtRule ? ';{' : '{');
     if (stop >= css.length) break;
     if (css[stop] === ';') { index = stop + 1; continue; }
     const end = blockEnd(css, stop);
-    const isFontFace = isAtRule && css.slice(index + 1, nameEnd).toLowerCase() === 'font-face'
+    const isFontFace = atName?.value.toLowerCase() === 'font-face'
       && stripComments(css.slice(nameEnd, stop)).trim() === '';
     if (isFontFace && end >= 0) {
       const declaration = parseFontFaceBody(css.slice(stop + 1, end), stylesheetUrl,

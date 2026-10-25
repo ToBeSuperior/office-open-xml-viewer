@@ -295,7 +295,7 @@ type FamilyState =
 
 export class FontSourceSession {
   private readonly sources: readonly FontSource[];
-  private readonly caches: readonly SourceCache[];
+  private caches: readonly SourceCache[];
   private readonly fontSet: FontFaceSet | null;
   private readonly runResolver: FontResolverRunner;
   private readonly controller = new AbortController();
@@ -359,6 +359,9 @@ export class FontSourceSession {
     this.families.clear();
     this.points.clear();
     for (const cache of this.caches) cache.release();
+    // A released session object the application still references must not
+    // keep the caches (and what they index) reachable.
+    this.caches = [];
     this.snapshot = EMPTY_SNAPSHOT;
   }
 
@@ -426,6 +429,7 @@ export class FontSourceSession {
     const ceiling = ceilingSignal(this.controller.signal, FONT_LOAD_CEILING_MS);
     try {
       for (let sourceIndex = 0; sourceIndex < this.sources.length && pending.length; sourceIndex++) {
+        if (this.closed) throw createAbortError('Font source session released');
         let answers: ReadonlyMap<string, FamilyResolution>;
         try {
           answers = await this.resolveWithSource(sourceIndex, pending, tuples, ceiling.signal);

@@ -389,8 +389,12 @@ function handle(entry: CacheEntry): SourceCache {
       entry.refs--;
       if (entry.refs > 0 || caches.get(cache.id) !== entry) return;
       caches.delete(cache.id);
+      // Drop every structure that holds font content together with the
+      // refund: the task maps (charged) and the family index (it references
+      // the cached stylesheet's declarations, inline data: faces included).
       cache.stylesheets.clear();
       cache.families.clear();
+      cache.index = undefined;
     },
   };
 }
