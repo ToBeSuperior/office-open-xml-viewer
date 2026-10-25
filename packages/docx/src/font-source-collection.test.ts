@@ -6,7 +6,7 @@ import { storeZip } from './conformance/generate.js';
 import { createLayoutServices } from './layout-runtime.js';
 import { normalizeInternalDocumentModel, paragraphMarkShapeInput } from './parser-model.js';
 import { renderDocumentToCanvas } from './renderer.js';
-import { googleFonts } from '@silurus/ooxml-core/internal/font-sources';
+import { fontFiles, googleFonts } from '@silurus/ooxml-core/internal/font-sources';
 import { declaredFontSubstitutions, docxFontDemandCandidates } from './font-plan.js';
 import { sourceFontLayoutOptions } from './testing/font-sources.js';
 import { LineMeasurementAdapter } from './line-breaker/measurement-adapter.js';
@@ -768,5 +768,33 @@ describe('script-scoped Arabic visual substitutes', () => {
       installedSubstituteFamilies: ['sakkal majalla'],
       installedFaces: ['Sakkal Majalla'],
     })).toEqual(['Sakkal Majalla']);
+  });
+});
+
+describe('substitution relationships are keyed per authored family', () => {
+  it('serves a directly supplied family for its own Latin text although another family substitutes to it', async () => {
+    // A face supplied for A, with the Arabic-scoped pairs A → B and C → A.
+    // Being C's target must not scope A out of A's own route.
+    const sources = [fontFiles({
+      faces: [{ family: 'Alpha Face', url: 'https://app.example/alpha.woff2' }],
+      substitutes: [
+        { for: 'Alpha Face', use: 'Beta Face', script: 'arabic' },
+        { for: 'Gamma Face', use: 'Alpha Face', script: 'arabic' },
+      ],
+    })];
+    const model = parse(docx('<w:p><w:r><w:rPr><w:rFonts w:ascii="Alpha Face" w:hAnsi="Alpha Face"'
+      + ' w:cs="Alpha Face"/></w:rPr><w:t>Latin text</w:t></w:r></w:p>'));
+    const { canvas, calls } = recordingCanvas(new Set(['Alpha Face']));
+    await renderDocumentToCanvas(model, canvas, 0, {
+      dpr: 1, width: 612,
+      layoutServices: createLayoutServices(model, {
+        ...sourceFontLayoutOptions(model, [loaded('Alpha Face')], { sources }),
+        measureContext: canvas.getContext('2d') as CanvasRenderingContext2D,
+      }),
+    });
+    const painted = calls.filter((call) => call.text.includes('Latin'));
+    expect(painted.length).toBeGreaterThan(0);
+    expect(painted.map((call) => call.face)).toEqual(painted.map(() => 'Alpha Face'));
+    expect(painted.every((call) => cssFamilies(call.font)[0] === 'Alpha Face')).toBe(true);
   });
 });

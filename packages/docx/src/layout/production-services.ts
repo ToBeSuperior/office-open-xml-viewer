@@ -83,11 +83,16 @@ export interface ProductionLayoutServiceOptions {
 
 /** Families with a script-scoped visual substitute (core
  * substitute-script.ts) among the substitutions the configured sources
- * declare, mapped to every substitute family of that script. An installed
- * authored face is never substituted, so it is not scoped either. These
- * declarations delimit proof, not slot overrides: the resolver permits an
- * override only when a loaded scoped substitute wins the exact resource tuple,
- * after embedded, local and authored CSS inventory precedence. */
+ * declare. For each such family, the faces kept off its text outside the
+ * script: its own scoped substitutes, plus the other faces declared as visual
+ * substitutes of that script (the library's Arabic route tail lists them, and
+ * their Latin is no authored face), but never the family itself. Substitution
+ * relationships are keyed per authored family: being the target of another
+ * family's substitution never scopes a family out of its own route. An
+ * installed authored face is never substituted, so it is not scoped either.
+ * These declarations delimit proof, not slot overrides: the resolver permits
+ * an override only when a loaded scoped substitute wins the exact resource
+ * tuple, after embedded, local and authored CSS inventory precedence. */
 function docxScriptScopedFamilies(
   substitutes: readonly FontSubstitution[],
   installed: readonly string[],
@@ -98,7 +103,7 @@ function docxScriptScopedFamilies(
     .map(([key, script]) => [key, {
       script,
       substituteFamilies: [...new Set(substitutes
-        .filter((substitution) => substitution.script === script)
+        .filter((substitution) => substitution.script === script && fontFamilyKey(substitution.use) !== key)
         .map((substitution) => substitution.use))],
     }]));
 }
