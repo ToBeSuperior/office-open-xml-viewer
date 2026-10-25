@@ -557,12 +557,12 @@ export class FontSourceSession {
   private register(state: Extract<FamilyState, { kind: 'claimed' }>, registered: Set<OwnedFace>, failures: Map<string, string>): void {
     const set = this.fontSet as FontFaceSet;
     const sourceId = this.caches[state.sourceIndex].id;
-    for (const declaration of state.declarations) {
+    // Registry signature (design §4.4): source identity × family × every
+    // descriptor × content, so two origins never share a face and two
+    // documents on one source share one face per FontFaceSet.
+    const signed = state.declarations.map((declaration) => {
       const { data, url = '' } = declaration;
       const dataUrl = data === undefined && /^\s*data:/i.test(url);
-      // Registry signature (design §4.4): source identity × family × every
-      // descriptor × content, so two origins never share a face and two
-      // documents on one source share one face per FontFaceSet.
       const signature = [
         `src:${sourceId}`,
         fontFamilyKey(declaration.family),
@@ -572,6 +572,15 @@ export class FontSourceSession {
         declaration.unicodeRange ?? '',
         data !== undefined ? fontContentKey(data) : dataUrl ? fontContentKey(url) : url,
       ].join('|');
+      return { declaration, signature, data, url, dataUrl };
+    });
+    // A face registered later in a FontFaceSet takes precedence over an
+    // earlier one with the same descriptors (CSS Fonts 4 §4.10 / Font Loading
+    // set order), so an identical declaration repeated in the list keeps the
+    // position of its LAST occurrence: `A, B, A` registers `B, A`.
+    const lastIndex = new Map(signed.map(({ signature }, index) => [signature, index]));
+    for (const [index, { declaration, signature, data, url, dataUrl }] of signed.entries()) {
+      if (lastIndex.get(signature) !== index) continue;
       const existing = this.owned.get(signature);
       if (existing) {
         existing.families.add(state.name);

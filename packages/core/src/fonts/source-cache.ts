@@ -253,12 +253,25 @@ export function declarationBytes(declarations: readonly FontFaceDeclaration[]): 
  */
 export class SharedTaskMap<T> {
   private readonly tasks = new Map<string, SharedTask<T>>();
-  private readonly charged = new Map<string, number>();
+  /** Bytes charged per task (not per key): a retry after an eviction is a
+   * different task, so charge and refund always pair one-to-one. */
+  private readonly charged = new Map<SharedTask<T>, number>();
 
   constructor(
     private readonly evict: (value: T) => boolean = () => false,
     private readonly weigh: (value: T) => number = () => 0,
   ) {}
+
+  /** Forget `task` (if it is still the entry for `key`) and refund its
+   * charge. Every removal path goes through here. */
+  private drop(key: string, task: SharedTask<T>): void {
+    if (this.tasks.get(key) === task) this.tasks.delete(key);
+    const bytes = this.charged.get(task);
+    if (bytes !== undefined) {
+      this.charged.delete(task);
+      refundRetainedBytes(bytes);
+    }
+  }
 
   join(key: string, produce: (signal: AbortSignal) => Promise<T>, signal: AbortSignal): Promise<T> {
     let task = this.tasks.get(key);
@@ -268,17 +281,18 @@ export class SharedTaskMap<T> {
       const created: SharedTask<T> = new SharedTask(async (taskSignal) => {
         try {
           const value = await produce(taskSignal);
+          // Abandoned while producing: nothing keeps the value, charge nothing.
           if (this.tasks.get(key) !== created) return value;
-          if (this.evict(value)) { this.tasks.delete(key); return value; }
+          if (this.evict(value)) { this.drop(key, created); return value; }
           const bytes = this.weigh(value);
           chargeRetainedBytes(bytes);
-          if (bytes > 0) this.charged.set(key, bytes);
+          if (bytes > 0) this.charged.set(created, bytes);
           return value;
         } catch (error) {
-          if (this.tasks.get(key) === created) this.tasks.delete(key);
+          this.drop(key, created);
           throw error;
         }
-      }, () => { if (this.tasks.get(key) === created) this.tasks.delete(key); });
+      }, () => this.drop(key, created));
       task = created;
       this.tasks.set(key, task);
     }
@@ -289,7 +303,9 @@ export class SharedTaskMap<T> {
   has(key: string): boolean { return this.tasks.has(key); }
 
   clear(): void {
-    this.tasks.clear();
+    for (const [key, task] of [...this.tasks]) this.drop(key, task);
+    // Abandoned-but-charged tasks are refunded by drop() already; nothing
+    // charged can remain without an entry.
     for (const bytes of this.charged.values()) refundRetainedBytes(bytes);
     this.charged.clear();
   }

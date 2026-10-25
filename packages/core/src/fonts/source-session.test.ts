@@ -493,6 +493,38 @@ describe('FontSourceSession: caches keep only accounted bytes', () => {
   });
 });
 
+describe('FontSourceSession: charge and refund pair per cache entry', () => {
+  it('refunds a charge whose task was abandoned before it settled, across retries', async () => {
+    const source = fontResolver((request) => request.families.map((family) => ({ family, data: new Uint8Array(10).buffer })));
+    const set = fakeSet();
+    const idle = open([source], set);
+    for (let ticks = 0; ticks < 40; ticks++) {
+      const family = `F${ticks}`;
+      const early = open([source], set);
+      const pending = early.ensure(demand([family])).catch(() => undefined);
+      for (let tick = 0; tick < ticks; tick++) await Promise.resolve();
+      early.release();
+      await pending;
+      // A retry by another document for the same family.
+      const retry = open([source], set);
+      await retry.ensure(demand([family]));
+      retry.release();
+    }
+    idle.release();
+    expect(retainedFontSourceBytes()).toBe(0);
+  });
+});
+
+describe('FontSourceSession: registration order', () => {
+  it('keeps the last occurrence of a repeated declaration, as CSS precedence does', async () => {
+    const a = { family: 'Brand', url: 'https://app.example/a.woff2' };
+    const b = { family: 'Brand', url: 'https://app.example/b.woff2' };
+    const set = fakeSet();
+    await open([fontFiles({ faces: [a, b, a] })], set).ensure(demand(['Brand']));
+    expect(set.faces.map(urlOf)).toEqual(['https://app.example/b.woff2', 'https://app.example/a.woff2']);
+  });
+});
+
 describe('FontSourceSession: released sessions keep no font content', () => {
   it('drops the stylesheet family index with the last release, even while session objects live on', async () => {
     setFlagsFromString('--expose-gc');

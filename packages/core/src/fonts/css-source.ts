@@ -13,9 +13,20 @@
  * rules, `!important` or block-valued descriptors) is skipped. Input is
  * preprocessed (§3.3) and tokens follow §4.3: string and url tokens, escapes
  * (decoded in identifiers, at-keywords, descriptor names, units, strings and
- * urls), bad strings and bad urls. Each descriptor is validated against its
- * CSS Fonts 4 §4 grammar and an invalid declaration is ignored, never
- * overriding an earlier valid one. Library policy on top of CSS Fonts Level 4:
+ * urls), bad strings and bad urls; structure (blocks, declaration and
+ * entry separators) is found with the same token rules, so an escaped
+ * `u\72l(` hides its braces exactly as a literal `url(` does. The last valid
+ * declaration of each descriptor wins (an invalid one never overrides an
+ * earlier valid one). Validity of `font-weight`, `font-style`,
+ * `font-stretch` and `unicode-range` is decided by the host's own CSS parser
+ * through an unregistered, never-loaded probe `FontFace` wherever the realm
+ * has one (window or worker), so the full grammar (math functions included)
+ * matches the browser that will paint. Without `FontFace` (Node) a fallback
+ * CSS Fonts 4 §4 grammar applies; it accepts math functions unevaluated and
+ * treats `auto` as the initial value, where a browser that does not support
+ * `auto` ignores the declaration. `src` and `font-family` always use the
+ * library's own parse (they decide what is fetched). Library policy on top
+ * of CSS Fonts Level 4:
  *
  * - only `url()` sources are accepted: `local()` would let a stylesheet probe
  *   or paint host fonts, which is the host-fallback path's job. The first
@@ -103,21 +114,33 @@ function skipString(css: string, at: number): number {
   return consumeStringToken(css, at).end;
 }
 
-/** When `at` starts an unquoted `url(` token, the index after it; else -1.
- * A quoted `url("…")` is an ordinary function and returns -1. */
-function skipUnquotedUrl(css: string, at: number): number {
-  if (css.slice(at, at + 4).toLowerCase() !== 'url(') return -1;
-  if (at > 0 && (isNameUnit(css.charCodeAt(at - 1)) || css.charCodeAt(at - 1) === 0x5c)) return -1;
-  let index = at + 4;
-  while (index < css.length && isWhitespace(css.charCodeAt(index))) index++;
-  const first = css.charCodeAt(index);
-  if (first === 0x22 || first === 0x27) return -1;
-  while (index < css.length) {
-    const unit = css.charCodeAt(index);
-    if (unit === 0x29 /* ) */) return index + 1;
-    index += unit === 0x5c ? 2 : 1;
+/**
+ * End of the non-structural token starting at `at`, following CSS Syntax
+ * §4.3.1 so structure is found exactly where the value tokenizer finds it:
+ * a comment, a string, a numeric token (with its `%` or unit), or an
+ * ident-like token, which is a url token when its decoded name is `url`
+ * followed by `(` and an unquoted argument (`u\72l(x{y)` included).
+ * Returns -1 when `at` starts none of these (a single code point follows).
+ */
+function skipToken(css: string, at: number): number {
+  const char = css[at];
+  if (char === '/' && css[at + 1] === '*') return skipComment(css, at);
+  if (char === '"' || char === "'") return skipString(css, at);
+  NUMBER.lastIndex = at;
+  const number = NUMBER.exec(css);
+  if (number) {
+    const end = at + number[0].length;
+    if (css[end] === '%') return end + 1;
+    return startsIdentifier(css, end) ? consumeIdent(css, end).end : end;
   }
-  return css.length;
+  if (!startsIdentifier(css, at)) return -1;
+  const ident = consumeIdent(css, at);
+  if (css[ident.end] !== '(' || ident.value.toLowerCase() !== 'url') return ident.end;
+  let first = ident.end + 1;
+  while (first < css.length && isWhitespace(css.charCodeAt(first))) first++;
+  // A quoted url("…") is an ordinary function: its `(` is structure.
+  if (css[first] === '"' || css[first] === "'") return ident.end;
+  return consumeUrlToken(css, ident.end + 1).end;
 }
 
 const CLOSER: Readonly<Record<string, string>> = { '{': '}', '(': ')', '[': ']' };
@@ -132,15 +155,9 @@ function scanUntil(css: string, at: number, stops: string): number {
   const expected: string[] = [];
   let index = at;
   while (index < css.length) {
+    const end = skipToken(css, index);
+    if (end >= 0) { index = end; continue; }
     const char = css[index];
-    const unit = css.charCodeAt(index);
-    if (char === '/' && css[index + 1] === '*') { index = skipComment(css, index); continue; }
-    if (unit === 0x22 || unit === 0x27) { index = skipString(css, index); continue; }
-    if (unit === 0x5c) { index += 2; continue; }
-    if (char === 'u' || char === 'U') {
-      const after = skipUnquotedUrl(css, index);
-      if (after >= 0) { index = after; continue; }
-    }
     if (expected.length === 0 && stops.includes(char)) return index;
     if (char === '{' || char === '(' || char === '[') expected.push(CLOSER[char]);
     else if (expected.length && char === expected[expected.length - 1]) expected.pop();
@@ -160,15 +177,9 @@ function stripComments(text: string): string {
   let out = '';
   let index = 0;
   while (index < text.length) {
-    const unit = text.charCodeAt(index);
     if (text[index] === '/' && text[index + 1] === '*') { index = skipComment(text, index); out += ' '; continue; }
-    let next = index + 1;
-    if (unit === 0x22 || unit === 0x27) next = skipString(text, index);
-    else if (unit === 0x5c) next = index + 2;
-    else if (text[index] === 'u' || text[index] === 'U') {
-      const after = skipUnquotedUrl(text, index);
-      if (after >= 0) next = after;
-    }
+    const end = skipToken(text, index);
+    const next = end >= 0 ? end : index + 1;
     out += text.slice(index, next);
     index = next;
   }
@@ -453,6 +464,15 @@ function commaSeparated(tokens: readonly ValueToken[]): ValueToken[][] {
   return groups;
 }
 
+/** CSS Values 4 math functions. The fallback grammar accepts them in place
+ * of a number, percentage or angle without evaluating them. */
+const MATH_FUNCTIONS = new Set([
+  'calc', 'min', 'max', 'clamp', 'round', 'mod', 'rem', 'sin', 'cos', 'tan', 'asin', 'acos', 'atan',
+  'atan2', 'pow', 'sqrt', 'hypot', 'log', 'exp', 'abs', 'sign',
+]);
+const mathFunction = (token: ValueToken) =>
+  (token.type === 'function' && MATH_FUNCTIONS.has(token.name) ? `${token.name}(${token.args})` : null);
+
 const keyword = (token: ValueToken | undefined) => (token?.type === 'ident' ? token.value.toLowerCase() : undefined);
 
 /**
@@ -478,7 +498,8 @@ function parseWeight(value: string): DescriptorValue {
   return rangeDescriptor(value, (token) => {
     const word = keyword(token);
     if (word === 'normal' || word === 'bold') return word;
-    return token.type === 'number' && token.value >= 1 && token.value <= 1000 ? String(token.value) : null;
+    if (token.type === 'number') return token.value >= 1 && token.value <= 1000 ? String(token.value) : null;
+    return mathFunction(token);
   });
 }
 
@@ -493,7 +514,8 @@ function parseStretch(value: string): DescriptorValue {
   return rangeDescriptor(value, (token) => {
     const word = keyword(token);
     if (word !== undefined) return STRETCH_KEYWORDS.has(word) ? word : null;
-    return token.type === 'percentage' && token.value >= 0 ? `${token.value}%` : null;
+    if (token.type === 'percentage') return token.value >= 0 ? `${token.value}%` : null;
+    return mathFunction(token);
   });
 }
 
@@ -510,6 +532,8 @@ function parseStyle(value: string): DescriptorValue {
   if (word !== 'oblique' || tokens.length > 3) return null;
   const angles: string[] = [];
   for (const token of tokens.slice(1)) {
+    const math = mathFunction(token);
+    if (math) { angles.push(math); continue; }
     if (token.type !== 'dimension' || !Object.hasOwn(DEGREES_PER_UNIT, token.unit)) return null;
     const degrees = token.value * DEGREES_PER_UNIT[token.unit];
     if (!(degrees >= -90 && degrees <= 90)) return null;
@@ -588,6 +612,48 @@ function parseUnicodeRangeDescriptor(value: string): DescriptorValue {
   return { value: text.split(',').map(cssTrim).join(', ') };
 }
 
+type FaceDescriptorKey = 'weight' | 'style' | 'stretch' | 'unicodeRange';
+
+/** The fallback grammars (CSS Fonts 4 §4), used where no `FontFace` exists. */
+const GRAMMAR: Readonly<Record<FaceDescriptorKey, (value: string) => DescriptorValue>> = {
+  weight: parseWeight,
+  style: parseStyle,
+  stretch: parseStretch,
+  unicodeRange: parseUnicodeRangeDescriptor,
+};
+
+const PROBE_FAMILY = 'ooxml-descriptor-probe';
+
+/**
+ * Descriptor validation by the host's own CSS parser, where the realm has
+ * `FontFace` (window and worker alike). CSS Font Loading §2.1: the
+ * constructor parses each descriptor with the `@font-face` grammar and, on a
+ * parse failure, sets `status` to "error" (older engines throw a SyntaxError
+ * instead; both count as invalid). The probe uses a `local()` source and is
+ * never added to a FontFaceSet or loaded, so it fetches nothing; its
+ * rejected `loaded` promise is observed. Results are memoized per parse.
+ */
+function hostDescriptorValidator(): ((key: FaceDescriptorKey, text: string) => DescriptorValue) | null {
+  const Face = (globalThis as { FontFace?: typeof FontFace }).FontFace;
+  if (typeof Face !== 'function') return null;
+  const memo = new Map<string, boolean>();
+  return (key, text) => {
+    const memoKey = `${key}\n${text}`;
+    let valid = memo.get(memoKey);
+    if (valid === undefined) {
+      try {
+        const probe = new Face(PROBE_FAMILY, `local(${PROBE_FAMILY})`, { [key]: text });
+        probe.loaded?.catch(() => undefined);
+        valid = probe.status !== 'error';
+      } catch {
+        valid = false;
+      }
+      memo.set(memoKey, valid);
+    }
+    return valid ? { value: text } : null;
+  };
+}
+
 /**
  * Declarations of one `@font-face` body; null when the rule is unusable.
  * Every descriptor follows CSS cascade within the block: an invalid
@@ -596,15 +662,15 @@ function parseUnicodeRangeDescriptor(value: string): DescriptorValue {
  * does not pass to `FontFace` (font-display, font-feature-settings, the
  * metric overrides, …) are not interpreted.
  */
-function parseFontFaceBody(body: string, stylesheetUrl: string, location: string): FontFaceDeclaration | null {
+function parseFontFaceBody(
+  body: string,
+  stylesheetUrl: string,
+  location: string,
+  validateHost: ((key: FaceDescriptorKey, text: string) => DescriptorValue) | null,
+): FontFaceDeclaration | null {
   let family: string | null = null;
   let src: string | null = null;
-  const descriptors: { weight?: string; style?: string; stretch?: string; unicodeRange?: string } = {};
-  const assign = (key: keyof typeof descriptors, parsed: DescriptorValue) => {
-    if (parsed === null) return;
-    if (parsed.value === undefined) delete descriptors[key];
-    else descriptors[key] = parsed.value;
-  };
+  const candidates: Record<FaceDescriptorKey, string[]> = { weight: [], style: [], stretch: [], unicodeRange: [] };
   for (const raw of splitTopLevel(body, ';')) {
     const declaration = stripComments(raw);
     const colon = scanUntil(declaration, 0, ':{');
@@ -623,11 +689,24 @@ function parseFontFaceBody(body: string, stylesheetUrl: string, location: string
         if (parsed) src = parsed.url;
         break;
       }
-      case 'font-weight': assign('weight', parseWeight(value)); break;
-      case 'font-style': assign('style', parseStyle(value)); break;
-      case 'font-stretch': assign('stretch', parseStretch(value)); break;
-      case 'unicode-range': assign('unicodeRange', parseUnicodeRangeDescriptor(value)); break;
+      case 'font-weight': candidates.weight.push(cssTrim(value)); break;
+      case 'font-style': candidates.style.push(cssTrim(value)); break;
+      case 'font-stretch': candidates.stretch.push(cssTrim(value)); break;
+      case 'unicode-range': candidates.unicodeRange.push(cssTrim(value)); break;
       default: break;
+    }
+  }
+  // The last valid declaration of each descriptor wins: walk back from the
+  // last until one validates. The host parser decides where it exists, the
+  // fallback grammar otherwise (`auto` there resets to the initial value).
+  const descriptors: { weight?: string; style?: string; stretch?: string; unicodeRange?: string } = {};
+  for (const key of Object.keys(candidates) as FaceDescriptorKey[]) {
+    const texts = candidates[key];
+    for (let index = texts.length - 1; index >= 0; index--) {
+      const parsed = validateHost ? validateHost(key, texts[index]) : GRAMMAR[key](texts[index]);
+      if (parsed === null) continue;
+      if (parsed.value !== undefined) descriptors[key] = parsed.value;
+      break;
     }
   }
   if (!family || !src) return null;
@@ -677,6 +756,7 @@ export function parseFontFaceCss(css: string, stylesheetUrl: string): FontFaceDe
   css = css.replace(/\r\n?|\f/g, '\n')
     .replace(/\0|[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g, REPLACEMENT);
   const declarations: FontFaceDeclaration[] = [];
+  const validateHost = hostDescriptorValidator();
   let index = 0;
   while (index < css.length) {
     const unit = css.charCodeAt(index);
@@ -697,7 +777,7 @@ export function parseFontFaceCss(css: string, stylesheetUrl: string): FontFaceDe
       && stripComments(css.slice(nameEnd, stop)).trim() === '';
     if (isFontFace && end >= 0) {
       const declaration = parseFontFaceBody(css.slice(stop + 1, end), stylesheetUrl,
-        `stylesheet @font-face #${declarations.length + 1}`);
+        `stylesheet @font-face #${declarations.length + 1}`, validateHost);
       if (declaration) {
         if (declarations.length >= HARD_MAX_FONT_SOURCE_DECLARATIONS) {
           throw fontSourceLimitError('declarations', HARD_MAX_FONT_SOURCE_DECLARATIONS, declarations.length + 1);

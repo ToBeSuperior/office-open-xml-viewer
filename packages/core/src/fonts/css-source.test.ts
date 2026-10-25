@@ -83,6 +83,63 @@ describe('parseFontFaceCss', () => {
     expect(parseFontFaceCss(face('font-family: X; font-family: serif; src: url(a.woff2);'), SHEET)[0].family).toBe('X');
   });
 
+  it('accepts math functions in the fallback grammar', () => {
+    const parse = (body: string) => parseFontFaceCss(face(`font-family: X; src: url(a.woff2); ${body}`), SHEET)[0];
+    expect(parse('font-weight: 400; font-weight: calc(700);').weight).toBe('calc(700)');
+    expect(parse('font-weight: 400; font-weight: calc(100) max(800, 900);').weight).toBe('calc(100) max(800, 900)');
+    expect(parse('font-style: normal; font-style: oblique calc(5deg * 2);').style).toBe('oblique calc(5deg * 2)');
+    expect(parse('font-stretch: 75%; font-stretch: clamp(50%, 80%, 100%);').stretch).toBe('clamp(50%, 80%, 100%)');
+    expect(parse('font-weight: 400; font-weight: var(--w);').weight).toBe('400');
+  });
+
+  it('lets the host FontFace parser validate descriptors, walking back from the last declaration', () => {
+    const G = globalThis as { FontFace?: unknown };
+    const original = G.FontFace;
+    const probes: { descriptors: FontFaceDescriptors; loads: number; observed: boolean }[] = [];
+    // Stands in for the host CSS parser: rejects by status (spec) or by
+    // throwing (older engines); accepts anything else, calc() included.
+    class HostFontFace {
+      status: FontFaceLoadStatus = 'unloaded';
+      readonly loaded: Promise<unknown>;
+      private readonly probe: (typeof probes)[number];
+      constructor(_family: string, _source: string, descriptors: FontFaceDescriptors) {
+        if (descriptors.weight === 'heavy') throw new DOMException('bad', 'SyntaxError');
+        this.probe = { descriptors, loads: 0, observed: false };
+        probes.push(this.probe);
+        const invalid = descriptors.weight === '1001' || descriptors.style === 'slanted';
+        if (invalid) this.status = 'error';
+        const loaded = invalid ? Promise.reject(new DOMException('bad', 'SyntaxError')) : new Promise(() => undefined);
+        const probe = this.probe;
+        this.loaded = { catch: (handler: (error: unknown) => unknown) => { probe.observed = true; return loaded.catch(handler); } } as Promise<unknown>;
+      }
+      load() { this.probe.loads++; return this.loaded; }
+    }
+    G.FontFace = HostFontFace;
+    try {
+      const [declaration] = parseFontFaceCss(face(`font-family: X; src: url(a.woff2);
+        font-weight: 300; font-weight: calc(700); font-weight: heavy; font-weight: 1001;
+        font-style: italic; font-style: slanted; font-stretch: 75%;`), SHEET);
+      expect(declaration).toMatchObject({ weight: 'calc(700)', style: 'italic', stretch: '75%' });
+      // Walked back 1001 → heavy (thrown) → calc(700); memoized; never loaded.
+      expect(probes.map((probe) => probe.descriptors.weight).filter(Boolean)).toEqual(['1001', 'calc(700)']);
+      expect(probes.every((probe) => probe.loads === 0 && probe.observed)).toBe(true);
+    } finally {
+      G.FontFace = original;
+    }
+  });
+
+  it('finds structure with the same token rules as values (escaped url, numbers)', () => {
+    const urls = (css: string) => parseFontFaceCss(css, SHEET).map((entry) => entry.url);
+    // An escaped url( is still a url token: its braces are not structure.
+    expect(urls('@font-face { font-family: X; src: u\\72l(x{y.woff2) }')).toEqual(['https://cdn.internal.example/styles/x%7By.woff2']);
+    expect(urls('@font-face { font-family: X; src: URL(x}y.woff2) }')).toEqual(['https://cdn.internal.example/styles/x%7Dy.woff2']);
+    // A quoted url("…") is a function; its argument string hides the braces.
+    expect(urls('@font-face { font-family: X; src: url("x}y.woff2") }')).toEqual(['https://cdn.internal.example/styles/x%7Dy.woff2']);
+    // "1url(" is a dimension followed by "(": not a url token.
+    expect(urls('@font-face { font-family: X; src: url(a.woff2); --x: 1url(}) } @font-face { font-family: Y; src: url(b.woff2) }'))
+      .toEqual(['https://cdn.internal.example/styles/a.woff2', 'https://cdn.internal.example/styles/b.woff2']);
+  });
+
   it('consumes string tokens per CSS Syntax §4.3.5', () => {
     const family = (value: string) => parseFontFaceCss(face(`font-family: ${value}; src: url(a.woff2);`), SHEET)[0]?.family;
     // A hex escape takes one following white space, including a newline (CR LF is one).
