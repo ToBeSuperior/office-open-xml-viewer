@@ -163,6 +163,8 @@ export {
   type OoxmlResourceLimit,
   type OoxmlResourceLimitErrorDetails,
   type OoxmlUnsupportedContentDetails,
+  type OoxmlFontSourceQuota,
+  type OoxmlFontSourceViolation,
   type OoxmlResourceLimits,
   type XlsxWorksheetLimits,
   type CjkFallback,

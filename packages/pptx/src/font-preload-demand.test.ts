@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { TextRunData } from '@silurus/ooxml-core';
+import { collectFontDemandScalars } from '@silurus/ooxml-core/internal/font-scalar-demand';
 import { collectSlideFontDemand } from './font-preload-demand.js';
 import { PresentationPreflightBuilder, normalizePresentationPreflight } from './presentation-preflight.js';
 import type { Slide } from './types';
@@ -15,6 +16,19 @@ const bootstrap = { slideCount: 2, slideWidth: 100, slideHeight: 100, defaultTex
   slides: [{ index: 0 }, { index: 1 }] } as PresentationBootstrap;
 
 describe('complete conservative PPTX paint demand', () => {
+  it('applies exactly the shared core scalar rules to its painted texts', () => {
+    // One plain run paints its stored text (preparedPowerPointText is the
+    // identity here), so the PPTX traversal must agree with the shared
+    // collector on that text for every scalar rule and budget edge.
+    const committed = new Set([0x41]);
+    for (const text of ['AB漢', 'e\u0301', 'א', '\uf0a7', '\u0378', 'ABCDEFG', '']) {
+      for (const budget of [1, 2, 12, 10000]) {
+        expect(collectSlideFontDemand(slide(text), committed, budget), `${JSON.stringify(text)} @${budget}`)
+          .toEqual(collectFontDemandScalars([text, text], { budget, committed }));
+      }
+    }
+  });
+
   it('includes caps expansion, actual slide number, unchanged language text and measurement sentinels', () => {
     expect(collectSlideFontDemand(slide('§ß\\', { caps: 'all', lang: 'ja-JP' }), new Set(), 10000))
       .toEqual(expect.arrayContaining([0xa7, 0xdf, 0x53, 0x5c, 0x4d, 0x69, 0x20]));
