@@ -359,7 +359,7 @@ describe('PptxPresentation.destroy() — rejects in-flight worker requests', () 
       Object.assign(pres, {
         _fonts: [fontFiles({ faces: [{ family: 'Arial', url: 'https://app.example/arial.woff2' }] })],
         _embeddedFontAliases: new Map(),
-        _installedFamilies: new PptxInstalledFamilies(async () => installed),
+        _installedFamilies: new PptxInstalledFamilies(async () => ({ installed: new Set(installed), checked: new Set(['arial']) })),
       });
       await (pres as unknown as {
         _ensureFontSources(names: string[], facts: undefined, scalars: undefined): Promise<void>;

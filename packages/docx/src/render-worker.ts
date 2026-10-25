@@ -45,7 +45,7 @@ import {
 } from '@silurus/ooxml-core/worker';
 import { prepareMathRuns, renderLayoutSourceToCanvas } from './renderer';
 import { createLayoutServices, nativeRouteLineRequests } from './layout-runtime.js';
-import { declaredFontSubstitutions, docxFontFamilyPlan, docxOfficeFontFallbackRequests } from './font-plan.js';
+import { completeDocxFontPresence, declaredFontSubstitutions, docxFontFamilyPlan, docxOfficeFontFallbackRequests } from './font-plan.js';
 import { loadDocxFontSources, type DocxLoadedFontSources } from './font-source-load.js';
 import { assertFontSourceDescriptors, type FontSource } from '@silurus/ooxml-core/internal/font-sources';
 import { loadEmbeddedFonts } from './embedded-fonts';
@@ -407,7 +407,9 @@ self.onmessage = async (e: MessageEvent<RenderWorkerWireRequest | WorkerSvgDecod
           // Pagination measures text, so each admitted face must be available
           // before canonical layout in both worker and main mode. Same plan,
           // demand and session as main mode, registered into self.fonts.
-          const plan = docxFontFamilyPlan(model, fontSources, req.cjkFallback, officeFonts);
+          const presence = await completeDocxFontPresence(model, fontSources, req.cjkFallback, officeFonts);
+          if (requestedGeneration !== parseGeneration) throw new Error('render-worker parse was superseded');
+          const plan = docxFontFamilyPlan(model, fontSources, req.cjkFallback, presence);
           installedSubstituteFamilies = plan.installedSubstituteFamilies;
           loadedSources = await loadDocxFontSources(model, plan, fontSources);
           if (requestedGeneration !== parseGeneration) throw new Error('render-worker parse was superseded');

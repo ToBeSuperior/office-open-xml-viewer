@@ -10,12 +10,12 @@
  * the same preflight facts with the same descriptors, so both realms demand,
  * register and load identical faces.
  */
+import { normalizeLocalFontMetricFamily, type FontPreloadDemand } from '@silurus/ooxml-core';
 import {
-  loadOfficeFontFallbacks,
-  normalizeLocalFontMetricFamily,
-  type FontPreloadDemand,
-} from '@silurus/ooxml-core';
-import type { FontDemand } from '@silurus/ooxml-core/internal/font-sources';
+  probeFontFamilyPresence,
+  type FontDemand,
+  type FontFamilyPresence,
+} from '@silurus/ooxml-core/internal/font-sources';
 import { excludeEmbeddedFontFamilies } from './embedded-fonts.js';
 import type { PptxFontDemandFacts } from './font-requests.js';
 
@@ -68,26 +68,29 @@ export function pptxFontDemand(
   });
 }
 
-/** Normalised families of `families` whose face is installed on the host. */
-export type InstalledFamilyProbe = (families: readonly string[]) => Promise<readonly string[]>;
+/** Presence of `families` (normalised keys): installed ones, and every one
+ * whose probe completed. */
+export type InstalledFamilyProbe = (families: readonly string[]) => Promise<FontFamilyPresence>;
 
-/** The shared family presence probe (`local()`, bounded by the office-fallback
- * preflight limits) against this realm's font set. */
-const probeInstalledFamilies: InstalledFamilyProbe = async (families) =>
-  (await loadOfficeFontFallbacks(families.map((family) => ({ family, presenceOnly: true })))).installed ?? [];
+/** The shared family presence probe (`local()`), batched so every family is
+ * probed, against this realm's font set. */
+const probeInstalledFamilies: InstalledFamilyProbe = (families) => probeFontFamilyPresence(families);
 
 /**
  * Library policy (design §3.2, §8): the authored family names the face to use,
  * so an installed authored face is never displaced by a source face. A source
  * face registers under its real CSS family, and a document font shadows a
  * system font of the same name, so a source serving an installed family (an
- * application face named "Arial") would otherwise replace it. Each authored
- * family is probed once per presentation and realm, before any source face
- * of the delta registers; installed families leave the demand. Library
+ * application face named "Arial") would otherwise replace it. Every authored
+ * family is probed, before any source face of the delta registers; only a
+ * family whose probe completed and found no installed face is demanded and
+ * cached. A family whose probe did not complete (deadline) is left out of
+ * this delta, so the host keeps it, and is probed again with the next delta:
+ * an unproven family never loads a source face that might shadow it. Library
  * fallback families stay demanded, as in DOCX.
  */
 export class PptxInstalledFamilies {
-  private readonly installed = new Map<string, Promise<boolean>>();
+  private readonly installed = new Map<string, Promise<boolean | undefined>>();
 
   constructor(private readonly probe: InstalledFamilyProbe = probeInstalledFamilies) {}
 
@@ -97,11 +100,18 @@ export class PptxInstalledFamilies {
     if (fresh.length) {
       const names = new Map(demand.families.map((family) => [normalizeLocalFontMetricFamily(family), family]));
       const probed = this.probe(fresh.map((key) => names.get(key) as string))
-        .then((found) => new Set(found), () => new Set<string>());
-      for (const key of fresh) this.installed.set(key, probed.then((found) => found.has(key)));
+        .catch((): FontFamilyPresence => ({ installed: new Set(), checked: new Set() }));
+      for (const key of fresh) {
+        const outcome = probed.then(({ installed, checked }) => (checked.has(key) ? installed.has(key) : undefined));
+        this.installed.set(key, outcome);
+        // Unproven families are not cached: the next delta probes them again.
+        void outcome.then((value) => { if (value === undefined && this.installed.get(key) === outcome) this.installed.delete(key); });
+      }
     }
+    // Demand only families proven missing (false); installed (true) and
+    // unproven (undefined) families keep the host face.
     const keep = await Promise.all(demand.families.map(async (family) =>
-      !(await this.installed.get(normalizeLocalFontMetricFamily(family)))));
+      (await this.installed.get(normalizeLocalFontMetricFamily(family))) === false));
     const families = demand.families.filter((_, index) => keep[index]);
     return families.length === demand.families.length ? demand : Object.freeze({ ...demand, families: Object.freeze(families) });
   }

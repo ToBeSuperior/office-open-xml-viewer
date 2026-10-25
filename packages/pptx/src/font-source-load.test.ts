@@ -86,7 +86,10 @@ describe('progressive PPTX font-source loading', () => {
 
 describe('PptxInstalledFamilies', () => {
   it('leaves installed authored families out of demand, probing each family once', async () => {
-    const probe = vi.fn(async (families: readonly string[]) => families.filter((family) => family === 'Arial').map((family) => family.toLowerCase()));
+    const probe = vi.fn(async (families: readonly string[]) => ({
+      installed: new Set(families.filter((family) => family === 'Arial').map((family) => family.toLowerCase())),
+      checked: new Set(families.map((family) => family.toLowerCase())),
+    }));
     const installed = new PptxInstalledFamilies(probe);
     const first = await installed.exclude(pptxFontDemand(['Arial', 'Deck Face', 'Noto Sans JP'], {
       familyCount: 2, tuples: [], substituteScripts: {},
@@ -97,5 +100,45 @@ describe('PptxInstalledFamilies', () => {
     const second = await installed.exclude(pptxFontDemand(['Arial', 'Deck Face', 'Other'], undefined, undefined, new Map()));
     expect(second.families).toEqual(['Deck Face', 'Other']);
     expect(probe.mock.calls).toEqual([[['Arial', 'Deck Face']], [['Other']]]);
+  });
+
+  it('never demands a family whose presence probe did not complete, and probes it again', async () => {
+    // A family over a probe cap or past its deadline is unproven: the host
+    // keeps it (no source face may shadow an installed font) until a later
+    // delta proves it missing.
+    let complete = false;
+    const probe = vi.fn(async (families: readonly string[]) => ({
+      installed: new Set<string>(),
+      checked: new Set(families.map((family) => family.toLowerCase()).filter((key) => complete || key !== 'face 33')),
+    }));
+    const installed = new PptxInstalledFamilies(probe);
+    const names = Array.from({ length: 33 }, (_, index) => `Face ${index + 1}`);
+    const first = await installed.exclude(pptxFontDemand(names, undefined, undefined, new Map()));
+    expect(first.families).toEqual(names.slice(0, 32));
+    complete = true;
+    const second = await installed.exclude(pptxFontDemand(names, undefined, undefined, new Map()));
+    expect(second.families).toEqual(names);
+    expect(probe.mock.calls.map(([families]) => families.length)).toEqual([33, 1]);
+  });
+
+  it('probes the 33rd authored family with the shared probe and keeps it on the host', async () => {
+    class LocalFace {
+      status: FontFaceLoadStatus = 'unloaded';
+      constructor(readonly family: string, readonly source: string) {}
+      async load() {
+        if (!this.source.includes('local("Face 33")')) { this.status = 'error'; throw new Error('missing'); }
+        this.status = 'loaded';
+        return this;
+      }
+    }
+    vi.stubGlobal('FontFace', LocalFace);
+    vi.stubGlobal('document', { fonts: { add: () => undefined, delete: () => true, *[Symbol.iterator]() {} } });
+    try {
+      const names = Array.from({ length: 33 }, (_, index) => `Face ${index + 1}`);
+      const demand = await new PptxInstalledFamilies().exclude(pptxFontDemand(names, undefined, undefined, new Map()));
+      expect(demand.families).toEqual(names.slice(0, 32));
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
