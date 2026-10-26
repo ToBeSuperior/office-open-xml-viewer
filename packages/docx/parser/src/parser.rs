@@ -10328,37 +10328,72 @@ fn parse_anchor_group_wire(
 /// already rejects it.
 const MAX_WRAP_POLYGON_POINTS: usize = 256;
 
-fn anchor_wrap_polygon(edited: bool, mut points: Vec<AnchorPointWire>) -> AnchorPolygonWire {
-    let invalid_point_count = points
-        .iter()
-        .filter(|point| point.x.is_none() || point.y.is_none())
-        .count();
-    if points.len() > MAX_WRAP_POLYGON_POINTS {
-        let xs = points.iter().filter_map(|point| point.x);
-        let ys = points.iter().filter_map(|point| point.y);
-        let (x0, x1) = (xs.clone().min(), xs.max());
-        let (y0, y1) = (ys.clone().min(), ys.max());
-        points = match (invalid_point_count, x0, x1, y0, y1) {
-            (0, Some(x0), Some(x1), Some(y0), Some(y1)) => [(x0, y0), (x0, y1), (x1, y1), (x1, y0)]
-                .into_iter()
-                .map(|(x, y)| AnchorPointWire {
-                    x: Some(x),
-                    y: Some(y),
-                    raw_x: None,
-                    raw_y: None,
-                })
-                .collect(),
-            _ => Vec::new(),
-        };
+/// One-pass wrap polygon accumulator. It keeps at most
+/// `MAX_WRAP_POLYGON_POINTS` vertices and allocates their raw text only while
+/// they can still be retained, so memory stays bounded by the budget and work
+/// stays linear in the authored list however long it is.
+#[derive(Default)]
+struct WrapPolygonBuilder {
+    points: Vec<AnchorPointWire>,
+    point_count: usize,
+    invalid_point_count: usize,
+    x_range: Option<(i64, i64)>,
+    y_range: Option<(i64, i64)>,
+}
+
+impl WrapPolygonBuilder {
+    fn push(
+        &mut self,
+        x: Option<i64>,
+        y: Option<i64>,
+        raw: impl FnOnce() -> (Option<String>, Option<String>),
+    ) {
+        fn widen(range: &mut Option<(i64, i64)>, value: Option<i64>) {
+            if let Some(value) = value {
+                *range =
+                    Some(range.map_or((value, value), |(lo, hi)| (lo.min(value), hi.max(value))));
+            }
+        }
+        self.point_count += 1;
+        if x.is_none() || y.is_none() {
+            self.invalid_point_count += 1;
+        }
+        widen(&mut self.x_range, x);
+        widen(&mut self.y_range, y);
+        if self.point_count <= MAX_WRAP_POLYGON_POINTS {
+            let (raw_x, raw_y) = raw();
+            self.points.push(AnchorPointWire { x, y, raw_x, raw_y });
+        } else if self.point_count == MAX_WRAP_POLYGON_POINTS + 1 {
+            self.points = Vec::new();
+        }
     }
-    AnchorPolygonWire {
-        edited,
-        coordinate_space: AnchorPolygonSpaceWire {
-            width: 21600,
-            height: 21600,
-        },
-        points,
-        invalid_point_count,
+
+    fn finish(self, edited: bool) -> AnchorPolygonWire {
+        let points = if self.point_count > MAX_WRAP_POLYGON_POINTS {
+            match (self.invalid_point_count, self.x_range, self.y_range) {
+                (0, Some((x0, x1)), Some((y0, y1))) => [(x0, y0), (x0, y1), (x1, y1), (x1, y0)]
+                    .into_iter()
+                    .map(|(x, y)| AnchorPointWire {
+                        x: Some(x),
+                        y: Some(y),
+                        raw_x: None,
+                        raw_y: None,
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            }
+        } else {
+            self.points
+        };
+        AnchorPolygonWire {
+            edited,
+            coordinate_space: AnchorPolygonSpaceWire {
+                width: 21600,
+                height: 21600,
+            },
+            points,
+            invalid_point_count: self.invalid_point_count,
+        }
     }
 }
 
@@ -10398,28 +10433,22 @@ fn parse_anchor_acquisition_wire(container: &roxmltree::Node) -> AnchorAcquisiti
             .children()
             .find(|child| child.is_element() && child.tag_name().name() == "wrapPolygon");
         let polygon = polygon_node.map(|polygon| {
-            let points: Vec<_> = polygon
-                .children()
-                .filter(|point| {
-                    point.is_element() && matches!(point.tag_name().name(), "start" | "lineTo")
-                })
-                .map(|point| {
-                    let raw_x = point.attribute("x").map(str::to_string);
-                    let raw_y = point.attribute("y").map(str::to_string);
-                    AnchorPointWire {
-                        x: raw_x.as_deref().and_then(|raw| raw.parse::<i64>().ok()),
-                        y: raw_y.as_deref().and_then(|raw| raw.parse::<i64>().ok()),
-                        raw_x,
-                        raw_y,
-                    }
-                })
-                .collect();
-            anchor_wrap_polygon(
+            let mut points = WrapPolygonBuilder::default();
+            for point in polygon.children().filter(|point| {
+                point.is_element() && matches!(point.tag_name().name(), "start" | "lineTo")
+            }) {
+                let (raw_x, raw_y) = (point.attribute("x"), point.attribute("y"));
+                points.push(
+                    raw_x.and_then(|raw| raw.parse::<i64>().ok()),
+                    raw_y.and_then(|raw| raw.parse::<i64>().ok()),
+                    || (raw_x.map(str::to_string), raw_y.map(str::to_string)),
+                );
+            }
+            points.finish(
                 polygon
                     .attribute("edited")
                     .and_then(parse_on_off)
                     .unwrap_or(false),
-                points,
             )
         });
         AnchorWrapWire {
@@ -13910,34 +13939,33 @@ fn vml_word_anchor_wrap(
 /// of the same coordinate square. That keeps the object painted and its text
 /// exclusion on the frame Word positions, rather than dropping the anchor.
 fn vml_word_wrap_polygon(wrapcoords: Option<&str>) -> AnchorPolygonWire {
-    let point = |x: i64, y: i64, raw: Option<(&str, &str)>| AnchorPointWire {
-        x: Some(x),
-        y: Some(y),
-        raw_x: raw.map(|(raw_x, _)| raw_x.to_string()),
-        raw_y: raw.map(|(_, raw_y)| raw_y.to_string()),
-    };
-    let authored = wrapcoords.and_then(|raw| {
-        let tokens = raw
-            .split(|c: char| c == ',' || c.is_ascii_whitespace())
-            .filter(|token| !token.is_empty())
-            .collect::<Vec<_>>();
-        if tokens.len() % 2 != 0 || tokens.len() < 6 {
-            return None;
-        }
-        tokens
-            .as_chunks::<2>()
-            .0
-            .iter()
-            .map(|&[x, y]| Some(point(x.parse().ok()?, y.parse().ok()?, Some((x, y)))))
-            .collect::<Option<Vec<_>>>()
-    });
-    let points = authored.unwrap_or_else(|| {
-        [(0, 0), (0, 21600), (21600, 21600), (21600, 0), (0, 0)]
-            .into_iter()
-            .map(|(x, y)| point(x, y, None))
-            .collect()
-    });
-    anchor_wrap_polygon(false, points)
+    wrapcoords
+        .and_then(vml_authored_wrap_polygon)
+        .unwrap_or_else(|| {
+            let mut frame = WrapPolygonBuilder::default();
+            for (x, y) in [(0, 0), (0, 21600), (21600, 21600), (21600, 0), (0, 0)] {
+                frame.push(Some(x), Some(y), || (None, None));
+            }
+            frame
+        })
+        .finish(false)
+}
+
+/// The authored `wrapcoords` polygon, read token by token; `None` when it is
+/// unusable (see `vml_word_wrap_polygon`).
+fn vml_authored_wrap_polygon(raw: &str) -> Option<WrapPolygonBuilder> {
+    let mut tokens = raw
+        .split(|c: char| c == ',' || c.is_ascii_whitespace())
+        .filter(|token| !token.is_empty());
+    let mut polygon = WrapPolygonBuilder::default();
+    while let Some(raw_x) = tokens.next() {
+        let raw_y = tokens.next()?;
+        let (x, y) = (raw_x.parse().ok()?, raw_y.parse().ok()?);
+        polygon.push(Some(x), Some(y), || {
+            (Some(raw_x.to_string()), Some(raw_y.to_string()))
+        });
+    }
+    (polygon.point_count >= 3).then_some(polygon)
 }
 
 fn vml_word_wrap_distances(style: &str) -> AnchorEdgesWire {
@@ -19402,6 +19430,162 @@ mod anchor_acquisition_wire_tests {
         assert_eq!(polygon.points[0].raw_x.as_deref(), Some("oops"));
         assert_eq!(polygon.points[0].x, None);
         assert_eq!(polygon.points[1].raw_y, None);
+    }
+
+    fn polygon_coords(polygon: &AnchorPolygonWire) -> Vec<(Option<i64>, Option<i64>)> {
+        polygon
+            .points
+            .iter()
+            .map(|point| (point.x, point.y))
+            .collect()
+    }
+
+    fn drawing_polygon(points: &str) -> AnchorPolygonWire {
+        facts(&format!(
+            r#"<wp:anchor xmlns:wp="urn:wp"><wp:extent cx="12700" cy="12700"/>
+              <wp:wrapTight wrapText="bothSides"><wp:wrapPolygon>{points}</wp:wrapPolygon>
+              </wp:wrapTight></wp:anchor>"#
+        ))
+        .wrap
+        .polygon
+        .unwrap()
+    }
+
+    fn drawing_points(count: usize) -> String {
+        (0..count)
+            .map(|i| {
+                let tag = if i == 0 { "start" } else { "lineTo" };
+                format!(r#"<wp:{tag} x="{}" y="{}"/>"#, i % 300, 21600 - i % 500)
+            })
+            .collect()
+    }
+
+    const FRAME: [(Option<i64>, Option<i64>); 5] = [
+        (Some(0), Some(0)),
+        (Some(0), Some(21600)),
+        (Some(21600), Some(21600)),
+        (Some(21600), Some(0)),
+        (Some(0), Some(0)),
+    ];
+
+    #[test]
+    fn wrapcoords_over_budget_parse_in_bounded_memory() {
+        let raw = format!(
+            "0 0 0 21600 21600 21600 21600 0 {}",
+            "0 0 ".repeat(2_000_000)
+        );
+        let mut polygon = None;
+        let peak = crate::allocation_tests::peak(|| {
+            polygon = Some(vml_word_wrap_polygon(Some(&raw)));
+        });
+        assert!(peak < 64 * 1024, "wrapcoords peak {peak} bytes");
+        let polygon = polygon.unwrap();
+        assert_eq!(polygon.invalid_point_count, 0);
+        assert_eq!(&polygon_coords(&polygon), &FRAME[..4]);
+        assert!(polygon
+            .points
+            .iter()
+            .all(|p| p.raw_x.is_none() && p.raw_y.is_none()));
+    }
+
+    #[test]
+    fn wrap_polygon_over_budget_acquires_in_bounded_memory() {
+        let xml = format!(
+            r#"<wp:anchor xmlns:wp="urn:wp"><wp:extent cx="12700" cy="12700"/>
+              <wp:wrapTight wrapText="bothSides"><wp:wrapPolygon>{}</wp:wrapPolygon>
+              </wp:wrapTight></wp:anchor>"#,
+            drawing_points(300_000)
+        );
+        let doc = roxmltree::Document::parse_with_options(
+            &xml,
+            roxmltree::ParsingOptions {
+                nodes_limit: u32::MAX,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let mut wire = None;
+        let peak = crate::allocation_tests::peak(|| {
+            wire = Some(parse_anchor_acquisition_wire(&doc.root_element()));
+        });
+        assert!(peak < 128 * 1024, "wrapPolygon peak {peak} bytes");
+        let polygon = wire.unwrap().wrap.polygon.unwrap();
+        assert_eq!(
+            polygon_coords(&polygon),
+            [
+                (Some(0), Some(21101)),
+                (Some(0), Some(21600)),
+                (Some(299), Some(21600)),
+                (Some(299), Some(21101)),
+            ]
+        );
+    }
+
+    #[test]
+    fn wrapcoords_budget_boundary_and_malformed_lists() {
+        let coords = |count: usize| {
+            (0..count)
+                .map(|i| format!("{} {}", i % 300, 21600 - i % 500))
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        let at_limit = vml_word_wrap_polygon(Some(&coords(256)));
+        assert_eq!(at_limit.points.len(), 256);
+        assert_eq!(at_limit.points[255].x, Some(255));
+        assert_eq!(at_limit.points[255].raw_y.as_deref(), Some("21345"));
+        let over = vml_word_wrap_polygon(Some(&coords(257)));
+        assert_eq!(
+            polygon_coords(&over),
+            [
+                (Some(0), Some(21344)),
+                (Some(0), Some(21600)),
+                (Some(256), Some(21600)),
+                (Some(256), Some(21344)),
+            ]
+        );
+        let comma = vml_word_wrap_polygon(Some("0,0, 10,0 ,10,10"));
+        assert_eq!(comma.points.len(), 3);
+        assert_eq!(comma.points[2].raw_x.as_deref(), Some("10"));
+        for malformed in [
+            None,
+            Some(""),
+            Some("0 0 10 0"),
+            Some("0 0 10 0 10"),
+            Some("0 0 10 0 10 1.5"),
+            Some("0 0 10 0 10 x"),
+            Some(format!("{} 7", coords(300)).as_str()),
+            Some(format!("{} 7 x", coords(300)).as_str()),
+        ] {
+            let polygon = vml_word_wrap_polygon(malformed);
+            assert_eq!(polygon_coords(&polygon), FRAME, "{malformed:?}");
+            assert_eq!(polygon.invalid_point_count, 0);
+        }
+    }
+
+    #[test]
+    fn wrap_polygon_budget_boundary_keeps_invalid_counts() {
+        let at_limit = drawing_polygon(&drawing_points(256));
+        assert_eq!(at_limit.points.len(), 256);
+        assert_eq!(at_limit.points[255].raw_x.as_deref(), Some("255"));
+        let over = drawing_polygon(&drawing_points(257));
+        assert_eq!(over.points.len(), 4);
+        assert_eq!(over.points[2].x, Some(256));
+        let invalid_at_limit =
+            drawing_polygon(&format!(r#"{}<wp:lineTo x="1"/>"#, drawing_points(255)));
+        assert_eq!(invalid_at_limit.points.len(), 256);
+        assert_eq!(invalid_at_limit.invalid_point_count, 1);
+        let invalid_over = drawing_polygon(&format!(
+            r#"{}<wp:lineTo x="1" y="z"/><wp:lineTo y="2"/>"#,
+            drawing_points(256)
+        ));
+        assert!(invalid_over.points.is_empty());
+        assert_eq!(invalid_over.invalid_point_count, 2);
+        let invalid_first_over = drawing_polygon(&format!(
+            r#"<wp:start x="q" y="0"/>{}"#,
+            drawing_points(256)
+        ));
+        assert!(invalid_first_over.points.is_empty());
+        assert_eq!(invalid_first_over.invalid_point_count, 1);
     }
 
     #[test]
