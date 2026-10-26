@@ -4548,7 +4548,12 @@ function* paginateBodyWithAnchorConvergenceSteps(
         for (let index = closedBefore; index < closed; index += 1) {
           const draft = pages[index]!;
           if (draft.kind === 'parity-blank') continue;
-          finalized.push(finalizeLayoutPage(draft.accumulator, CLOSED_PAGE_NUMBER));
+          // Section-owned identity is fixed once the previous page is (a
+          // parity blank counts, §17.6.10); resolve it as `finalize` does so
+          // a bordered page is built from the same facts.
+          const firstSectionOwnedPage = index === 0
+            || pages[index - 1]!.accumulator.sectionOccurrenceId !== draft.accumulator.sectionOccurrenceId;
+          finalized.push(finalizeLayoutPage(draft.accumulator, CLOSED_PAGE_NUMBER, firstSectionOwnedPage));
         }
         addDestinations(finalized);
         closedBefore = closed;
