@@ -9,10 +9,12 @@
  * {@link WorkerFontResolverClient.run}: the call is posted to main
  * (`ooxmlResolveFonts`), main runs the function with an `AbortSignal` and
  * replies (`ooxmlFontsResolved`) with every `data` buffer in the transfer list
- * (`resolver-bridge-responder.ts`). The worker session then admits the
- * declarations exactly as a main-realm session admits a direct answer, so a
- * document resolves, registers, charges and loads the same faces in both
- * modes; bytes are charged once, by the realm that keeps them.
+ * (`resolver-bridge-responder.ts`). Main resolves through its own realm
+ * resolution cache, so the function runs once per family however many
+ * realms ask (`resolver-resolution.ts`), and answers per family. The worker
+ * session then admits and claims each family's declarations exactly as it
+ * admits a direct answer, so a document resolves, registers, charges and
+ * loads the same faces in both modes.
  *
  * Correlation follows the host-font measurement requests of the DOCX render
  * worker: each request carries the client's generation and a request id. A
@@ -31,8 +33,12 @@
 import { createAbortError } from '../internal/abort.js';
 import { fontSourceViolationFromWire } from '../errors/font-source-limit.js';
 import type { OoxmlFontSourceViolation } from '../errors/ooxml-error.js';
-import { HARD_MAX_FONT_SOURCE_DECLARATIONS } from '../worker/resource-policy.generated.js';
+import {
+  HARD_MAX_FONT_SOURCE_DECLARATIONS,
+  HARD_MAX_FONT_SOURCE_FAMILIES,
+} from '../worker/resource-policy.generated.js';
 import { bridgedFontSourceLimitError } from './resolver-admission.js';
+import { BridgedFamilyResolutions } from './resolver-resolution.js';
 import type { FontDemand, FontFaceDeclaration, FontResolveContext, FontResolverSource } from './source.js';
 
 /** Worker → main: run the resolver `resolverId` for `demand`. */
@@ -51,11 +57,18 @@ export interface WorkerFontResolveCancel {
   readonly requestId: number;
 }
 
+/** Main's answer for one demanded family (lower-cased `family`). */
+export type BridgedFamilyAnswer =
+  /** The declarations that claim it; every `data` buffer is in the transfer list. */
+  | { readonly family: string; readonly kind: 'claimed'; readonly declarations: readonly FontFaceDeclaration[] }
+  | { readonly family: string; readonly kind: 'failed'; readonly reason: string }
+  | { readonly family: string; readonly kind: 'absent' };
+
 /** What main answers for one request. */
 export type FontResolveOutcome =
-  /** Admitted declarations; every `data` buffer is in the transfer list. */
-  | { readonly status: 'declarations'; readonly declarations: readonly FontFaceDeclaration[] }
-  /** The function threw or answered malformed declarations (host fallback). */
+  /** Per-family answers from main's resolution cache. */
+  | { readonly status: 'families'; readonly families: readonly BridgedFamilyAnswer[] }
+  /** The request could not be served (host fallback for every family). */
   | { readonly status: 'failed'; readonly reason: string }
   /** The answer breached a font-source ceiling (rejects the load). */
   | { readonly status: 'limit'; readonly violation: OoxmlFontSourceViolation };
@@ -90,7 +103,7 @@ export function isMainFontResolveReply(value: unknown): value is MainFontResolve
 const MAX_REASON_LENGTH = 1024;
 
 interface PendingCall {
-  readonly resolve: (declarations: readonly unknown[]) => void;
+  readonly resolve: (answers: BridgedFamilyResolutions) => void;
   readonly reject: (error: unknown) => void;
   readonly detach: () => void;
 }
@@ -111,12 +124,12 @@ export class WorkerFontResolverClient {
     source: FontResolverSource,
     demand: FontDemand,
     context: FontResolveContext,
-  ): Promise<readonly unknown[]> => {
+  ): Promise<BridgedFamilyResolutions> => {
     const { signal } = context;
     if (signal.aborted) return Promise.reject(createAbortError('Font resolver abandoned'));
     const generation = this.generation;
     const requestId = this.nextRequestId++;
-    return new Promise<readonly unknown[]>((resolve, reject) => {
+    return new Promise<BridgedFamilyResolutions>((resolve, reject) => {
       const onAbort = () => {
         if (!this.settle(requestId)) return;
         reject(createAbortError('Font resolver abandoned'));
@@ -146,7 +159,9 @@ export class WorkerFontResolverClient {
     const call = this.pending.get(requestId);
     if (!call || !this.settle(requestId)) return true;
     const outcome = readOutcome(message.outcome);
-    if (outcome.status === 'declarations') call.resolve(outcome.declarations);
+    if (outcome.status === 'families') {
+      call.resolve(new BridgedFamilyResolutions(new Map(outcome.families.map((answer) => [answer.family, answer]))));
+    }
     else if (outcome.status === 'limit') call.reject(bridgedFontSourceLimitError(outcome.violation));
     else call.reject(new Error(outcome.reason));
     return true;
@@ -184,14 +199,21 @@ export class WorkerFontResolverClient {
 function readOutcome(value: unknown): FontResolveOutcome {
   const malformed: FontResolveOutcome = { status: 'failed', reason: 'malformed font resolver reply' };
   if (value === null || typeof value !== 'object') return malformed;
-  const fields = value as { status?: unknown; declarations?: unknown; reason?: unknown; violation?: unknown };
+  const fields = value as { status?: unknown; families?: unknown; reason?: unknown; violation?: unknown };
   switch (fields.status) {
-    case 'declarations':
-      // The session validates every declaration as it validates a direct
-      // answer; only the count is bounded before that.
-      return Array.isArray(fields.declarations) && fields.declarations.length <= HARD_MAX_FONT_SOURCE_DECLARATIONS
-        ? { status: 'declarations', declarations: fields.declarations as FontFaceDeclaration[] }
-        : malformed;
+    case 'families': {
+      // The session admits and claims every family's declarations again;
+      // only the shape and the counts are bounded here.
+      const families = fields.families;
+      if (!Array.isArray(families) || families.length > HARD_MAX_FONT_SOURCE_FAMILIES) return malformed;
+      const answers: BridgedFamilyAnswer[] = [];
+      for (const entry of families as unknown[]) {
+        const answer = readFamilyAnswer(entry);
+        if (!answer) return malformed;
+        answers.push(answer);
+      }
+      return { status: 'families', families: answers };
+    }
     case 'failed':
       return typeof fields.reason === 'string'
         ? { status: 'failed', reason: fields.reason.slice(0, MAX_REASON_LENGTH) }
@@ -202,5 +224,26 @@ function readOutcome(value: unknown): FontResolveOutcome {
     }
     default:
       return malformed;
+  }
+}
+
+function readFamilyAnswer(value: unknown): BridgedFamilyAnswer | undefined {
+  if (value === null || typeof value !== 'object') return undefined;
+  const fields = value as { family?: unknown; kind?: unknown; declarations?: unknown; reason?: unknown };
+  if (typeof fields.family !== 'string') return undefined;
+  const family = fields.family;
+  switch (fields.kind) {
+    case 'claimed':
+      return Array.isArray(fields.declarations) && fields.declarations.length <= HARD_MAX_FONT_SOURCE_DECLARATIONS
+        ? { family, kind: 'claimed', declarations: fields.declarations as FontFaceDeclaration[] }
+        : undefined;
+    case 'failed':
+      return typeof fields.reason === 'string'
+        ? { family, kind: 'failed', reason: fields.reason.slice(0, MAX_REASON_LENGTH) }
+        : undefined;
+    case 'absent':
+      return { family, kind: 'absent' };
+    default:
+      return undefined;
   }
 }

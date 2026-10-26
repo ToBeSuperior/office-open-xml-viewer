@@ -42,15 +42,19 @@
  */
 import { fontSourceLimitError } from '../errors/font-source-limit.js';
 import { createAbortError } from '../internal/abort.js';
-import { nullRecord } from '../internal/own-key.js';
 import {
   HARD_MAX_FONT_DEMAND_SCALARS,
   HARD_MAX_FONT_SOURCE_DECLARATIONS,
   HARD_MAX_FONT_SOURCE_FAMILIES,
 } from '../worker/resource-policy.generated.js';
 import { parseUnicodeRange, resolveCssSource } from './css-source.js';
-import { claimFromIndex, indexFontDeclarations, resolveFontFiles } from './files-source.js';
-import { admitFontResolverResult, isBridgedFontSourceLimitError } from './resolver-admission.js';
+import { resolveFontFiles } from './files-source.js';
+import {
+  resolveFamiliesThroughCache,
+  runResolverInRealm,
+  substituteScriptsOf,
+  type FontResolverRunner,
+} from './resolver-resolution.js';
 import { activeFontSet, FONT_LOAD_CEILING_MS, releaseFaces, retainFace } from './font-registry.js';
 import {
   acquireSourceCache,
@@ -58,26 +62,21 @@ import {
   fontContentKey,
   refundRetainedBytes,
   retainedFontSourceBytes,
-  SharedTask,
   type FamilyResolution,
   type SourceCache,
 } from './source-cache.js';
 import {
   assertFontSourceDescriptors,
   dataUrlDecodedByteLength,
-  fontResolverFunction,
-  holdFontBuffer,
   type FontDemand,
   type FontFaceDeclaration,
-  type FontResolveContext,
   type FontResolverSource,
   type FontSource,
 } from './source.js';
-import { FONT_SUBSTITUTE_SCRIPTS, type FontSubstituteScript } from './substitute-script.js';
+import type { FontSubstituteScript } from './substitute-script.js';
 import {
   fontFamilyKey,
   loadedRegularAliases,
-  scopedFamilyKey,
   type FontSubstituteScripts,
   type FontSubstitution,
 } from './substitutions.js';
@@ -106,13 +105,7 @@ export interface LoadedFontSources {
   readonly regularAliases: ReadonlyMap<string, string>;
 }
 
-/** Runs one `font-resolver` source. The worker bridge supplies its own
- * implementation; the default calls this realm's function directly. */
-export type FontResolverRunner = (
-  source: FontResolverSource,
-  demand: FontDemand,
-  context: FontResolveContext,
-) => readonly unknown[] | Promise<readonly unknown[]>;
+export type { FontResolverRunner };
 
 export interface FontSourceSessionOptions {
   /** The `fonts` option value; validated here. */
@@ -145,23 +138,6 @@ interface DemandedName {
   readonly name: string;
   readonly fallback: boolean;
   readonly scripts: FontSubstituteScripts;
-}
-
-const KNOWN_SUBSTITUTE_SCRIPTS: ReadonlySet<string> = new Set<FontSubstituteScript>(FONT_SUBSTITUTE_SCRIPTS);
-
-function substituteScriptsOf(value: unknown): (name: string) => FontSubstituteScripts {
-  if (value === undefined) return () => 'all';
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new TypeError('font demand substituteScripts must be an object');
-  }
-  const scripts = new Map<string, readonly FontSubstituteScript[]>();
-  for (const [family, list] of Object.entries(value)) {
-    if (!Array.isArray(list) || !list.every((script) => typeof script === 'string' && KNOWN_SUBSTITUTE_SCRIPTS.has(script))) {
-      throw new TypeError(`font demand substituteScripts[${JSON.stringify(family)}] must list substitute scripts`);
-    }
-    scripts.set(fontFamilyKey(family), Object.freeze([...new Set(list as FontSubstituteScript[])].sort()));
-  }
-  return (name) => scripts.get(fontFamilyKey(name)) ?? [];
 }
 
 function familyList(value: unknown, location: string): string[] {
@@ -552,52 +528,20 @@ export class FontSourceSession {
     }
   }
 
-  /** One resolver call for the families no session has resolved through this
-   * source identity yet; cached families join earlier results. The batch
-   * result is handed out per family (each family takes and removes its own
-   * entry) and only per-family results are cached, so nothing outlives the
-   * call except what each family claimed and was charged for: unclaimed or
-   * rejected declarations are unreachable once the call settles. */
-  private async resolveWithResolver(
+  /** Resolve through the realm's shared resolution cache (one application
+   * call per family across every requester; `resolver-resolution.ts`). */
+  private resolveWithResolver(
     source: FontResolverSource,
     cache: SourceCache,
     families: NormalizedDemand['names'],
     tuples: FontDemand['tuples'],
     signal: AbortSignal,
   ): Promise<ReadonlyMap<string, FamilyResolution>> {
-    const needed: NormalizedDemand['names'] = families.filter(({ name, scripts }) =>
-      !cache.families.has(scopedFamilyKey(name, scripts)));
-    let call: SharedTask<Map<string, FamilyResolution>> | undefined;
-    if (needed.length) {
-      const neededKeys = new Set(needed.map(({ name }) => fontFamilyKey(name)));
-      const demand: FontDemand = Object.freeze({
-        families: Object.freeze(needed.filter((entry) => !entry.fallback).map(({ name }) => name)),
-        fallbackFamilies: Object.freeze(needed.filter((entry) => entry.fallback).map(({ name }) => name)),
-        tuples: Object.freeze(tuples.filter((tuple) => neededKeys.has(fontFamilyKey(tuple.family)))),
-        scalars: this.all ? 'all' : Object.freeze([...this.points].sort((a, b) => a - b)),
-        ...(needed.some(({ scripts }) => scripts !== 'all') ? {
-          // Keyed by document family names: no prototype, in either realm
-          // (the worker bridge rebuilds the same record on main).
-          substituteScripts: Object.freeze(Object.assign(nullRecord<readonly FontSubstituteScript[]>(),
-            Object.fromEntries(needed.flatMap(({ name, scripts }) =>
-              scripts === 'all' ? [] : [[fontFamilyKey(name), scripts] as const])))),
-        } : {}),
-      });
-      const runner = this.runResolver;
-      call = new SharedTask((callSignal) => callResolver(runner, source, demand, callSignal), () => undefined);
-    }
-    const entries = await Promise.all(families.map(async ({ name, scripts }) => {
-      const key = fontFamilyKey(name);
-      const answer = await cache.families.join(scopedFamilyKey(name, scripts), async (taskSignal) => {
-        if (!call) return { kind: 'absent' } satisfies FamilyResolution;
-        const batch = await call.join(taskSignal);
-        const own = batch.get(key) ?? { kind: 'absent' };
-        batch.delete(key);
-        return own;
-      }, signal, cache);
-      return [key, answer] as const;
-    }));
-    return new Map(entries);
+    return resolveFamiliesThroughCache({
+      source, cache, runner: this.runResolver, families, tuples,
+      scalars: this.all ? 'all' : [...this.points].sort((a, b) => a - b),
+      signal, holder: cache,
+    });
   }
 
   /** Admit and register one claimed family's declarations, in order. */
@@ -743,53 +687,6 @@ export class FontSourceSession {
   }
 }
 
-/**
- * Run one shared resolver call. Module-level and given its runner explicitly:
- * the call is shared by every session waiting on the same families, so it
- * must not read any session's state. The runner of the session that created
- * the call is kept by the call until it settles, so releasing that session
- * (which drops its own runner reference) never breaks the other waiters.
- */
-async function callResolver(
-runResolver: FontResolverRunner,
-source: FontResolverSource,
-  demand: FontDemand,
-  signal: AbortSignal,
-): Promise<Map<string, FamilyResolution>> {
-  const failAll = (reason: string) => new Map(
-    [...demand.families, ...demand.fallbackFamilies].map((name) =>
-      [fontFamilyKey(name), { kind: 'failed', reason } satisfies FamilyResolution]));
-  let raw: readonly unknown[];
-  try {
-    raw = await runResolver(source, demand, Object.freeze({ signal }));
-  } catch (error) {
-    // A bridged call reports the main-side admission's ceiling breach, which
-    // rejects the load exactly as this realm's own admission would.
-    if (signal.aborted || isBridgedFontSourceLimitError(error)) throw error;
-    return failAll(error instanceof Error ? error.message : String(error));
-  }
-  if (signal.aborted) throw createAbortError('Font resolver abandoned');
-  const admitted = admitFontResolverResult(raw);
-  if (!admitted.ok) return failAll(admitted.reason);
-  const { declarations } = admitted;
-  // Cached for later sessions (and the resolver bridge's copies): never
-  // detached by a transfer from this realm.
-  for (const declaration of declarations) if (declaration.data) holdFontBuffer(declaration.data);
-  const index = indexFontDeclarations(declarations);
-  const scriptsOf = substituteScriptsOf(demand.substituteScripts);
-  const restricted = demand.substituteScripts !== undefined;
-  return new Map([...demand.families, ...demand.fallbackFamilies].map((name) =>
-    [fontFamilyKey(name), claimFromIndex(index, name, source.substitutes, restricted ? scriptsOf(name) : 'all')]));
-}
-
 const releasedRunner: FontResolverRunner = () => {
   throw createAbortError('Font source session released');
-};
-
-/** Main-realm resolver execution: the application function behind a
- * descriptor this realm's `fontResolver()` issued. */
-const runResolverInRealm: FontResolverRunner = (source, demand, context) => {
-  const resolve = fontResolverFunction(source);
-  if (!resolve) throw new Error('font resolver function is not available in this realm');
-  return resolve(demand, context);
 };

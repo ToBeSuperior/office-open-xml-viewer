@@ -249,6 +249,27 @@ export function declarationBytes(declarations: readonly FontFaceDeclaration[]): 
   return bytes;
 }
 
+/** Resolver buffers referenced by kept family resolutions of this realm, by
+ * the number of kept entries referencing each. The worker bridge never
+ * transfers (detaches) a buffer with a live count; it sends a copy. */
+const cachedBuffers = new WeakMap<ArrayBuffer, number>();
+
+function countCachedBuffers(declarations: readonly FontFaceDeclaration[], delta: 1 | -1): void {
+  const seen = new Set<ArrayBuffer>();
+  for (const { data } of declarations) {
+    if (!data || seen.has(data)) continue;
+    seen.add(data);
+    const count = (cachedBuffers.get(data) ?? 0) + delta;
+    if (count > 0) cachedBuffers.set(data, count);
+    else cachedBuffers.delete(data);
+  }
+}
+
+/** Whether a kept resolution of this realm's caches references `buffer`. */
+export function isFontBufferCached(buffer: ArrayBuffer): boolean {
+  return (cachedBuffers.get(buffer) ?? 0) > 0;
+}
+
 /**
  * A keyed map of shared tasks. Rejections and results `evict` accepts are
  * removed once settled, so failures are never cached. A kept result is charged
@@ -266,18 +287,29 @@ export class SharedTaskMap<T> {
   private readonly holders = new Map<string, Set<object>>();
   private readonly held = new Map<object, Set<string>>();
 
+  /** Results kept per task, for {@link SharedTaskMap.unkeep}. */
+  private readonly kept = new Map<SharedTask<T>, T>();
+
   constructor(
     private readonly evict: (value: T) => boolean = () => false,
     private readonly weigh: (value: T) => number = () => 0,
     /** Called once a task leaves the map (and again if its producer finishes
      * afterwards), so work it held elsewhere is released too. */
     private readonly onDrop: (task: object) => void = () => undefined,
+    /** Paired calls for every result the map keeps and later forgets. */
+    private readonly onKeep: (value: T) => void = () => undefined,
+    private readonly unkeep: (value: T) => void = () => undefined,
   ) {}
 
   /** Forget `task` (if it is still the entry for `key`) and refund its
    * charge. Every removal path goes through here. */
   private drop(key: string, task: SharedTask<T>): void {
     if (this.tasks.get(key) === task) this.tasks.delete(key);
+    if (this.kept.has(task)) {
+      const value = this.kept.get(task) as T;
+      this.kept.delete(task);
+      this.unkeep(value);
+    }
     const bytes = this.charged.get(task);
     if (bytes !== undefined) {
       this.charged.delete(task);
@@ -321,6 +353,8 @@ export class SharedTaskMap<T> {
           const bytes = this.weigh(value);
           chargeRetainedBytes(bytes);
           if (bytes > 0) this.charged.set(created, bytes);
+          this.kept.set(created, value);
+          this.onKeep(value);
           return value;
         } catch (error) {
           this.drop(key, created);
@@ -361,6 +395,8 @@ export class SharedTaskMap<T> {
     // charged can remain without an entry.
     for (const bytes of this.charged.values()) refundRetainedBytes(bytes);
     this.charged.clear();
+    for (const value of this.kept.values()) this.unkeep(value);
+    this.kept.clear();
     this.holders.clear();
     this.held.clear();
   }
@@ -434,10 +470,15 @@ export function acquireSourceCache(source: FontSource): SourceCache {
   // a stylesheet while a family resolution that used it lives.
   const stylesheets = new SharedTaskMap<FontStylesheet | FontSourceFailure>((value) => !value.ok,
     (value) => (value.ok ? declarationBytes(value.declarations) : 0));
+  const resolverBuffers = (value: FamilyResolution, delta: 1 | -1) => {
+    if (source.kind === 'font-resolver' && value.kind === 'claimed') countCachedBuffers(value.declarations, delta);
+  };
   const families = new SharedTaskMap<FamilyResolution>((value) => value.kind === 'failed',
     (value) => (source.kind === 'font-resolver' && value.kind === 'claimed'
       ? declarationBytes(value.declarations) : 0),
-    (task) => stylesheets.release(task));
+    (task) => stylesheets.release(task),
+    (value) => resolverBuffers(value, 1),
+    (value) => resolverBuffers(value, -1));
   const entry: CacheEntry = {
     refs: 1,
     cache: { id, stylesheets, families, release: () => undefined },

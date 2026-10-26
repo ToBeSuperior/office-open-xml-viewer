@@ -193,16 +193,12 @@ for (const format of ['docx', 'pptx', 'xlsx'] as const) {
       }
       expect(main.calls).toBe(1);
       expect(main.answeredBytes).toEqual([FONT.byteLength]);
-      if (format === 'xlsx') {
-        // The viewer realm resolves and registers for geometry; the worker's
-        // call receives a copy, so main's own answers stay attached.
-        expect(worker.calls).toBe(2);
-        expect(worker.answeredBytes).toEqual([FONT.byteLength, FONT.byteLength]);
-      } else {
-        // The worker is the only painting realm: the bytes were transferred.
-        expect(worker.calls).toBe(1);
-        expect(worker.answeredBytes).toEqual([0]);
-      }
+      // Once per family in both modes. In XLSX worker mode the viewer realm
+      // and the worker share main's resolution: the worker receives a copy,
+      // so main's answer stays attached; otherwise the worker is the only
+      // painting realm and the bytes were transferred.
+      expect(worker.calls).toBe(1);
+      expect(worker.answeredBytes).toEqual(format === 'xlsx' ? [FONT.byteLength] : [0]);
     }
   });
 }

@@ -6,23 +6,32 @@
  * Library API policy, not OOXML behaviour. For each `ooxmlResolveFonts`
  * request the responder looks the resolver id up among the document's own
  * `fonts` descriptors, so a worker can only run functions this document was
- * configured with, and calls the application function with a copy of the
- * demand (`demand.scalars` bounded by `HARD_MAX_FONT_DEMAND_SCALARS`, family
- * records without a prototype) and an `AbortSignal` aborted by the worker's
- * cancellation, by document destroy and by the 15 s font ceiling. The answer
- * passes the same admission a painting-realm session applies
- * (`resolver-admission.ts`), and the reply carries the admitted declarations,
- * the failure reason, or the breached ceiling.
+ * configured with, and resolves the demanded families through this realm's
+ * resolution cache (`resolver-resolution.ts`, design §4.4): a family another
+ * requester of this realm already resolved or is resolving (an XLSX viewer
+ * realm session, another document sharing the resolver) is joined, not asked
+ * again, so the application function runs once per family in both modes. A
+ * new call receives a copy of the demand (`demand.scalars` bounded by
+ * `HARD_MAX_FONT_DEMAND_SCALARS`, family records without a prototype) and an
+ * `AbortSignal` that the worker's cancellation, document destroy and the 15 s
+ * font ceiling abort (a shared call is aborted only when every requester left).
+ * The reply carries each family's claiming declarations, failure or absence,
+ * or the breached ceiling.
  *
- * Byte ownership (design §4.3): when the worker is the only painting realm
- * (DOCX and PPTX worker mode) every `data` buffer is transferred, so main keeps
- * nothing. When this realm paints as well (the XLSX viewer registers the same
- * faces in `document.fonts`), or a buffer is one this realm's library still
- * references (a cached resolver answer of a main-mode document, a `fontFiles`
- * descriptor), main keeps the original and transfers one copy per distinct
- * buffer. Nothing is charged here: the worker's session charges what it keeps,
- * once. A reply for a request the worker cancelled, or produced after the
- * document was destroyed, is never posted; its buffers become unreachable.
+ * Byte ownership (design §4.3):
+ * - When the worker is the only painting realm (DOCX and PPTX worker mode),
+ *   the bridge holds a cache entry only for the duration of its request.
+ *   Afterwards a buffer no kept entry references (and no `fontFiles`
+ *   descriptor) is transferred, so main keeps nothing; one still referenced
+ *   (another document of this realm holds the family) is copied.
+ * - When this realm paints as well (the XLSX viewer registers the same faces
+ *   in `document.fonts`), the bridge holds its entries for the document's
+ *   lifetime alongside the viewer session, main keeps the originals, and one
+ *   copy per distinct buffer is transferred.
+ * A cached buffer is therefore never detached. Main's cache charges what main
+ * keeps and the worker's session what the worker keeps, each once; entries
+ * are released with the bridge (`dispose`). A reply for a request the worker
+ * cancelled, or produced after the document was destroyed, is never posted.
  */
 import type { OoxmlError } from '../errors/ooxml-error.js';
 import { nullRecord } from '../internal/own-key.js';
@@ -31,17 +40,25 @@ import {
   HARD_MAX_FONT_SOURCE_FAMILIES,
 } from '../worker/resource-policy.generated.js';
 import { FONT_LOAD_CEILING_MS } from './font-registry.js';
-import { admitFontResolverResult } from './resolver-admission.js';
 import type {
+  BridgedFamilyAnswer,
   FontResolveOutcome,
   MainFontResolveReply,
   WorkerFontResolveRequest,
 } from './resolver-bridge.js';
 import {
+  resolveFamiliesThroughCache,
+  runResolverInRealm,
+  substituteScriptsOf,
+  type ResolverDemandedName,
+} from './resolver-resolution.js';
+import { acquireSourceCache, isFontBufferCached, type SourceCache } from './source-cache.js';
+import {
   fontResolverFunction,
   isFontBufferHeld,
   type FontDemand,
   type FontFaceDeclaration,
+  type FontResolverSource,
   type FontSource,
 } from './source.js';
 import { FONT_SUBSTITUTE_SCRIPTS, type FontSubstituteScript } from './substitute-script.js';
@@ -122,23 +139,25 @@ export function copyBridgedFontDemand(value: unknown): FontDemand | undefined {
   });
 }
 
-/** Ownership of the admitted buffers: originals moved, or one copy each. */
+/** Ownership of the answered buffers: originals moved, or one copy each. */
 function transferable(
-  declarations: readonly FontFaceDeclaration[],
+  answers: readonly BridgedFamilyAnswer[],
   copyData: boolean,
-): { declarations: readonly FontFaceDeclaration[]; transfer: ArrayBuffer[] } {
+): { answers: readonly BridgedFamilyAnswer[]; transfer: ArrayBuffer[] } {
   const sent = new Map<ArrayBuffer, ArrayBuffer>();
-  const out = declarations.map((declaration) => {
+  const wire = (declaration: FontFaceDeclaration): FontFaceDeclaration => {
     const { data } = declaration;
     if (!data) return declaration;
-    let wire = sent.get(data);
-    if (!wire) {
-      wire = copyData || isFontBufferHeld(data) ? data.slice(0) : data;
-      sent.set(data, wire);
+    let out = sent.get(data);
+    if (!out) {
+      out = copyData || isFontBufferHeld(data) || isFontBufferCached(data) ? data.slice(0) : data;
+      sent.set(data, out);
     }
-    return wire === data ? declaration : { ...declaration, data: wire };
-  });
-  return { declarations: out, transfer: [...sent.values()] };
+    return out === data ? declaration : { ...declaration, data: out };
+  };
+  const out = answers.map((answer) => (answer.kind === 'claimed'
+    ? { ...answer, declarations: answer.declarations.map(wire) } : answer));
+  return { answers: out, transfer: [...sent.values()] };
 }
 
 function isFontSourceLimit(error: unknown): error is OoxmlError & { violation: NonNullable<OoxmlError['violation']> } {
@@ -154,6 +173,8 @@ export class FontResolverResponder {
   private disposed = false;
   /** In-flight calls by `${generation}:${requestId}` (library-generated keys). */
   private readonly calls = new Map<string, AbortController>();
+  /** This document's hold on each resolver's realm cache, by resolver id. */
+  private readonly caches = new Map<string, SourceCache>();
 
   constructor(options: FontResolverResponderOptions) {
     this.post = options.post;
@@ -176,13 +197,16 @@ export class FontResolverResponder {
     void this.respond(key, fields.generation, fields.requestId, fields.resolverId, fields.demand);
   }
 
-  /** The document is destroyed: abort every call; nothing is posted after. */
+  /** The document is destroyed: abort every call and return every cache
+   * entry this document held; nothing is posted after. */
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
     const calls = [...this.calls.values()];
     this.calls.clear();
     for (const controller of calls) controller.abort();
+    for (const cache of this.caches.values()) cache.release();
+    this.caches.clear();
     // The descriptors may hold application font bytes.
     this.sources = [];
   }
@@ -202,16 +226,17 @@ export class FontResolverResponder {
       clearTimeout(timer);
     }
     // Cancelled by the worker or the document destroyed: the worker no longer
-    // waits, so the answer (and its bytes) is dropped here.
+    // waits, so the answer is dropped here (cached entries stay with their
+    // holders and are released with them).
     const live = this.calls.get(key) === controller;
     this.calls.delete(key);
     if (this.disposed || !live || (controller.signal.aborted && !expired)) return;
     if (expired) outcome = { status: 'failed', reason: 'timed out' };
     let reply = outcome;
     let transfer: ArrayBuffer[] = [];
-    if (outcome.status === 'declarations') {
-      const sent = transferable(outcome.declarations, this.copyData);
-      reply = { status: 'declarations', declarations: sent.declarations };
+    if (outcome.status === 'families') {
+      const sent = transferable(outcome.families, this.copyData);
+      reply = { status: 'families', families: sent.answers };
       transfer = sent.transfer;
     }
     try {
@@ -228,39 +253,51 @@ export class FontResolverResponder {
     }
   }
 
+  private cacheOf(source: FontResolverSource): SourceCache {
+    let cache = this.caches.get(source.id);
+    if (!cache) {
+      cache = acquireSourceCache(source);
+      this.caches.set(source.id, cache);
+    }
+    return cache;
+  }
+
   private async resolve(resolverId: unknown, rawDemand: unknown, signal: AbortSignal): Promise<FontResolveOutcome> {
     const demand = copyBridgedFontDemand(rawDemand);
     if (!demand || typeof resolverId !== 'string') return { status: 'failed', reason: 'malformed font resolver request' };
     // Only this document's own resolvers: the id names the function, and the
     // same function always yields the same id (`fontResolver`).
-    const source = this.sources.find((entry) => entry.kind === 'font-resolver' && entry.id === resolverId);
-    const resolveFn = source?.kind === 'font-resolver' ? fontResolverFunction(source) : undefined;
-    if (!resolveFn) return { status: 'failed', reason: 'font resolver function is not available in this realm' };
-    let raw: unknown;
-    try {
-      // An application that ignores its signal is not waited for past an
-      // abort: its eventual answer is dropped (and becomes unreachable).
-      raw = await new Promise<unknown>((resolve, reject) => {
-        const onAbort = () => resolve(undefined);
-        signal.addEventListener('abort', onAbort, { once: true });
-        Promise.resolve().then(() => resolveFn(demand, Object.freeze({ signal }))).then(
-          (value) => { signal.removeEventListener('abort', onAbort); resolve(value); },
-          (error: unknown) => { signal.removeEventListener('abort', onAbort); reject(error); },
-        );
-      });
-    } catch (error) {
-      if (signal.aborted) return { status: 'failed', reason: 'Font resolver abandoned' };
-      return { status: 'failed', reason: error instanceof Error ? error.message : String(error) };
+    const source = this.sources.find((entry): entry is FontResolverSource =>
+      entry.kind === 'font-resolver' && entry.id === resolverId);
+    if (!source || !fontResolverFunction(source)) {
+      return { status: 'failed', reason: 'font resolver function is not available in this realm' };
     }
-    if (signal.aborted) return { status: 'failed', reason: 'Font resolver abandoned' };
+    const scriptsOf = substituteScriptsOf(demand.substituteScripts);
+    const families: ResolverDemandedName[] = [
+      ...demand.families.map((name) => ({ name, fallback: false, scripts: scriptsOf(name) })),
+      ...demand.fallbackFamilies.map((name) => ({ name, fallback: true, scripts: scriptsOf(name) })),
+    ];
+    const cache = this.cacheOf(source);
+    // XLSX: held with the viewer realm's session for the document's lifetime
+    // (by the cache handle). DOCX/PPTX: held for this request only.
+    const holder: object = this.copyData ? cache : {};
     try {
-      const admitted = admitFontResolverResult(raw);
-      return admitted.ok
-        ? { status: 'declarations', declarations: admitted.declarations }
-        : { status: 'failed', reason: admitted.reason };
+      const answers = await resolveFamiliesThroughCache({
+        source, cache, runner: runResolverInRealm, families,
+        tuples: demand.tuples, scalars: demand.scalars, signal, holder,
+      });
+      return {
+        status: 'families',
+        families: [...answers].map(([family, answer]): BridgedFamilyAnswer =>
+          answer.kind === 'claimed' ? { family, kind: 'claimed', declarations: answer.declarations }
+            : answer.kind === 'failed' ? { family, kind: 'failed', reason: answer.reason }
+              : { family, kind: 'absent' }),
+      };
     } catch (error) {
       if (isFontSourceLimit(error)) return { status: 'limit', violation: error.violation };
       return { status: 'failed', reason: error instanceof Error ? error.message : String(error) };
+    } finally {
+      if (!this.copyData) cache.families.release(holder);
     }
   }
 }
