@@ -49,8 +49,8 @@ import {
 } from '../worker/resource-policy.generated.js';
 import { parseUnicodeRange, resolveCssSource } from './css-source.js';
 import { resolveFontFiles } from './files-source.js';
+import { recordFontResolverFailures } from './resolver-failures.js';
 import {
-  recordFontResolverFailures,
   resolveFamiliesThroughCache,
   runResolverInRealm,
   substituteScriptsOf,
@@ -228,9 +228,12 @@ function cssUrl(url: string): string {
 const isAbortError = (error: unknown) => error instanceof Error && error.name === 'AbortError';
 
 /** A signal aborted by `parent` or after `ms`; `dispose()` clears the timer. */
-function ceilingSignal(parent: AbortSignal, ms: number): { signal: AbortSignal; expired: () => boolean; dispose: () => void } {
+function ceilingSignal(parent: AbortSignal, ms: number): {
+  signal: AbortSignal; expired: () => boolean; remaining: () => number; dispose: () => void;
+} {
   const controller = new AbortController();
   let expired = false;
+  const deadline = Date.now() + ms;
   const onAbort = () => controller.abort();
   parent.addEventListener('abort', onAbort, { once: true });
   const timer = setTimeout(() => { expired = true; controller.abort(); }, ms);
@@ -238,6 +241,7 @@ function ceilingSignal(parent: AbortSignal, ms: number): { signal: AbortSignal; 
   return {
     signal: controller.signal,
     expired: () => expired,
+    remaining: () => (expired ? 0 : Math.max(0, deadline - Date.now())),
     // Abandon whatever still waits on this phase (a sibling rejected first).
     dispose: () => { clearTimeout(timer); parent.removeEventListener('abort', onAbort); controller.abort(); },
   };
@@ -497,12 +501,12 @@ export class FontSourceSession {
         const sourceSignal = source.kind === 'font-resolver' && this.runnerOwnsCeiling
           ? this.controller.signal : ceiling.signal;
         try {
-          answers = await this.resolveWithSource(sourceIndex, pending, tuples, sourceSignal);
+          answers = await this.resolveWithSource(sourceIndex, pending, tuples, sourceSignal, ceiling.remaining);
         } catch (error) {
           if (!isAbortError(error) || !ceiling.expired() || sourceSignal !== ceiling.signal) throw error;
           // The timeout is this document's outcome for these families.
           if (source.kind === 'font-resolver') {
-            recordFontResolverFailures(this.resolverFailures, this.caches[sourceIndex], pending, 'timed out');
+            recordFontResolverFailures(this.resolverFailures, this.caches[sourceIndex].id, pending, 'timed out');
           }
           for (const { name } of pending) result.set(fontFamilyKey(name), { kind: 'failed', name, reason: 'timed out' });
           pending = [];
@@ -535,6 +539,7 @@ export class FontSourceSession {
     families: NormalizedDemand['names'],
     tuples: FontDemand['tuples'],
     signal: AbortSignal,
+    remainingMs: () => number,
   ): Promise<ReadonlyMap<string, FamilyResolution>> {
     const source = this.sources[sourceIndex];
     const cache = this.caches[sourceIndex];
@@ -548,7 +553,7 @@ export class FontSourceSession {
       case 'font-files':
         return resolveFontFiles(source, cache, names, scriptsOf);
       case 'font-resolver':
-        return this.resolveWithResolver(source, sourceIndex, cache, families, tuples, signal);
+        return this.resolveWithResolver(source, sourceIndex, cache, families, tuples, signal, remainingMs);
     }
   }
 
@@ -561,11 +566,12 @@ export class FontSourceSession {
     families: NormalizedDemand['names'],
     tuples: FontDemand['tuples'],
     signal: AbortSignal,
+    remainingMs: () => number,
   ): Promise<ReadonlyMap<string, FamilyResolution>> {
     return resolveFamiliesThroughCache({
       source, cache, runner: this.runResolver, families, tuples,
       scalars: this.all ? 'all' : [...this.points].sort((a, b) => a - b),
-      signal, holder: cache, sourceIndex,
+      signal, holder: cache, sourceIndex, remainingMs,
       ...(this.resolverFailures ? { failures: this.resolverFailures } : {}),
     });
   }

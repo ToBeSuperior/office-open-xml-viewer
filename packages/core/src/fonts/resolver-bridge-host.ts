@@ -8,7 +8,7 @@
  */
 import { isWorkerFontResolveMessage, type MainFontResolveReply, type WorkerFontResolveMessage } from './resolver-bridge.js';
 import type { FontResolverResponder } from './resolver-bridge-responder.js';
-import type { FontResolverFailures } from './resolver-resolution.js';
+import { recordBridgedRequestFailure, type FontResolverFailures } from './resolver-failures.js';
 import type { FontSource } from './source.js';
 
 type Post = (message: unknown, transfer?: Transferable[]) => void;
@@ -20,16 +20,23 @@ export interface FontResolverBridgeHostOptions {
   /** The document's resolver failure record, when its viewer-realm sessions
    * share it (XLSX); see `resolver-resolution.ts`. */
   readonly resolverFailures?: FontResolverFailures;
+  /** Loads the responder chunk; defaults to the lazy import (replaced only
+   * by tests that exercise a chunk that fails to load). */
+  readonly loadResponder?: () => Promise<typeof import('./resolver-bridge-responder.js')>;
 }
 
 export class FontResolverBridgeHost {
   private options: FontResolverBridgeHostOptions | null;
+  /** The document's outcome record, shared with the responder (and, for
+   * XLSX, the viewer-realm sessions). */
+  private readonly failures: FontResolverFailures;
   private responder: Promise<FontResolverResponder | null> | null = null;
   private disposed = false;
 
   constructor(options: FontResolverBridgeHostOptions) {
     // Only a document configured with a resolver ever answers; any other
     // bridge message is consumed and ignored.
+    this.failures = options.resolverFailures ?? new Map();
     this.options = Array.isArray(options.sources) && options.sources.some((source) => source.kind === 'font-resolver')
       ? options : null;
   }
@@ -39,12 +46,12 @@ export class FontResolverBridgeHost {
     if (!isWorkerFontResolveMessage(message)) return false;
     const options = this.options;
     if (this.disposed || !options?.sources) return true;
-    this.responder ??= import('./resolver-bridge-responder.js').then(({ FontResolverResponder: Responder }) => {
+    this.responder ??= (options.loadResponder ?? (() => import('./resolver-bridge-responder.js')))().then(({ FontResolverResponder: Responder }) => {
       if (this.disposed || !this.options?.sources) return null;
       return new Responder({
         post: options.post,
         sources: options.sources ?? [],
-        ...(options.resolverFailures ? { resolverFailures: options.resolverFailures } : {}),
+        resolverFailures: this.failures,
       });
     }, (error: unknown) => {
       console.warn(`[ooxml] font resolver bridge failed to load: ${error instanceof Error ? error.message : String(error)}`);
@@ -54,8 +61,9 @@ export class FontResolverBridgeHost {
       const bridged = message as WorkerFontResolveMessage;
       if (responder) { responder.accept(bridged); return; }
       // The responder could not load: fail the call instead of leaving the
-      // worker waiting for its ceiling.
+      // worker waiting, with the same outcome for the whole document.
       if (this.disposed || bridged.kind !== 'ooxmlResolveFonts') return;
+      recordBridgedRequestFailure(this.failures, options.sources ?? [], bridged, 'font resolver bridge unavailable');
       try {
         options.post({
           kind: 'ooxmlFontsResolved', generation: bridged.generation, requestId: bridged.requestId,

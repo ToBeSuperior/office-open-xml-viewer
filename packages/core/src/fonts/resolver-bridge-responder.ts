@@ -48,8 +48,8 @@ import type {
   MainFontResolveReply,
   WorkerFontResolveRequest,
 } from './resolver-bridge.js';
+import { recordBridgedRequestFailure } from './resolver-failures.js';
 import {
-  recordFontResolverFailures,
   resolveFamiliesThroughCache,
   runResolverInRealm,
   substituteScriptsOf,
@@ -211,7 +211,7 @@ export class FontResolverResponder {
         this.calls.delete(callKey);
       }
     }
-    void this.respond(key, fields.generation, fields.requestId, fields.sourceIndex, fields.resolverId, fields.demand);
+    void this.respond(key, fields.generation, fields.requestId, fields);
   }
 
   /** The document is destroyed: abort every call and return every cache
@@ -233,17 +233,27 @@ export class FontResolverResponder {
   get pendingCount(): number { return this.calls.size; }
 
   private async respond(
-    key: string, generation: number, requestId: number,
-    sourceIndex: unknown, resolverId: unknown, rawDemand: unknown,
+    key: string, generation: number, requestId: number, request: Partial<WorkerFontResolveRequest>,
   ): Promise<void> {
     const controller = new AbortController();
     const call = { controller, generation };
     this.calls.set(key, call);
+    // The single path for a failed reply: every family the request names gets
+    // the same outcome in the document's record (`resolver-failures.ts`).
+    const fail = (reason: string): FontResolveOutcome => {
+      recordBridgedRequestFailure(this.failures, this.sources, request, reason);
+      return { status: 'failed', reason };
+    };
+    // The worker's remaining ceiling for its current ensure: main mode's
+    // deadline is cumulative over the source walk, and so is this one.
+    const { remainingMs } = request;
+    const budget = typeof remainingMs === 'number' && Number.isFinite(remainingMs) && remainingMs >= 0
+      ? Math.min(remainingMs, FONT_LOAD_CEILING_MS) : FONT_LOAD_CEILING_MS;
     let expired = false;
-    const timer = setTimeout(() => { expired = true; controller.abort(); }, FONT_LOAD_CEILING_MS);
+    const timer = setTimeout(() => { expired = true; controller.abort(); }, budget);
     let outcome: FontResolveOutcome;
     try {
-      outcome = await this.resolve(sourceIndex, resolverId, rawDemand, controller.signal, () => expired);
+      outcome = await this.resolve(request, controller.signal, () => expired, fail);
     } finally {
       clearTimeout(timer);
     }
@@ -253,7 +263,7 @@ export class FontResolverResponder {
     const live = this.calls.get(key) === call;
     this.calls.delete(key);
     if (this.disposed || !live || (controller.signal.aborted && !expired)) return;
-    if (expired) outcome = { status: 'failed', reason: 'timed out' };
+    if (expired && outcome.status !== 'failed') outcome = fail('timed out');
     let reply = outcome;
     let transfer: ArrayBuffer[] = [];
     if (outcome.status === 'families') {
@@ -267,11 +277,9 @@ export class FontResolverResponder {
     } catch (error) {
       // The worker is gone (nothing waits), or the reply did not clone: fail
       // the call's families instead of leaving the worker waiting.
+      const failed = fail(error instanceof Error ? error.message : String(error));
       try {
-        this.post({
-          kind: 'ooxmlFontsResolved', generation, requestId,
-          outcome: { status: 'failed', reason: error instanceof Error ? error.message : String(error) },
-        } satisfies MainFontResolveReply);
+        this.post({ kind: 'ooxmlFontsResolved', generation, requestId, outcome: failed } satisfies MainFontResolveReply);
       } catch { /* worker terminated */ }
     }
   }
@@ -286,17 +294,21 @@ export class FontResolverResponder {
   }
 
   private async resolve(
-    sourceIndex: unknown, resolverId: unknown, rawDemand: unknown, signal: AbortSignal, expired: () => boolean,
+    request: Partial<WorkerFontResolveRequest>,
+    signal: AbortSignal,
+    expired: () => boolean,
+    fail: (reason: string) => FontResolveOutcome,
   ): Promise<FontResolveOutcome> {
-    const demand = copyBridgedFontDemand(rawDemand);
+    const { sourceIndex, resolverId } = request;
+    const demand = copyBridgedFontDemand(request.demand);
     if (!demand || typeof resolverId !== 'string' || !isNonNegativeSafeInteger(sourceIndex)) {
-      return { status: 'failed', reason: 'malformed font resolver request' };
+      return fail('malformed font resolver request');
     }
     // Exactly the document's own `fonts[sourceIndex]`: the id names the
     // function, the index the configuration (its substitutes).
     const source = this.sources[sourceIndex];
     if (source?.kind !== 'font-resolver' || source.id !== resolverId || !fontResolverFunction(source)) {
-      return { status: 'failed', reason: 'font resolver function is not available in this realm' };
+      return fail('font resolver function is not available in this realm');
     }
     const scriptsOf = substituteScriptsOf(demand.substituteScripts);
     const families: ResolverDemandedName[] = [
@@ -304,21 +316,19 @@ export class FontResolverResponder {
       ...demand.fallbackFamilies.map((name) => ({ name, fallback: true, scripts: scriptsOf(name) })),
     ];
     const cache = this.cacheOf(sourceIndex, source);
-    // Main owns the deadline of a bridged call (the worker session waits for
-    // this reply): a timeout is the document's outcome for these families, so
-    // a viewer-realm session of the same document reports it too.
-    const timedOut = (): FontResolveOutcome => {
-      recordFontResolverFailures(this.failures, cache, families, 'timed out');
-      return { status: 'failed', reason: 'timed out' };
-    };
+    const started = Date.now();
     try {
       const answers = await resolveFamiliesThroughCache({
         source, cache, runner: runResolverInRealm, families,
         tuples: demand.tuples, scalars: demand.scalars, signal,
         // Held until dispose, like a main-mode session's entries.
         holder: cache, sourceIndex, failures: this.failures,
+        remainingMs: () => Math.max(0, (request.remainingMs ?? FONT_LOAD_CEILING_MS) - (Date.now() - started)),
       });
-      if (expired()) return timedOut();
+      // Main owns the deadline of a bridged call (the worker session waits
+      // for this reply): a timeout is the document's outcome for these
+      // families, so a viewer-realm session of the same document reports it.
+      if (expired()) return fail('timed out');
       return {
         status: 'families',
         families: [...answers].map(([family, answer]): BridgedFamilyAnswer =>
@@ -327,9 +337,9 @@ export class FontResolverResponder {
               : { family, kind: 'absent' }),
       };
     } catch (error) {
-      if (expired()) return timedOut();
+      if (expired()) return fail('timed out');
       if (isFontSourceLimit(error)) return { status: 'limit', violation: error.violation };
-      return { status: 'failed', reason: error instanceof Error ? error.message : String(error) };
+      return fail(error instanceof Error ? error.message : String(error));
     }
   }
 }

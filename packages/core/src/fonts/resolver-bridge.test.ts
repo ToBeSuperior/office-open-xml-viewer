@@ -46,7 +46,9 @@ async function loadRealm() {
   vi.resetModules();
   const [source, session, bridge, host, responder, cache] = await Promise.all([
     import('./source.js'), import('./source-session.js'), import('./resolver-bridge.js'),
-    import('./resolver-bridge-host.js'), import('./resolver-bridge-responder.js'), import('./source-cache.js'),
+    import('./resolver-bridge-host.js'),
+    import('./resolver-bridge-responder.js'),
+    import('./source-cache.js'),
   ]);
   return {
     FontSourceSession: session.FontSourceSession,
@@ -105,7 +107,14 @@ const hosts: { dispose(): void }[] = [];
 
 /** One worker-mode document: its main-side host and its worker realm,
  * joined by structured clone. `toMain` / `toWorker` record the traffic. */
-function bridge(sources: readonly FontSource[], options: { realm?: WorkerRealm; failures?: Map<string, string> } = {}) {
+function bridge(
+  sources: readonly FontSource[],
+  options: {
+    realm?: WorkerRealm;
+    failures?: Map<string, string>;
+    loadResponder?: () => Promise<typeof import('./resolver-bridge-responder.js')>;
+  } = {},
+) {
   const realm = options.realm ?? worker1;
   const toMain: unknown[] = [];
   const toWorker: unknown[] = [];
@@ -123,6 +132,7 @@ function bridge(sources: readonly FontSource[], options: { realm?: WorkerRealm; 
   };
   const host = new main.FontResolverBridgeHost({
     post: mainPost, sources, ...(options.failures ? { resolverFailures: options.failures } : {}),
+    ...(options.loadResponder ? { loadResponder: options.loadResponder } : {}),
   });
   hosts.push(host);
   const workerPost: Post = (message, transfer) => {
@@ -383,6 +393,50 @@ describe('fontResolver bridge: review findings', () => {
       expect(String(warn.mock.calls.at(-1)?.[0])).toContain('Private Face (timed out)');
     });
   }
+
+  // Round 3, finding 1: the deadline is cumulative over the source walk.
+  it('keeps main mode\'s per-ensure deadline across resolvers in worker mode', async () => {
+    vi.useFakeTimers();
+    const later = <T>(ms: number, value: T) => new Promise<T>((resolve) => setTimeout(() => resolve(value), ms));
+    const fonts = [
+      fontResolver(() => later(10_000, [])),
+      fontResolver(() => later(10_000, [FACE(8)])),
+    ];
+    const run = async (session: { ensure(request: FontDemand): Promise<{ faces: readonly unknown[] }> }) => {
+      const pending = session.ensure(demand(['Private Face']));
+      await vi.advanceTimersByTimeAsync(20_000);
+      return pending;
+    };
+    const direct = mainSession(fonts).session;
+    const mainLoaded = await run(direct);
+    // A separate document: nothing of the main-mode run stays cached.
+    direct.release();
+    const workerLoaded = await run(bridge(fonts).session().session);
+    // Main mode: the first resolver used 10 s, the second had 5 s left.
+    expect(mainLoaded.faces).toEqual([]);
+    expect(workerLoaded.faces).toEqual(mainLoaded.faces);
+    expect(warn.mock.calls.filter(([message]: unknown[]) => String(message).includes('Private Face (timed out)'))).toHaveLength(2);
+  });
+
+  // Round 3, finding 2: a bridge that cannot load is the document's outcome.
+  it('records a failed responder bootstrap so the viewer realm reports the same', async () => {
+    let calls = 0;
+    const source = fontResolver(() => { calls++; return [FACE(8)]; });
+    const failures = new Map<string, string>();
+    const link = bridge([source], {
+      failures,
+      // The lazily loaded chunk is missing (a 404 behind a stale deploy).
+      loadResponder: () => Promise.reject(new Error('Failed to fetch dynamically imported module')),
+    });
+    const workerLoaded = await link.session().session.ensure(demand(['Private Face']));
+    expect(workerLoaded.faces).toEqual([]);
+    expect(String(warn.mock.calls.find(([message]: unknown[]) => String(message).includes('bridge failed to load'))?.[0]))
+      .toContain('Failed to fetch');
+    const viewer = mainSession([source], failures);
+    expect((await viewer.session.ensure(demand(['Private Face']))).faces).toEqual([]);
+    expect(calls).toBe(0);
+    expect(String(warn.mock.calls.at(-1)?.[0])).toContain('Private Face (font resolver bridge unavailable)');
+  });
 
   // Finding 4: a worker reset abandons its calls on main too.
   it('cancels every pending call on reset, so a late answer is never posted or detached', async () => {

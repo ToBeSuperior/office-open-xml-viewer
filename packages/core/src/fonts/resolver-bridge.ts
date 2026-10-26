@@ -42,7 +42,7 @@ import {
 } from '../worker/resource-policy.generated.js';
 import { FONT_LOAD_CEILING_MS } from './font-registry.js';
 import { bridgedFontSourceLimitError } from './resolver-admission.js';
-import { BridgedFamilyResolutions } from './resolver-resolution.js';
+import { BridgedFamilyResolutions, type ResolverCallInfo } from './resolver-resolution.js';
 import type { FontDemand, FontFaceDeclaration, FontResolveContext, FontResolverSource } from './source.js';
 
 /** Worker → main: run the document's `fonts[sourceIndex]` (a resolver whose
@@ -53,6 +53,9 @@ export interface WorkerFontResolveRequest {
   readonly requestId: number;
   readonly sourceIndex: number;
   readonly resolverId: string;
+  /** Milliseconds left of the worker session's font ceiling for the ensure
+   * that asks; main's deadline for the call (see ResolverCallInfo). */
+  readonly remainingMs: number;
   readonly demand: FontDemand;
 }
 
@@ -139,7 +142,7 @@ export class WorkerFontResolverClient {
     source: FontResolverSource,
     demand: FontDemand,
     context: FontResolveContext,
-    sourceIndex: number,
+    { sourceIndex, remainingMs }: ResolverCallInfo,
   ): Promise<BridgedFamilyResolutions> => {
     const { signal } = context;
     if (signal.aborted) return Promise.reject(createAbortError('Font resolver abandoned'));
@@ -163,7 +166,7 @@ export class WorkerFontResolverClient {
       });
       try {
         this.post({
-          kind: 'ooxmlResolveFonts', generation, requestId, sourceIndex, resolverId: source.id, demand,
+          kind: 'ooxmlResolveFonts', generation, requestId, sourceIndex, resolverId: source.id, demand, remainingMs,
         } satisfies WorkerFontResolveRequest);
       } catch (error) {
         this.settle(requestId);

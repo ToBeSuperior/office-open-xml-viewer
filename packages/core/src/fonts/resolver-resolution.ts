@@ -15,6 +15,11 @@
 import { createAbortError } from '../internal/abort.js';
 import { nullRecord } from '../internal/own-key.js';
 import { claimFromIndex, indexFontDeclarations } from './files-source.js';
+import {
+  fontResolverFailureKey,
+  recordFontResolverFailures,
+  type FontResolverFailures,
+} from './resolver-failures.js';
 import { admitFontResolverResult, isBridgedFontSourceLimitError } from './resolver-admission.js';
 import { SharedTask, type FamilyResolution, type SourceCache } from './source-cache.js';
 import {
@@ -39,6 +44,16 @@ export class BridgedFamilyResolutions {
     | { readonly kind: 'absent' }>) {}
 }
 
+/** What a runner learns about the call besides the demand. */
+export interface ResolverCallInfo {
+  /** Position of the source in the requesting document's `fonts`. */
+  readonly sourceIndex: number;
+  /** Milliseconds left of the requester's font ceiling for this ensure
+   * (main mode's deadline is cumulative over the source walk; a bridged
+   * call must expire at the same moment). */
+  readonly remainingMs: number;
+}
+
 /** Runs one `font-resolver` source. The worker bridge supplies its own
  * implementation; the default calls this realm's function directly.
  * `sourceIndex` is the source's position in the requesting document's
@@ -48,7 +63,7 @@ export type FontResolverRunner = (
   source: FontResolverSource,
   demand: FontDemand,
   context: FontResolveContext,
-  sourceIndex: number,
+  call: ResolverCallInfo,
 ) => readonly unknown[] | BridgedFamilyResolutions | Promise<readonly unknown[] | BridgedFamilyResolutions>;
 
 /** One demanded family with the substitution scope its text proves. */
@@ -85,15 +100,7 @@ export const runResolverInRealm: FontResolverRunner = (source, demand, context) 
   return resolve(demand, context);
 };
 
-/**
- * Resolver failures one document has seen, by cache identity and scoped
- * family. The realm cache never keeps a failure (a later document retries the
- * same source), but every requester of one document shares one outcome: an
- * XLSX workbook's viewer-realm sessions and its worker bridge consult the same
- * record, so a resolver that fails once and succeeds on a retry cannot leave
- * the worker painting a fallback while the viewer measures the served face.
- */
-export type FontResolverFailures = Map<string, string>;
+export type { FontResolverFailures };
 
 /**
  * Resolve `families` through `source`'s shared cache on behalf of `holder`
@@ -114,11 +121,13 @@ export async function resolveFamiliesThroughCache(options: {
   readonly holder: object;
   /** Position of `source` in the requesting document's `fonts`. */
   readonly sourceIndex: number;
+  /** Milliseconds left of the requester's ceiling (see ResolverCallInfo). */
+  readonly remainingMs: () => number;
   /** The requesting document's shared failure record, if any. */
   readonly failures?: FontResolverFailures;
 }): Promise<Map<string, FamilyResolution>> {
-  const { source, cache, runner, tuples, scalars, signal, holder, sourceIndex, failures } = options;
-  const failureKey = (name: string, scripts: FontSubstituteScripts) => `${cache.id}\u0000${scopedFamilyKey(name, scripts)}`;
+  const { source, cache, runner, tuples, scalars, signal, holder, sourceIndex, remainingMs, failures } = options;
+  const failureKey = (name: string, scripts: FontSubstituteScripts) => fontResolverFailureKey(cache.id, name, scripts);
   const settled = new Map<string, FamilyResolution>();
   const families = options.families.filter(({ name, scripts }) => {
     const reason = failures?.get(failureKey(name, scripts));
@@ -142,7 +151,7 @@ export async function resolveFamiliesThroughCache(options: {
             scripts === 'all' ? [] : [[fontFamilyKey(name), scripts] as const])))),
       } : {}),
     });
-    call = new SharedTask((callSignal) => callResolver(runner, source, demand, callSignal, sourceIndex), () => undefined);
+    call = new SharedTask((callSignal) => callResolver(runner, source, demand, callSignal, { sourceIndex, remainingMs: remainingMs() }), () => undefined);
   }
   const entries = await Promise.all(families.map(async ({ name, scripts }) => {
     const key = fontFamilyKey(name);
@@ -158,15 +167,15 @@ export async function resolveFamiliesThroughCache(options: {
     } catch (error) {
       // A ceiling breach is terminal for the document too. (An abort is
       // recorded by the requester that knows why it aborted: a timeout is,
-      // a release is not; see recordFontResolverFailures.)
-      if (isFontSourceLimitError(error)) failures?.set(failureKey(name, scripts), error.message);
+      // a release is not.)
+      if (isFontSourceLimitError(error)) recordFontResolverFailures(failures, cache.id, [{ name, scripts }], error.message);
       throw error;
     }
     // Another requester of this document reached a terminal failure while
     // this answer was in flight (its ceiling expired first): one outcome.
     const recorded = failures?.get(failureKey(name, scripts));
     if (recorded !== undefined) return [key, { kind: 'failed', reason: recorded } satisfies FamilyResolution] as const;
-    if (answer.kind === 'failed') failures?.set(failureKey(name, scripts), answer.reason);
+    if (answer.kind === 'failed') recordFontResolverFailures(failures, cache.id, [{ name, scripts }], answer.reason);
     return [key, answer] as const;
   }));
   return new Map([...settled, ...entries]);
@@ -174,24 +183,6 @@ export async function resolveFamiliesThroughCache(options: {
 
 const isFontSourceLimitError = (error: unknown): error is Error =>
   error instanceof Error && (error as { code?: unknown }).code === 'font-source-limit';
-
-/**
- * Record a terminal failure that no answer carried (the requester's font
- * ceiling expired while it waited) for `families` of `cache`'s source, so
- * every other requester of the document reports the same outcome.
- */
-export function recordFontResolverFailures(
-  failures: FontResolverFailures | undefined,
-  cache: SourceCache,
-  families: readonly Pick<ResolverDemandedName, 'name' | 'scripts'>[],
-  reason: string,
-): void {
-  if (!failures) return;
-  for (const { name, scripts } of families) {
-    const key = `${cache.id}\u0000${scopedFamilyKey(name, scripts)}`;
-    if (!failures.has(key)) failures.set(key, reason);
-  }
-}
 
 /**
  * Run one shared resolver call. Module-level and given its runner explicitly:
@@ -205,14 +196,14 @@ async function callResolver(
   source: FontResolverSource,
   demand: FontDemand,
   signal: AbortSignal,
-  sourceIndex: number,
+  info: ResolverCallInfo,
 ): Promise<Map<string, FamilyResolution>> {
   const names = [...demand.families, ...demand.fallbackFamilies];
   const failAll = (reason: string) => new Map(
     names.map((name) => [fontFamilyKey(name), { kind: 'failed', reason } satisfies FamilyResolution]));
   let raw: readonly unknown[] | BridgedFamilyResolutions;
   try {
-    raw = await runResolver(source, demand, Object.freeze({ signal }), sourceIndex);
+    raw = await runResolver(source, demand, Object.freeze({ signal }), info);
   } catch (error) {
     // A bridged call reports the main-side admission's ceiling breach, which
     // rejects the load exactly as this realm's own admission would.
