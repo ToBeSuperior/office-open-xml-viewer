@@ -210,8 +210,12 @@ function inlineWorkers(code) {
 }
 
 /** Bytes two independently minified builds may differ by when the real
- *  difference is zero. */
-const MINIFIER_NOISE_BYTES = 64;
+ *  difference is zero. The bundler partitions shared modules into chunks per
+ *  build, and the minifier's identifier lengths and the inter-chunk import /
+ *  export lists follow that partition: moving a few shared font modules
+ *  between chunks shifted PPTX by -186 bytes (and XLSX by a similar amount
+ *  once linkage lists alone were discounted) with no dispatch code added. */
+const MINIFIER_NOISE_BYTES = 256;
 
 export function assertDispatchCost(enabledEntry, disabledEntry, budget, label, enabledGraph) {
   const enabled = enabledGraph ?? bundleGraph(enabledEntry);

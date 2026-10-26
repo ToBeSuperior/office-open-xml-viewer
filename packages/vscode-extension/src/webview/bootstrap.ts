@@ -192,7 +192,8 @@ async function initXlsx(buffer: ArrayBuffer, useGoogleFonts: boolean): Promise<v
   const viewer = new XlsxViewer(viewerContainer, {
     math,
     ...fullRenderers,
-    useGoogleFonts,
+    // XLSX consumes `fonts`; the setting keeps its name (design §2.4).
+    ...(useGoogleFonts ? { fonts: [googleFonts()] } : {}),
     showZoomSlider: false,
     enableElementSelection: true,
     findHighlightColors,

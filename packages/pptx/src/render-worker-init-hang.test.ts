@@ -105,13 +105,20 @@ vi.mock('@silurus/ooxml-core', async (importOriginal) => ({
 }));
 // No family is installed on the test host: every presence probe completes
 // and finds nothing, without driving the fake FontFace through local() loads.
-vi.mock('@silurus/ooxml-core/internal/font-sources', async (importOriginal) => ({
-  ...await importOriginal<typeof import('@silurus/ooxml-core/internal/font-sources')>(),
-  probeFontFamilyPresence: async (families: readonly string[]) => ({
+vi.mock('@silurus/ooxml-core/internal/font-sources', async (importOriginal) => {
+  const original = await importOriginal<typeof import('@silurus/ooxml-core/internal/font-sources')>();
+  const probe = async (families: readonly string[]) => ({
     installed: new Set<string>(),
     checked: new Set(families.map((family) => family.trim().toLowerCase())),
-  }),
-}));
+  });
+  return {
+    ...original,
+    probeFontFamilyPresence: probe,
+    InstalledFamilyExclusion: class extends original.InstalledFamilyExclusion {
+      constructor() { super(probe); }
+    },
+  };
+});
 vi.mock('@silurus/ooxml-core/internal/model-source', async (importOriginal) => ({
   ...await importOriginal<typeof import('@silurus/ooxml-core/internal/model-source')>(),
   openModelSourceModule: (...args: unknown[]) => openSourceMock(...args),

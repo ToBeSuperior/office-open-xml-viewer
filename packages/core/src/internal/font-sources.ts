@@ -62,3 +62,13 @@ export {
 } from '../fonts/deprecations.js';
 export { FONT_SUBSTITUTE_SCRIPTS } from '../fonts/substitute-script.js';
 export { probeFontFamilyPresence, type FontFamilyPresence } from '../fonts/office-fallback.js';
+export {
+  InstalledFamilyExclusion,
+  type InstalledFamilyProbe,
+} from '../fonts/installed-families.js';
+export {
+  chartFontFamilies,
+  chartFontSubstitutions,
+  withChartFontSubstitutions,
+  type LoadedChartFontSubstitutions,
+} from '../fonts/chart-font-sources.js';

@@ -12,7 +12,8 @@
  *
  * This is library font-substitution policy (ECMA-376 §17.8.2 leaves
  * substitution implementation-defined), not an Office layout rule. It is shared
- * by every format that consults {@link GOOGLE_FONT_SUBSTITUTES}.
+ * by every format that consumes script-scoped font substitutions
+ * (`substitutions.ts`, `FontSubstitution.script`).
  */
 import { graphemeClusterOffsets } from '../text/sea-break.js';
 

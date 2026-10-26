@@ -1247,6 +1247,14 @@ export interface ConditionalFormat {
     sqref: WorksheetCellRange[];
     rules: CfRule[];
 }
+export function cssApi(options: CssApiOptions): CssApiSource;
+export interface CssApiOptions {
+    readonly urlTemplate: string;
+    readonly query?: string;
+    readonly families?: Readonly<Record<string, string | true>>;
+    readonly substitutes?: readonly FontSubstitution[];
+    readonly credentials?: FontSourceCredentials;
+}
 export interface CssApiSource extends FontSourceBase {
     readonly kind: 'css-api';
     readonly urlTemplate: string;
@@ -1319,6 +1327,12 @@ export interface FindMatchesOptions {
     caseSensitive?: boolean;
 }
 const FONT_SOURCE_PROTOCOL = 'ooxml-font-source/v1';
+export function fontFaceCss(options: FontFaceCssOptions): FontFaceCssSource;
+export interface FontFaceCssOptions {
+    readonly url: string;
+    readonly substitutes?: readonly FontSubstitution[];
+    readonly credentials?: FontSourceCredentials;
+}
 export interface FontFaceCssSource extends FontSourceBase {
     readonly kind: 'font-face-css';
     readonly url: string;
@@ -1332,6 +1346,11 @@ export interface FontFaceDeclaration {
     readonly style?: string;
     readonly stretch?: string;
     readonly unicodeRange?: string;
+}
+export function fontFiles(options: FontFilesOptions): FontFilesSource;
+export interface FontFilesOptions {
+    readonly faces: readonly FontFaceDeclaration[];
+    readonly substitutes?: readonly FontSubstitution[];
 }
 export interface FontFilesSource extends FontSourceBase {
     readonly kind: 'font-files';
@@ -1358,6 +1377,10 @@ export interface Glow {
     color: string;
     alpha: number;
     radius: number;
+}
+export function googleFonts(options?: GoogleFontsOptions): CssApiSource;
+export interface GoogleFontsOptions {
+    readonly cssOrigin?: string;
 }
 export interface GradientFill {
     fillType: 'gradient';
@@ -1643,6 +1666,7 @@ export interface NumFmt {
     numFmtId: number;
     formatCode: string;
 }
+export const officeFontSubstitutions: readonly FontSubstitution[];
 export class OoxmlDecodedImageLimitError extends RangeError {
     readonly metric: OoxmlDecodedImageLimitMetric;
     readonly limit: number;

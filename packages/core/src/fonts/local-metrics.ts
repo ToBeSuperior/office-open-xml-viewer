@@ -1,5 +1,5 @@
 import { retainFace, releaseFaces } from './font-registry.js';
-import { activeFontSet, withFontCeiling } from './preload.js';
+import { activeFontSet, withFontCeiling } from './font-registry.js';
 
 /** A family-level local-font measurement request. This API is shared by all
  * OOXML formats; each format decides which Office behavior requires a measured

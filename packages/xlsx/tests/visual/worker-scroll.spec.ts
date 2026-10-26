@@ -19,8 +19,8 @@ for (const format of ['xlsx', 'csv'] as const) {
       canvas.style.height = '600px';
       if (format === 'csv') host.appendChild(canvas);
       const viewer = format === 'xlsx'
-        ? new XlsxViewer(host, { mode: 'worker', useGoogleFonts: false })
-        : new XlsxSheetViewer(canvas, { mode: 'worker', useGoogleFonts: false });
+        ? new XlsxViewer(host, { mode: 'worker' })
+        : new XlsxSheetViewer(canvas, { mode: 'worker' });
       const originalRender = XlsxWorkbook.prototype.renderViewportToBitmap;
       const originalTransfer = ImageBitmapRenderingContext.prototype.transferFromImageBitmap;
       let commits = 0;
