@@ -995,15 +995,19 @@ export function getCachedBitmapByPath(
         // Targets are aspect-preserving coverage minimums for SVG (see
         // svg-raster.ts), so the admitted grid is the coverage grid of the
         // SVG's own aspect, not the target box: a square SVG for a 96x87 box is
-        // 96x96 in every realm. Only a surface beyond that grid is rejected.
+        // 96x96 in every realm. The hard quota runs first so malformed
+        // dimensions keep their terminal quota classification; the coverage
+        // check then rejects a surface beyond every requested axis. It trusts
+        // the returned aspect ratio (the authored SVG's intrinsic size is not
+        // visible here), so the hard quota remains the bound for that axis.
         try {
+          enforceCachedRetainedBudget(bitmap, normalized);
           if (bitmap) {
             assertSvgRasterCoverage(bitmap.width, bitmap.height, {
               targetWidthPx,
               targetHeightPx,
             });
           }
-          enforceCachedRetainedBudget(bitmap, normalized);
         } catch (error) {
           closeBitmapOnce(bitmap);
           throw error;
