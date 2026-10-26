@@ -260,7 +260,17 @@ export default defineConfig(({ command, mode }) => ({
     rollupOptions: {
       // Keep consumer PURE annotations; omit only per-module debug regions.
       // The boundary checks retain their explicit ownership markers instead.
-      experimental: { attachDebugInfo: 'none' },
+      experimental: {
+        attachDebugInfo: 'none',
+        // Keep modules a lazy chunk shares with its importer in their own
+        // chunk instead of folding them into the importer. Folding makes
+        // lazy chunks import the format chunk back, and a consumer's Rolldown
+        // keeps a chunk that two of its lazy chunks import back even when
+        // nothing in it is used: a factories-only import such as
+        // `import { googleFonts } from '@silurus/ooxml'` then retained the
+        // whole DOCX and PPTX runtime (scripts/check-font-source-tree-shaking.mjs).
+        chunkOptimization: { avoidRedundantChunkLoads: false },
+      },
       external: [/^node:/, 'skia-canvas'],
       output: {
         assetFileNames: '[name][extname]',

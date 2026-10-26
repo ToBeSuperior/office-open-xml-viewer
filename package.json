@@ -129,6 +129,7 @@
     "check:optional-region-map": "node scripts/check-optional-region-map.mjs dist",
     "check:optional-chart-ex": "node scripts/check-optional-chart-ex.mjs dist",
     "check:optional-tiff": "node scripts/check-optional-tiff.mjs dist",
+    "check:font-source-tree-shaking": "node scripts/check-font-source-tree-shaking.mjs dist",
     "check:optional-legacy-doc": "node scripts/check-optional-legacy-source.mjs doc packages/legacy-office/dist",
     "check:optional-legacy-ppt": "node scripts/check-optional-legacy-source.mjs ppt packages/legacy-office/dist",
     "check:optional-legacy-xls": "node scripts/check-optional-legacy-source.mjs xls packages/legacy-office/dist",

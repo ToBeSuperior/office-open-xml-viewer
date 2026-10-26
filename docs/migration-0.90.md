@@ -89,7 +89,11 @@ fonts: [cssApi({
 - `families` is an optional allow-list (`{ 'Open Sans': true, Lato: 'wght@400' }`).
   When present, only those families are requested.
 
-The source sends one stylesheet request per served family.
+The source sends one stylesheet request per served family. Without
+`families`, every demanded family is requested, and an error response (such as
+HTTP 400 for a family the API does not serve) is a failure that makes the family
+final (see [Chaining](#chaining)). List the served families when the source is
+not the last in the chain.
 
 ### A self-hosted stylesheet: `fontFaceCss()`
 
@@ -97,8 +101,8 @@ The source sends one stylesheet request per served family.
 fonts: [fontFaceCss({ url: '/fonts/office.css', substitutes: officeFontSubstitutions })]
 ```
 
-The stylesheet may describe any number of families. It is fetched once and
-shared by every document that uses the same configuration. Only `@font-face`
+The stylesheet may describe any number of families. Documents that use the
+same configuration share one fetch while any of them is open. Only `@font-face`
 rules with `url()` sources are read. `local()` sources and everything outside
 `@font-face` are ignored.
 
@@ -148,28 +152,36 @@ const privateFonts = fontResolver(async (demand, { signal }) => {
 fonts: [privateFonts, googleFonts({ cssOrigin: 'https://fonts.internal.example' })]
 ```
 
-The function always runs on the main thread. In worker mode, the worker asks
-the main thread to run it, so tokens and network clients stay in your
+The function runs in the page that created it. In worker mode, the worker
+asks the page to run it, so tokens and network clients stay in your
 application.
 
 The `demand` argument contains:
 
-- `families`: the authored families the host does not have.
+- `families`: the authored families the host does not have and that no
+  earlier call already answered.
 - `tuples`: the weight and style of each authored family.
 - `fallbackFamilies`: the library's script fallback families for the text,
   such as Noto families for CJK.
 - `scalars`: the Unicode scalars painted, or `'all'`.
-- `substituteScripts`: optional. The scripts each family's text contains.
+- `substituteScripts`: optional. For each lower-cased family, the substitute
+  scripts its text contains (currently only `'arabic'`).
 
 The function returns `FontFaceDeclaration` objects with the same fields as
 `fontFiles()` faces. URLs must be absolute. A resolver may ignore any demand
-field and may answer only some families. `signal` is aborted when the document
-is destroyed or the 15 s font deadline expires.
+field and may answer only some families.
 
-If the answer is not an array or contains a malformed declaration, the families
-keep their host fallback. A `console.warn` reports the problem. If the
-function throws, the families also keep their host fallback, and the warning
-includes the error message.
+Documents that need the same families from the same function at the same time
+share one call. `signal` is aborted only when no document is waiting for that
+call any more: every document sharing it was destroyed or reached its
+resolution deadline, or, in worker mode, the worker cancelled the request.
+Destroying one of several documents that share a call does not abort it.
+
+If the answer is not an array or contains a malformed declaration, every family
+of that call keeps its host fallback, and a `console.warn` reports the problem.
+If the function throws, the same happens and the warning includes the error
+message. More than 2,048 declarations or a face over 30 MiB is a
+[limit](#resource-limits) breach instead, which rejects the load.
 
 ## Chaining
 
@@ -181,20 +193,29 @@ Sources are consulted per family, in option order:
    are never consulted for that family.
 3. A source that does not serve the family passes it to the next source.
    Examples: a family outside a `cssApi` allow-list, a family missing from a
-   stylesheet or file list, or a family a resolver did not answer.
+   loaded stylesheet or a file list, or a family a resolver did not answer.
 4. A source that tries a family and fails also makes the family final, with no
    retry anywhere else. Failures include an unreachable or empty stylesheet, an
-   HTTP error, a resolver error and the 15 s deadline. A `fontFaceCss`
-   stylesheet that fails to load fails every family it is asked for.
+   HTTP error, a resolver error and the resolution deadline (see
+   [Timing](#resolver-buffers-and-timing)). A `fontFaceCss` stylesheet that fails
+   to load fails every family it is asked for.
 5. A face that is claimed but fails to load also keeps its host fallback. It
    does not re-enter the chain.
 
-Each failure keeps the family on the fonts installed on the viewer's machine
-and prints one `console.warn` listing the families. There is no strict mode
+Each failure keeps the family on the fonts installed on the viewer's machine.
+Each font load step prints one `console.warn` listing the families that newly
+failed. There is no strict mode
 and no callback. A failing mirror therefore never falls through to the public
 Google origin: that origin is contacted only when `googleFonts()` without
 `cssOrigin` is in the list. Failures are not cached, so a document opened later
 retries the same source.
+
+Within one document a family is decided once. A family that a source claimed
+or failed is final. A family that no source served is asked again, through the
+whole chain, only when later text in the document proves a substitute script
+that its earlier request excluded. For example, a family first seen in Latin
+text and later in Arabic text is requested again with its Arabic-only
+substitutes.
 
 What paints, highest first:
 
@@ -264,14 +285,28 @@ for the Noto CJK families.
   returned from a resolver. Do not modify it. Documents in the same realm may
   share it. In worker mode the worker receives a copy, and your buffer is not
   detached.
-- Font loading waits at most 15 s each time a document needs new fonts: once
-  per DOCX document, once per PPTX slide that adds fonts or characters, and
-  once per XLSX workbook plus once per sheet that adds fonts. The deadline
-  covers every source in the chain together. In worker mode the main thread
-  owns the deadline of a resolver call.
-- The resolver is called once per family per document. For XLSX in worker mode
-  the viewer and the worker share that call. Documents open at the same time
-  that use the same function share its answers.
+- A font load step runs each time a document needs new fonts or characters:
+  for example once per DOCX document, once per PPTX slide that adds them, and
+  once per XLSX workbook plus once per sheet that adds them. Layout waits for
+  the step to finish.
+- Each step has two phases, each with its own 15 s deadline:
+  1. **Resolution** walks the sources in order. One deadline covers the whole
+     walk, so a slow first source leaves less time for the next. Families
+     still unresolved when it expires fail and keep their host fallback.
+  2. **Face loading** waits for the faces to load (`FontFace.load()`). Faces
+     not loaded when it expires keep their host fallback for that step.
+
+  A step can therefore take up to about 30 s, for example 14 s of resolution
+  followed by 14 s of face loading.
+- In worker mode the page owns the deadline of a resolver call. The worker
+  sends the time left of its resolution deadline with each request.
+- A resolver is called only for families that no earlier call answered and no
+  live cache entry covers. Within a document that means once per family, except
+  that a family left unanswered is asked again when later text proves a new
+  substitute script (see [Chaining](#chaining)). For XLSX in worker mode, the
+  viewer and the worker share the call. Documents open at the same time share
+  answers from the same function. A document opened after every earlier one
+  was closed calls the function again.
 - In worker mode, the worker waits silently while the resolver runs. A slow
   resolver combined with a short `workerTimeoutMs` can make the load time out.
 
