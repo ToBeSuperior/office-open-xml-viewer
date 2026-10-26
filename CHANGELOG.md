@@ -5,6 +5,20 @@ semantic versioning. While the major version is zero, minor releases may contain
 explicitly documented breaking changes; patch releases remain compatible with
 the corresponding minor release.
 
+## 0.89.5 — 2026-10-26
+
+Compatible patch release. No migration is required.
+
+- **Word progressive layout:** documents whose sections have page borders and
+  a page- or margin-relative floating picture with text wrapping load again
+  with `progressiveLayout: true` instead of failing with "Page-border
+  finalization requires explicit section-owned page identity" (#1949).
+- **Word SVG pictures in worker mode:** an SVG picture whose aspect ratio
+  differs from its frame no longer fails `load()` with
+  `ooxml-decoded-image-limit` in `mode: 'worker'`; worker and main-thread modes
+  now apply the same image budget, which still rejects genuinely oversized
+  images (#1950).
+
 ## 0.89.4 — 2026-10-25
 
 Compatible patch release. No migration is required.
