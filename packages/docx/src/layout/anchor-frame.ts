@@ -823,12 +823,17 @@ function polygonGeometry(
       yPt: frame.yPt + (point.y / FIXED_WRAP_COORDINATE_SIZE) * frame.heightPt,
     });
   }
-  const xs = points.map((point) => point.xPt);
-  const ys = points.map((point) => point.yPt);
-  const minX = Math.min(...xs);
-  const maxX = Math.max(...xs);
-  const minY = Math.min(...ys);
-  const maxY = Math.max(...ys);
+  // Do not spread authored vertices into Math.min/max arguments.
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (const point of points) {
+    minX = Math.min(minX, point.xPt);
+    maxX = Math.max(maxX, point.xPt);
+    minY = Math.min(minY, point.yPt);
+    maxY = Math.max(maxY, point.yPt);
+  }
   return {
     polygon: { edited: polygon.edited, points },
     bounds: { xPt: minX, yPt: minY, widthPt: maxX - minX, heightPt: maxY - minY },
