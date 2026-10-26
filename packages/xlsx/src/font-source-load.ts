@@ -113,20 +113,42 @@ export class XlsxFontDemand {
     for (const font of workbook.styles?.fonts ?? []) this.addCellFont(font);
     for (const shared of workbook.sharedStrings ?? []) {
       this.addText(shared.text);
+      // A run's own face paints it wherever the string is used; plain shared
+      // text is charged to its cell's face when the sheet's rows are scanned.
       for (const run of shared.runs ?? []) {
-        this.addText(run.text);
         if (run.font?.name) this.addFamily(run.font.name, run.font.bold, run.font.italic);
+        this.addText(run.text, run.font?.name);
       }
       for (const phonetic of shared.phoneticRuns ?? []) this.addText(phonetic.text);
     }
-    // Number-format output is painted text like any cell text: its scalars
-    // and its script evidence (a CJK date literal demands the CJK fallback).
-    // Its painting family is the cell's, unknown here, so it proves no scoped
-    // substitute. A locale/calendar the formatter's output set cannot be
-    // enumerated for demands 'all'.
-    const formatTexts = numberFormatPaintTexts(workbook.styles);
-    if (formatTexts === 'all') this.collector.decline();
-    else for (const text of formatTexts) this.addText(text);
+    // Number-format output is painted text like any cell text, in the font of
+    // the style that formats it: its scalars, its script fallback evidence (a
+    // CJK date literal demands the CJK fallback) and its family's scoped
+    // scripts. A conditional format's numFmt can format a cell of any style,
+    // so it proves for every style font. A locale/calendar-dependent output
+    // the formatter cannot enumerate demands 'all' scalars, while its sampled
+    // texts still prove their scripts.
+    const formats = numberFormatPaintTexts(workbook.styles);
+    if (!formats.complete) this.collector.decline();
+    const styleFamily = (fontId: number | undefined) =>
+      workbook.styles?.fonts?.[fontId ?? 0]?.name?.trim() || 'Calibri';
+    // Styles share formats and fonts: charge each (family, format) pair once.
+    const charged = new Map<string, Set<readonly string[]>>();
+    (workbook.styles?.cellXfs ?? []).forEach((xf, index) => {
+      const texts = formats.cellXfs[index];
+      if (!texts?.length) return;
+      const family = styleFamily(xf.fontId);
+      const done = charged.get(family) ?? new Set();
+      if (done.has(texts)) return;
+      done.add(texts);
+      charged.set(family, done);
+      for (const text of texts) this.addText(text, family);
+    });
+    const families = [...new Set((workbook.styles?.fonts ?? []).map((font) => font.name?.trim() || 'Calibri'))];
+    for (const text of formats.dxfs) {
+      this.addText(text);
+      for (const family of families) this.prove(family, text);
+    }
   }
 
   private newCollector(): FontDemandScalarCollector {
@@ -251,10 +273,18 @@ export class XlsxFontDemand {
     }
     for (const anchor of worksheet.shapeGroups ?? []) for (const shape of anchor.shapes) this.shape(shape);
     for (const slicer of worksheet.slicers ?? []) {
-      this.addText(slicer.caption);
-      for (const item of slicer.items) this.addText(item.name);
-      for (const style of [slicer.style?.header, slicer.style?.selectedItemWithData, slicer.style?.unselectedItemWithData, slicer.style?.whole]) {
+      // The caption paints with the header face, items with the item-state
+      // faces (renderer drawSlicerFrame); the library default face is not an
+      // authored family and is not demanded.
+      const header = slicer.style?.header;
+      const itemStyles = [slicer.style?.selectedItemWithData, slicer.style?.unselectedItemWithData];
+      for (const style of [header, ...itemStyles, slicer.style?.whole]) {
         if (style?.fontFamily) this.addFamily(style.fontFamily, style.fontBold === true);
+      }
+      this.addText(slicer.caption, header?.fontFamily);
+      for (const item of slicer.items) {
+        this.addText(item.name);
+        for (const style of itemStyles) if (style?.fontFamily) this.prove(style.fontFamily, item.name);
       }
     }
   }

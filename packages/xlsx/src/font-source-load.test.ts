@@ -171,4 +171,72 @@ describe('XLSX font-source demand', () => {
       for (const ch of formatLocalizedExcelShortDate(45_000)) expect(scalars.has(ch.codePointAt(0) as number), ch).toBe(true);
     });
   });
+
+  it('proves the scripts of a locale/calendar date output it cannot enumerate', () => {
+    vi.stubGlobal('navigator', { language: 'zh-TW-u-ca-roc' });
+    try {
+      // Numeric-only workbook: built-in 14 paints 民國…, the only CJK text.
+      const demand = new XlsxFontDemand(workbook({ cellXfs: [{ numFmtId: 14, fontId: 0 }] }), 'tc', []).take();
+      expect(demand?.scalars).toBe('all');
+      expect(demand?.fallbackFamilies).toEqual(['Noto Sans TC', 'Noto Serif TC']);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  describe('every painted text source feeds scalar demand and its family\'s script evidence', () => {
+    const SCOPED = 'Sakkal Majalla';
+    const shapeWith = (text: string) => sheet([], { shapeGroups: [{ shapes: [{ geom: { type: 'preset', name: 'rect' }, text: {
+      paragraphs: [{ runs: [{ type: 'text', text, fontFace: SCOPED, bold: false, italic: false, size: 11 }] }],
+    } }] }] as never });
+    const slicerWith = (caption: string, item: string) => sheet([], { slicers: [{
+      caption, items: [{ name: item, selected: true }],
+      style: { header: { fontFamily: SCOPED }, selectedItemWithData: { fontFamily: SCOPED }, unselectedItemWithData: { fontFamily: SCOPED } },
+    }] } as never);
+    const scopedWorkbook = (extra: Parameters<typeof workbook>[0] = {}) => workbook({
+      fonts: [font('Calibri'), font(SCOPED)],
+      cellXfs: [{ numFmtId: 0, fontId: 0 }, { numFmtId: 0, fontId: 1 }],
+      ...extra,
+    });
+    // [source, demand built from a text painted in the scoped family]
+    const SOURCES: Array<[string, (text: string) => XlsxFontDemand]> = [
+      ['cell text', (text) => { const d = new XlsxFontDemand(scopedWorkbook(), 'jp', OFFICE_FONT_SUBSTITUTIONS); d.rows([textRow(text, 1)]); return d; }],
+      ['rich run', (text) => { const d = new XlsxFontDemand(scopedWorkbook(), 'jp', OFFICE_FONT_SUBSTITUTIONS);
+        d.rows([{ index: 1, height: null, cells: [{ col: 1, row: 1, styleIndex: 0, value: { type: 'text', text,
+          runs: [{ text, font: { name: SCOPED, bold: false, italic: false, underline: false, strike: false } }] } }] } as never]); return d; }],
+      ['shared string run', (text) => new XlsxFontDemand(scopedWorkbook({ sharedStrings: [{ text,
+        runs: [{ text, font: { name: SCOPED, bold: false, italic: false } }] }] as never }), 'jp', OFFICE_FONT_SUBSTITUTIONS)],
+      ['shape text', (text) => { const d = new XlsxFontDemand(scopedWorkbook(), 'jp', OFFICE_FONT_SUBSTITUTIONS); d.worksheetParts(shapeWith(text)); return d; }],
+      ['slicer caption', (text) => { const d = new XlsxFontDemand(scopedWorkbook(), 'jp', OFFICE_FONT_SUBSTITUTIONS); d.worksheetParts(slicerWith(text, 'x')); return d; }],
+      ['slicer item', (text) => { const d = new XlsxFontDemand(scopedWorkbook(), 'jp', OFFICE_FONT_SUBSTITUTIONS); d.worksheetParts(slicerWith('x', text)); return d; }],
+      ['number format literal', (text) => new XlsxFontDemand(scopedWorkbook({
+        numFmts: [{ numFmtId: 164, formatCode: `0" ${text}"` }],
+        cellXfs: [{ numFmtId: 0, fontId: 0 }, { numFmtId: 164, fontId: 1 }],
+      }), 'jp', OFFICE_FONT_SUBSTITUTIONS)],
+    ];
+    const collect = (demand: XlsxFontDemand) => {
+      const deltas = [demand.take(), demand.take()].filter(Boolean);
+      return {
+        scalars: deltas.some((d) => d!.scalars === 'all') ? 'all' as const : new Set(deltas.flatMap((d) => d!.scalars as number[])),
+        scripts: deltas.flatMap((d) => d!.substituteScripts?.['sakkal majalla'] ?? []),
+      };
+    };
+    for (const [source, build] of SOURCES) {
+      it(source, () => {
+        const greek = collect(build('Ωμεγα'));
+        expect(greek.scalars, source).not.toBe('all');
+        for (const ch of 'Ωμεγα') expect((greek.scalars as Set<number>).has(ch.codePointAt(0) as number), `${source} ${ch}`).toBe(true);
+        expect(greek.scripts, source).toEqual([]);
+        expect(collect(build('مرحبا')).scripts, source).toContain('arabic');
+      });
+    }
+    it('chart text: its scalars are unprovable (demand is all) and it paints only unscoped substitutes', () => {
+      const demand = new XlsxFontDemand(scopedWorkbook(), 'jp', OFFICE_FONT_SUBSTITUTIONS);
+      demand.take();
+      demand.worksheetParts(sheet([], { charts: [{ chart: { title: 'مرحبا', titleFontFace: SCOPED } }] } as never));
+      const delta = demand.take();
+      expect(delta?.scalars).toBe('all');
+      expect(delta?.substituteScripts?.['sakkal majalla'] ?? []).toEqual([]);
+    });
+  });
 });

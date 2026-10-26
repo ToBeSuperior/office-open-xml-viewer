@@ -39,10 +39,11 @@ export const SOURCE_DISPATCH = new Map([
 // A feature budget, not a historical whole-entry baseline. It counts every
 // eagerly retained rendered byte that disappears when selected-source dispatch
 // is compiled out, per module, even if preparation was moved into another
-// static module (assertDispatchCost). Measured at introduction: docx 685,
-// xlsx 149, pptx 182, node 1068; each budget leaves room for a small dispatch
-// change, not for another copy of shared geometry or layout.
-const DISPATCH_COST_BUDGET = Object.freeze({ docx: 1_500, xlsx: 1_000, pptx: 1_000, node: 2_000 });
+// static module (assertDispatchCost, normalised token bytes). Measured at
+// introduction: docx 217, xlsx 81, pptx 92, node 494; each budget leaves room
+// for a small dispatch change, not for another copy of shared geometry or
+// layout.
+const DISPATCH_COST_BUDGET = Object.freeze({ docx: 800, xlsx: 500, pptx: 500, node: 1_200 });
 
 // Independent sidecar compression plus registration/owner bindings adds a
 // small overhead to the reading code moved out of the eager worker. This
@@ -213,9 +214,9 @@ function inlineWorkers(code) {
 }
 
 /** Static module closure of an entry chunk in a build's module stats
- * (scripts/module-stats-plugin.mjs): module id → rendered length. */
-export function staticModuleSizes(stats, entryFile) {
-  const sizes = new Map();
+ * (scripts/module-stats-plugin.mjs): module id → rendered code. */
+export function staticModuleCode(stats, entryFile) {
+  const code = new Map();
   const visited = new Set();
   const pending = [entryFile];
   while (pending.length) {
@@ -224,35 +225,79 @@ export function staticModuleSizes(stats, entryFile) {
     visited.add(file);
     const chunk = stats.chunks[file];
     if (!chunk) throw new Error(`Module stats lack chunk ${file}`);
-    for (const [id, length] of Object.entries(chunk.modules)) sizes.set(id, (sizes.get(id) ?? 0) + length);
+    for (const [id, text] of Object.entries(chunk.modules)) code.set(id, `${code.get(id) ?? ''}\n${text}`);
     // External specifiers (node: built-ins, skia-canvas) are not chunks.
     pending.push(...chunk.imports.filter((imported) => stats.chunks[imported]));
   }
-  return sizes;
+  return code;
+}
+
+/** Cost of one identifier occurrence, whatever its spelling: identifier text
+ * depends on the bundler's per-chunk deconfliction, not on the source. */
+const IDENTIFIER_COST = 1;
+
+/**
+ * A module's code as a multiset of normalised tokens with their byte cost:
+ * every identifier becomes one fixed-cost token (its text depends on chunk-
+ * scoped renaming), every other token (keywords, punctuators, string, number,
+ * template and regex literals) keeps its exact text and byte length. Comments
+ * and whitespace are ignored, and the bundler's per-build chunk-reference
+ * placeholders (`!~{…}~`) are normalised.
+ */
+export function moduleTokenCosts(code) {
+  const ast = parse(code, {
+    sourceType: 'module', tokens: true, errorRecovery: true,
+    allowAwaitOutsideFunction: true, allowReturnOutsideFunction: true, allowUndeclaredExports: true,
+  });
+  const costs = new Map();
+  for (const token of ast.tokens) {
+    const label = token.type?.label ?? token.type;
+    if (label === 'eof' || label === 'CommentLine' || label === 'CommentBlock') continue;
+    // A chunk reference inside a module (a dynamic import of another chunk)
+    // is a bundler placeholder whose id is assigned per build.
+    const text = code.slice(token.start, token.end).replace(/!~\{[^}]*\}~/g, '!~{chunk}~');
+    const key = label === 'name' || label === 'jsxName' || label === '#name' ? 'identifier' : `${label}:${text}`;
+    const entry = costs.get(key) ?? { count: 0, cost: key === 'identifier' ? IDENTIFIER_COST : Buffer.byteLength(text) };
+    entry.count++;
+    costs.set(key, entry);
+  }
+  return costs;
 }
 
 /**
- * Dispatch cost: the rendered bytes the selected-source dispatch adds to an
- * entry's eager static graph, summed per module over the modules whose
- * retained code differs between the enabled and disabled builds (a module
- * only the enabled build retains counts whole). Per-module accounting does
- * not depend on how the bundler partitions shared modules into chunks or on
- * the inter-chunk import/export lists, so no noise allowance is needed; a
- * module that shrinks never offsets one that grows.
+ * Dispatch cost: the code the selected-source dispatch adds to an entry's
+ * eager static graph. Per eager module, the enabled build's normalised token
+ * multiset is compared with the disabled build's, and every token occurrence
+ * the enabled build has beyond the disabled one is charged at its byte cost
+ * (a module only the enabled build retains counts whole). The measure is
+ * independent of identifier naming and of how the bundler partitions modules
+ * into chunks, and growth is charged even when other code of the same module
+ * shrinks (only an identical token can cancel). No noise allowance is needed.
  */
 export function assertDispatchCost(enabledStats, disabledStats, entryFile, budget, label) {
-  const enabled = staticModuleSizes(enabledStats, entryFile);
-  const disabled = staticModuleSizes(disabledStats, entryFile);
+  const enabled = staticModuleCode(enabledStats, entryFile);
+  const disabled = staticModuleCode(disabledStats, entryFile);
   let bytes = 0;
   const grown = [];
-  for (const [id, length] of enabled) {
-    const delta = length - (disabled.get(id) ?? 0);
-    if (delta > 0) { bytes += delta; grown.push(`${id} +${delta}`); }
+  for (const [id, code] of enabled) {
+    const before = disabled.has(id) ? moduleTokenCosts(disabled.get(id)) : new Map();
+    let added = 0;
+    for (const [key, { count, cost }] of moduleTokenCosts(code)) {
+      const extra = count - (before.get(key)?.count ?? 0);
+      if (extra > 0) added += extra * cost;
+    }
+    if (added > 0) {
+      bytes += added; grown.push(`${id} +${added}`);
+      if (process.env.OOXML_DISPATCH_DEBUG) for (const [key, { count }] of moduleTokenCosts(code)) {
+        const extra = count - (before.get(key)?.count ?? 0);
+        if (extra > 0) console.log(`  ${id}: ${extra} × ${key}`);
+      }
+    }
   }
   if (bytes > budget) {
     throw new Error(`${label} model-source dispatch cost exceeds ${budget}-byte budget: ${bytes} (${grown.join(', ')})`);
   }
-  console.log(`${label} dispatch cost: ${bytes}/${budget} rendered bytes (${grown.join(", ") || "no module"})`);
+  console.log(`${label} dispatch cost: ${bytes}/${budget} token bytes (${grown.join(', ') || 'no module'})`);
   return bytes;
 }
 

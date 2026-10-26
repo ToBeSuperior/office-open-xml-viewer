@@ -308,11 +308,26 @@ function applyFormat(num: number, numFmtId: number, formatCode: string | null, d
   return { text: formatGeneralNumber(num) };
 }
 
+/** Number-format paint texts of a workbook's styles (see
+ * {@link numberFormatPaintTexts}). */
+export interface NumberFormatPaintTexts {
+  /** Per `cellXfs` index, the texts that style's number format can paint. */
+  readonly cellXfs: readonly (readonly string[])[];
+  /** Texts the conditional-format differential numFmts can paint; any cell
+   * may take them, whatever its font. */
+  readonly dxfs: readonly string[];
+  /** False when some format's output set is not enumerated (a
+   * locale/calendar-dependent built-in): scalar demand must then be `'all'`,
+   * while the texts still prove the output's scripts. */
+  readonly complete: boolean;
+}
+
 /**
  * Every non-value text the cell formatter can paint for number cells under
- * `styles`: the input of font-source scalar demand (library policy; see
- * `font-source-load.ts`). Number cells paint, besides ASCII (digits, signs,
- * separators, `E`, `%`, space, `#` fill, General output), only
+ * `styles`, per style: the input of font-source demand (library policy; see
+ * `font-source-load.ts`), which charges it to each style's font as painted
+ * cell text. Number cells paint, besides ASCII (digits, signs, separators,
+ * `E`, `%`, space, `#` fill, General output), only
  *
  * - characters of the format code that formats them: literals, quoted and
  *   escaped text, currency symbols, `*` fill characters (the whole code is
@@ -321,55 +336,63 @@ function applyFormat(num: number, numFmtId: number, formatCode: string | null, d
  *   weekday names, AM/PM, Japanese weekdays and eras:
  *   `excelDateTimeSectionNameTexts`);
  * - for built-in 14 without a code, the host locale's numeric short date
- *   (`localizedExcelShortDateTexts`): its complete output set when the
- *   locale formats Gregorian dates with ASCII digits, otherwise `'all'`
- *   (another calendar or numbering system can paint era names and digits
- *   no sample proves).
+ *   (`localizedExcelShortDateTexts`): its complete output set for a
+ *   Gregorian, ASCII-digit locale; otherwise a sample over the date range,
+ *   with `complete: false` (another calendar or numbering system can paint
+ *   era names and digits no finite sample proves).
  *
  * Codes come from the style numFmts and the differential formats a
  * conditional format may apply (§18.8.15); built-in ids are resolved as
- * {@link formatCellValueWithColor} resolves them. Every section is therefore
- * classified: the result over-approximates the painted scalars and never
- * misses one.
+ * {@link formatCellValueWithColor} resolves them.
  */
-export function numberFormatPaintTexts(styles: Pick<Styles, 'numFmts' | 'cellXfs' | 'dxfs'>): string[] | 'all' {
-  const texts: string[] = [];
+export function numberFormatPaintTexts(styles: Pick<Styles, 'numFmts' | 'cellXfs' | 'dxfs'>): NumberFormatPaintTexts {
   const codeOf = new Map<number, string>();
   for (const format of styles.numFmts ?? []) {
     if (format.formatCode !== null && format.formatCode !== undefined && !codeOf.has(format.numFmtId)) {
       codeOf.set(format.numFmtId, format.formatCode);
     }
   }
-  const codes = new Set<string>();
-  const builtinIds = new Set<number>();
-  for (const xf of styles.cellXfs ?? []) {
+  let complete = true;
+  const ofCode = new Map<string, readonly string[]>();
+  const codeTexts = (code: string): readonly string[] => {
+    let texts = ofCode.get(code);
+    if (!texts) {
+      const list = [code];
+      for (const section of splitFormatSections(code)) {
+        if (isDateFormatSection(section)) list.push(...excelDateTimeSectionNameTexts(section));
+      }
+      texts = Object.freeze(list);
+      ofCode.set(code, texts);
+    }
+    return texts;
+  };
+  const ofBuiltin = new Map<number, readonly string[]>();
+  const builtinTexts = (id: number): readonly string[] => {
+    let texts = ofBuiltin.get(id);
+    if (!texts) {
+      if (id === 14) {
+        const shortDate = localizedExcelShortDateTexts();
+        if (!shortDate.complete) complete = false;
+        texts = shortDate.texts;
+      } else {
+        const code = BUILTIN_DATE_FMT[id] ?? BUILTIN_NUMERIC_FMT[id];
+        texts = code ? codeTexts(code) : Object.freeze([]);
+      }
+      ofBuiltin.set(id, texts);
+    }
+    return texts;
+  };
+  const cellXfs = (styles.cellXfs ?? []).map((xf) => {
     const id = xf.numFmtId ?? 0;
     const code = codeOf.get(id);
-    if (code) codes.add(code);
-    else builtinIds.add(id);
-  }
+    return code ? codeTexts(code) : builtinTexts(id);
+  });
+  const dxfs: string[] = [];
   for (const dxf of styles.dxfs ?? []) {
     if (!dxf.numFmt) continue;
-    if (dxf.numFmt.formatCode) codes.add(dxf.numFmt.formatCode);
-    else builtinIds.add(dxf.numFmt.numFmtId);
+    dxfs.push(...(dxf.numFmt.formatCode ? codeTexts(dxf.numFmt.formatCode) : builtinTexts(dxf.numFmt.numFmtId)));
   }
-  for (const id of builtinIds) {
-    if (id === 14) {
-      const shortDate = localizedExcelShortDateTexts();
-      if (shortDate === 'all') return 'all';
-      texts.push(...shortDate);
-      continue;
-    }
-    const code = BUILTIN_DATE_FMT[id] ?? BUILTIN_NUMERIC_FMT[id];
-    if (code) codes.add(code);
-  }
-  for (const code of codes) {
-    texts.push(code);
-    for (const section of splitFormatSections(code)) {
-      if (isDateFormatSection(section)) texts.push(...excelDateTimeSectionNameTexts(section));
-    }
-  }
-  return texts;
+  return Object.freeze({ cellXfs: Object.freeze(cellXfs), dxfs: Object.freeze(dxfs), complete });
 }
 
 /** Invalid dates use '#'. Keep width-dependent painting out of cellText/find;
