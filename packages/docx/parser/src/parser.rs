@@ -10312,6 +10312,27 @@ fn parse_anchor_group_wire(
     }
 }
 
+/// [MS-OI29500] §§2.1.1354/.1357 (DrawingML `wp:wrapPolygon`) and
+/// [MS-OE376] §2.1.1692(uu) (VML `wrapcoords`; the shared VML attribute notes
+/// that §§2.1.1710-.1711 apply to shape and shapetype) both place Word's wrap polygon
+/// in one fixed 21600×21600 square mapped anisotropically onto the shape's
+/// bounding rectangle with its origin at the top-left corner.
+fn anchor_wrap_polygon(edited: bool, points: Vec<AnchorPointWire>) -> AnchorPolygonWire {
+    let invalid_point_count = points
+        .iter()
+        .filter(|point| point.x.is_none() || point.y.is_none())
+        .count();
+    AnchorPolygonWire {
+        edited,
+        coordinate_space: AnchorPolygonSpaceWire {
+            width: 21600,
+            height: 21600,
+        },
+        points,
+        invalid_point_count,
+    }
+}
+
 /// Private, lossless acquisition facts for retained layout. The public run
 /// model intentionally remains unchanged. ECMA-376 Part 1 §§20.4.2.3,
 /// 20.4.2.6 and 20.4.2.16 require anchor and child-wrap distances/effects to
@@ -10364,22 +10385,13 @@ fn parse_anchor_acquisition_wire(container: &roxmltree::Node) -> AnchorAcquisiti
                     }
                 })
                 .collect();
-            let invalid_point_count = points
-                .iter()
-                .filter(|point| point.x.is_none() || point.y.is_none())
-                .count();
-            AnchorPolygonWire {
-                edited: polygon
+            anchor_wrap_polygon(
+                polygon
                     .attribute("edited")
                     .and_then(parse_on_off)
                     .unwrap_or(false),
-                coordinate_space: AnchorPolygonSpaceWire {
-                    width: 21600,
-                    height: 21600,
-                },
                 points,
-                invalid_point_count,
-            }
+            )
         });
         AnchorWrapWire {
             kind: match node.tag_name().name() {
@@ -12471,10 +12483,22 @@ fn parse_vml_pict(
                 .any(|c| c.is_element() && c.tag_name().name() == "imagedata")
     })?;
 
-    // A shape type is defined once per part and referenced by later shapes
-    // (ECMA-376 Part 4 §14.1.2.20 shapetype; Word writes it in the first
-    // w:pict that uses it): search this pict, then the definitions that
-    // precede the shape in its story.
+    with_vml_shape_type(pict, shape, |shape_type| {
+        parse_vml_pict_shape(
+            style_map, num_map, shape, shape_type, theme, media_map, chart_map, rel_map, depth,
+        )
+    })
+}
+
+/// A shape type is defined once per part and referenced by later shapes
+/// (ECMA-376 Part 4 §14.1.2.20 shapetype; Word writes it in the first
+/// w:pict that uses it): search this pict, then the definitions that
+/// precede the shape in its story.
+fn with_vml_shape_type<R>(
+    pict: roxmltree::Node,
+    shape: roxmltree::Node,
+    use_type: impl FnOnce(Option<roxmltree::Node>) -> R,
+) -> R {
     let type_id = shape
         .attribute("type")
         .map(|value| value.trim_start_matches('#'));
@@ -12490,11 +12514,25 @@ fn parse_vml_pict(
         None
     };
     let recorded_doc = recorded.as_deref().and_then(|xml| parse_guarded(xml).ok());
-    let shape_type = local_type.or_else(|| {
+    use_type(local_type.or_else(|| {
         recorded_doc
             .as_ref()
             .and_then(|doc| doc.root_element().children().find(is_type))
-    });
+    }))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn parse_vml_pict_shape(
+    style_map: &StyleMap,
+    num_map: &mut NumberingMap,
+    shape: roxmltree::Node,
+    shape_type: Option<roxmltree::Node>,
+    theme: &ThemeColors,
+    media_map: &HashMap<String, String>,
+    chart_map: &ChartMap,
+    rel_map: &HashMap<String, String>,
+    depth: DepthGuard,
+) -> Option<ShapeRun> {
     // A top-level shape whose authored CSS style is not position:absolute
     // flows in the line as an inline object (ECMA-376 Part 4 §14.1.2.19
     // style; Windows Word 16.0.20430 #1896 controls stack such WordArt shapes
@@ -13001,7 +13039,7 @@ fn parse_vml_shape(
         .is_some_and(|value| value.eq_ignore_ascii_case("absolute"))
         && vml_word_has_complete_anchor_reference(shape, style);
     let anchor_acquisition =
-        anchor.then(|| vml_word_anchor_acquisition(shape, style, width_pt, height_pt));
+        anchor.then(|| vml_word_anchor_acquisition(shape, shape_type, style, width_pt, height_pt));
     let [text_inset_l, text_inset_t, text_inset_r, text_inset_b] =
         vml_textbox_insets(text_box_node);
 
@@ -13734,7 +13772,11 @@ fn vml_word_anchor_choice(style: &str, axis: &str) -> AnchorAxisChoiceWire {
     }
 }
 
-fn vml_word_anchor_wrap(shape: roxmltree::Node, style: &str) -> AnchorWrapWire {
+fn vml_word_anchor_wrap(
+    shape: roxmltree::Node,
+    definition: Option<roxmltree::Node>,
+    style: &str,
+) -> AnchorWrapWire {
     let wrap = shape
         .children()
         .find(|child| child.is_element() && child.tag_name().name() == "wrap");
@@ -13768,6 +13810,19 @@ fn vml_word_anchor_wrap(shape: roxmltree::Node, style: &str) -> AnchorWrapWire {
             )
             .then(|| "bothSides".to_string())
         });
+    let polygon = matches!(
+        kind,
+        AnchorWrapKindWire::Tight | AnchorWrapKindWire::Through
+    )
+    .then(|| {
+        // `wrapcoords` is a CT_Shapetype core attribute too; the instance
+        // overrides its template (Part 4 §§19.1.2.19-20).
+        vml_word_wrap_polygon(
+            shape
+                .attribute("wrapcoords")
+                .or_else(|| definition.and_then(|node| node.attribute("wrapcoords"))),
+        )
+    });
     AnchorWrapWire {
         kind,
         authored_kinds: authored
@@ -13781,8 +13836,57 @@ fn vml_word_anchor_wrap(shape: roxmltree::Node, style: &str) -> AnchorWrapWire {
             }),
         side,
         distances: vml_word_wrap_distances(style),
+        polygon,
         ..Default::default()
     }
+}
+
+/// Tight and through wrapping follow the shape's `wrapcoords` polygon
+/// (ECMA-376 Part 4 §19.1.2.19). [MS-OE376] §2.1.1692(uu-vv), which
+/// §§2.1.1710-.1711 apply to shape and shapetype: Word writes the
+/// points space-delimited in the same 21600-unit square as DrawingML
+/// `wp:wrapPolygon`; the standard's comma-delimited form is accepted too.
+///
+/// Part 4 gives the attribute no default value, and DrawingML has no
+/// polygon-less tight wrap to borrow one from (CT_WrapTight requires
+/// `wrapPolygon`). Library policy: when `wrapcoords` is absent or unusable
+/// (a non-integer token, an odd coordinate count, or fewer than three points),
+/// wrap tightly around the shape's whole bounding rectangle, i.e. the corners
+/// of the same coordinate square. That keeps the object painted and its text
+/// exclusion on the frame Word positions, rather than dropping the anchor.
+fn vml_word_wrap_polygon(wrapcoords: Option<&str>) -> AnchorPolygonWire {
+    let point = |x: i64, y: i64, raw: Option<(&str, &str)>| AnchorPointWire {
+        x: Some(x),
+        y: Some(y),
+        raw_x: raw.map(|(raw_x, _)| raw_x.to_string()),
+        raw_y: raw.map(|(_, raw_y)| raw_y.to_string()),
+    };
+    let authored = wrapcoords.and_then(|raw| {
+        let tokens = raw
+            .split(|c: char| c == ',' || c.is_ascii_whitespace())
+            .filter(|token| !token.is_empty())
+            .collect::<Vec<_>>();
+        if tokens.len() % 2 != 0 || tokens.len() < 6 {
+            return None;
+        }
+        tokens
+            .chunks_exact(2)
+            .map(|pair| {
+                Some(point(
+                    pair[0].parse().ok()?,
+                    pair[1].parse().ok()?,
+                    Some((pair[0], pair[1])),
+                ))
+            })
+            .collect::<Option<Vec<_>>>()
+    });
+    let points = authored.unwrap_or_else(|| {
+        [(0, 0), (0, 21600), (21600, 21600), (21600, 0), (0, 0)]
+            .into_iter()
+            .map(|(x, y)| point(x, y, None))
+            .collect()
+    });
+    anchor_wrap_polygon(false, points)
 }
 
 fn vml_word_wrap_distances(style: &str) -> AnchorEdgesWire {
@@ -13841,6 +13945,7 @@ fn vml_word_z_order(style: &str) -> (bool, Option<u32>, AnchorValueStatusWire) {
 
 fn vml_word_anchor_acquisition(
     shape: roxmltree::Node,
+    definition: Option<roxmltree::Node>,
     style: &str,
     width_pt: f64,
     height_pt: f64,
@@ -13875,7 +13980,7 @@ fn vml_word_anchor_acquisition(
             width_status: AnchorValueStatusWire::Valid,
             height_status: AnchorValueStatusWire::Valid,
         },
-        wrap: vml_word_anchor_wrap(shape, style),
+        wrap: vml_word_anchor_wrap(shape, definition, style),
         behavior: AnchorBehaviorWire {
             behind_doc: Some(behind_doc),
             behind_doc_status: AnchorValueStatusWire::Valid,
@@ -14047,6 +14152,7 @@ fn vml_image_source(node: roxmltree::Node, media_map: &HashMap<String, String>) 
 
 fn vml_image_run(
     shape: roxmltree::Node,
+    definition: Option<roxmltree::Node>,
     image_path: String,
     width_pt: f64,
     height_pt: f64,
@@ -14082,7 +14188,7 @@ fn vml_image_run(
             None | Some("paragraph") | Some("line") | Some("character")
         );
     let anchor_acquisition =
-        anchor.then(|| vml_word_anchor_acquisition(shape, style, width_pt, height_pt));
+        anchor.then(|| vml_word_anchor_acquisition(shape, definition, style, width_pt, height_pt));
 
     ImageRun {
         mime_type: mime_from_ext(&image_path).to_string(),
@@ -14165,9 +14271,11 @@ fn parse_vml_pict_image(
         return None;
     }
 
-    Some(vml_image_run(
-        shape, image_path, width_pt, height_pt, imagedata,
-    ))
+    Some(with_vml_shape_type(pict, shape, |definition| {
+        vml_image_run(
+            shape, definition, image_path, width_pt, height_pt, imagedata,
+        )
+    }))
 }
 
 /// Extract the preview image from an embedded OLE object (`<w:object>`,
@@ -14228,9 +14336,11 @@ fn parse_object_ole_image(
         return None;
     }
 
-    Some(vml_image_run(
-        shape, image_path, width_pt, height_pt, imagedata,
-    ))
+    Some(with_vml_shape_type(object, shape, |definition| {
+        vml_image_run(
+            shape, definition, image_path, width_pt, height_pt, imagedata,
+        )
+    }))
 }
 
 /// Result of inspecting a shape's spPr for a direct fill.

@@ -360,7 +360,7 @@ pub(super) fn parse_groups(
         }
         if absolute {
             wrapper.anchor_acquisition = Some(vml_word_anchor_acquisition(
-                group, style, spec.ext_x, spec.ext_y,
+                group, None, style, spec.ext_x, spec.ext_y,
             ));
         }
         result.push(DocRun::Shape(Box::new(wrapper)));
