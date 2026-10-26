@@ -269,6 +269,8 @@ export default defineConfig(({ command, mode }) => ({
         // nothing in it is used: a factories-only import such as
         // `import { googleFonts } from '@silurus/ooxml'` then retained the
         // whole DOCX and PPTX runtime (scripts/check-font-source-tree-shaking.mjs).
+        // Upstream: rolldown/rolldown#11213 (still open as of Rolldown 1.2.15);
+        // re-test before removing this once it is fixed.
         chunkOptimization: { avoidRedundantChunkLoads: false },
       },
       external: [/^node:/, 'skia-canvas'],
