@@ -202,6 +202,22 @@ describe('css-api request composition', () => {
     expect(cssApiRequests(source, 'Comic Sans MS')).toEqual([]);
   });
 
+  it('keeps allow-list families named after prototype members as own entries', () => {
+    // A caller allow-list built from data (JSON, structured clone) carries
+    // `__proto__` as an own key; plain-object assignment used to drop it.
+    const source = cssApi({
+      urlTemplate: 'https://fonts.example/css?family={family}',
+      families: JSON.parse('{"__proto__": true, "constructor": true}') as Record<string, true>,
+    });
+    for (const descriptor of [source, structuredClone(source)]) {
+      expect(cssApiRequests(descriptor, '__proto__')).toEqual([
+        { family: '__proto__', url: 'https://fonts.example/css?family=__proto__' },
+      ]);
+      expect(cssApiRequests(descriptor, 'constructor')).toHaveLength(1);
+      expect(cssApiRequests(descriptor, 'toString')).toEqual([]);
+    }
+  });
+
   it('bounds every completed request URL, including encoding expansion', () => {
     const template = 'https://fonts.example/css?family={family}:{query}';
     expect(limitOf(() => cssApi({ urlTemplate: template, query: 'q'.repeat(9000) })))

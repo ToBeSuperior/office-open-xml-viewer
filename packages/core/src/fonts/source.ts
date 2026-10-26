@@ -26,6 +26,7 @@
  * application URL against its own script URL.
  */
 import { fontSourceLimitError } from '../errors/font-source-limit.js';
+import { nullRecord } from '../internal/own-key.js';
 import {
   HARD_MAX_FONT_SOURCE_DECLARATIONS,
   HARD_MAX_FONT_SOURCE_FACE_BYTES,
@@ -464,7 +465,9 @@ function normalizeCssApi(fields: Fields, location: string): CssApiSource {
   if (fields.families !== undefined) {
     const entries = requireRecord(fields.families, `${location}.families`);
     const seen = new Set<string>();
-    const copy: Record<string, string | true> = {};
+    // Keys are family names: a null-prototype copy keeps `__proto__` as an own
+    // allow-list entry (plain assignment would invoke the inherited setter).
+    const copy = nullRecord<string | true>();
     for (const [family, value] of Object.entries(entries)) {
       const at = `${location}.families[${JSON.stringify(family)}]`;
       requireName(family, `${at} key`);
