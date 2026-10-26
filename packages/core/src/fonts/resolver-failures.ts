@@ -18,7 +18,8 @@
  * worker sends the time left of its ceiling with each request), so main sees
  * every terminal outcome of the worker's resolver calls and records it here.
  */
-import { fontSourceId } from './source-cache.js';
+import type { BridgedFamilyAnswer, FontResolveOutcome } from './resolver-bridge.js';
+import { fontSourceId, peekFamilyResolution } from './source-cache.js';
 import type { FontSource } from './source.js';
 import type { FontSubstituteScript } from './substitute-script.js';
 import { fontFamilyKey, scopedFamilyKey, type FontSubstituteScripts } from './substitutions.js';
@@ -72,22 +73,70 @@ export function bridgedRequestFamilies(
   }));
 }
 
+/** A bridged request's families split by whether this document already
+ * decided them. */
+export interface SettledBridgedRequest {
+  /** Families with a terminal outcome in this document: a recorded failure,
+   * or a resolution (claimed or absent) this realm's cache holds for a
+   * requester of the document (the XLSX viewer session). */
+  readonly settled: readonly BridgedFamilyAnswer[];
+  /** Families no requester has decided yet. */
+  readonly unsettled: readonly { readonly name: string; readonly scripts: FontSubstituteScripts }[];
+  readonly sourceId: string;
+}
+
 /**
- * Record a failed reply to a bridged request (`resolver-bridge.ts`) for every
- * family it names, when it names one of the document's own resolver sources
- * (`sources[sourceIndex]` with the request's resolver id). Every path that
- * answers a bridged request with a failure goes through here, so the
- * document's other requesters (the XLSX viewer realm) report the same.
+ * Split a bridged request by the document's settled outcomes, or undefined
+ * when it does not name one of the document's resolver sources. A family's
+ * outcome is decided once, by whichever requester reaches it first, success
+ * included; the bridge answers settled families from here whatever the state
+ * of its responder, so the worker adopts the viewer realm's outcome.
  */
-export function recordBridgedRequestFailure(
-  failures: FontResolverFailures | undefined,
+export function settledBridgedRequest(
+  failures: FontResolverFailures,
+  sources: readonly FontSource[],
+  request: { readonly sourceIndex?: unknown; readonly resolverId?: unknown; readonly demand?: unknown },
+): SettledBridgedRequest | undefined {
+  const { sourceIndex, resolverId } = request;
+  if (typeof sourceIndex !== 'number' || !Number.isSafeInteger(sourceIndex) || sourceIndex < 0) return undefined;
+  const source = sources[sourceIndex];
+  if (source?.kind !== 'font-resolver' || source.id !== resolverId) return undefined;
+  const sourceId = fontSourceId(source);
+  const settled: BridgedFamilyAnswer[] = [];
+  const unsettled: { name: string; scripts: FontSubstituteScripts }[] = [];
+  for (const { name, scripts } of bridgedRequestFamilies(request.demand)) {
+    const family = fontFamilyKey(name);
+    const reason = failures.get(fontResolverFailureKey(sourceId, name, scripts));
+    if (reason !== undefined) { settled.push({ family, kind: 'failed', reason }); continue; }
+    const kept = peekFamilyResolution(sourceId, scopedFamilyKey(name, scripts));
+    if (kept?.kind === 'claimed') settled.push({ family, kind: 'claimed', declarations: kept.declarations });
+    else if (kept?.kind === 'absent') settled.push({ family, kind: 'absent' });
+    else unsettled.push({ name, scripts });
+  }
+  return { settled, unsettled, sourceId };
+}
+
+/**
+ * The single way a bridged request ends without a resolution of its own
+ * (its deadline, an unknown source, a responder that cannot load or answer):
+ * families the document already decided adopt that outcome, the rest fail
+ * with `reason`, recorded for the whole document. A request that names none
+ * of the document's sources fails as a whole and records nothing.
+ */
+export function concludeBridgedRequest(
+  failures: FontResolverFailures,
   sources: readonly FontSource[],
   request: { readonly sourceIndex?: unknown; readonly resolverId?: unknown; readonly demand?: unknown },
   reason: string,
-): void {
-  const { sourceIndex, resolverId } = request;
-  if (!failures || typeof sourceIndex !== 'number' || !Number.isSafeInteger(sourceIndex) || sourceIndex < 0) return;
-  const source = sources[sourceIndex];
-  if (source?.kind !== 'font-resolver' || source.id !== resolverId) return;
-  recordFontResolverFailures(failures, fontSourceId(source), bridgedRequestFamilies(request.demand), reason);
+): FontResolveOutcome {
+  const split = settledBridgedRequest(failures, sources, request);
+  if (!split) return { status: 'failed', reason };
+  recordFontResolverFailures(failures, split.sourceId, split.unsettled, reason);
+  return {
+    status: 'families',
+    families: [
+      ...split.settled,
+      ...split.unsettled.map(({ name }): BridgedFamilyAnswer => ({ family: fontFamilyKey(name), kind: 'failed', reason })),
+    ],
+  };
 }

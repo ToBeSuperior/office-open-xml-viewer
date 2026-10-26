@@ -42,13 +42,14 @@ import {
   HARD_MAX_FONT_SOURCE_FAMILIES,
 } from '../worker/resource-policy.generated.js';
 import { FONT_LOAD_CEILING_MS } from './font-registry.js';
-import type {
-  BridgedFamilyAnswer,
-  FontResolveOutcome,
-  MainFontResolveReply,
-  WorkerFontResolveRequest,
+import {
+  copiedForTransfer,
+  type BridgedFamilyAnswer,
+  type FontResolveOutcome,
+  type MainFontResolveReply,
+  type WorkerFontResolveRequest,
 } from './resolver-bridge.js';
-import { recordBridgedRequestFailure } from './resolver-failures.js';
+import { concludeBridgedRequest } from './resolver-failures.js';
 import {
   resolveFamiliesThroughCache,
   runResolverInRealm,
@@ -60,7 +61,6 @@ import { acquireSourceCache, type SourceCache } from './source-cache.js';
 import {
   fontResolverFunction,
   type FontDemand,
-  type FontFaceDeclaration,
   type FontResolverSource,
   type FontSource,
 } from './source.js';
@@ -142,27 +142,6 @@ export function copyBridgedFontDemand(value: unknown): FontDemand | undefined {
   });
 }
 
-/** The reply's answers with one copy per distinct buffer: the originals are
- * kept by main's cache (and possibly the application), so none is detached. */
-function copiedForTransfer(
-  answers: readonly BridgedFamilyAnswer[],
-): { answers: readonly BridgedFamilyAnswer[]; transfer: ArrayBuffer[] } {
-  const copies = new Map<ArrayBuffer, ArrayBuffer>();
-  const wire = (declaration: FontFaceDeclaration): FontFaceDeclaration => {
-    const { data } = declaration;
-    if (!data) return declaration;
-    let copy = copies.get(data);
-    if (!copy) {
-      copy = data.slice(0);
-      copies.set(data, copy);
-    }
-    return { ...declaration, data: copy };
-  };
-  const out = answers.map((answer) => (answer.kind === 'claimed'
-    ? { ...answer, declarations: answer.declarations.map(wire) } : answer));
-  return { answers: out, transfer: [...copies.values()] };
-}
-
 function isFontSourceLimit(error: unknown): error is OoxmlError & { violation: NonNullable<OoxmlError['violation']> } {
   return error instanceof Error && (error as OoxmlError).code === 'font-source-limit'
     && (error as OoxmlError).violation !== undefined;
@@ -238,12 +217,9 @@ export class FontResolverResponder {
     const controller = new AbortController();
     const call = { controller, generation };
     this.calls.set(key, call);
-    // The single path for a failed reply: every family the request names gets
-    // the same outcome in the document's record (`resolver-failures.ts`).
-    const fail = (reason: string): FontResolveOutcome => {
-      recordBridgedRequestFailure(this.failures, this.sources, request, reason);
-      return { status: 'failed', reason };
-    };
+    // The single path for a failed reply (`concludeBridgedRequest`): families
+    // the document already decided adopt that outcome, the rest are recorded.
+    const fail = (reason: string): FontResolveOutcome => concludeBridgedRequest(this.failures, this.sources, request, reason);
     // The worker's remaining ceiling for its current ensure: main mode's
     // deadline is cumulative over the source walk, and so is this one.
     const { remainingMs } = request;
@@ -263,7 +239,9 @@ export class FontResolverResponder {
     const live = this.calls.get(key) === call;
     this.calls.delete(key);
     if (this.disposed || !live || (controller.signal.aborted && !expired)) return;
-    if (expired && outcome.status !== 'failed') outcome = fail('timed out');
+    // Expired: the document's conclusion (idempotent; a family decided by
+    // another requester meanwhile keeps that outcome).
+    if (expired) outcome = fail('timed out');
     let reply = outcome;
     let transfer: ArrayBuffer[] = [];
     if (outcome.status === 'families') {

@@ -108,6 +108,27 @@ export function isMainFontResolveReply(value: unknown): value is MainFontResolve
   return kindOf(value) === 'ooxmlFontsResolved';
 }
 
+/** The reply's answers with one copy per distinct buffer: the originals are
+ * kept by main's cache (and possibly the application), so none is detached. */
+export function copiedForTransfer(
+  answers: readonly BridgedFamilyAnswer[],
+): { answers: readonly BridgedFamilyAnswer[]; transfer: ArrayBuffer[] } {
+  const copies = new Map<ArrayBuffer, ArrayBuffer>();
+  const wire = (declaration: FontFaceDeclaration): FontFaceDeclaration => {
+    const { data } = declaration;
+    if (!data) return declaration;
+    let copy = copies.get(data);
+    if (!copy) {
+      copy = data.slice(0);
+      copies.set(data, copy);
+    }
+    return { ...declaration, data: copy };
+  };
+  const out = answers.map((answer) => (answer.kind === 'claimed'
+    ? { ...answer, declarations: answer.declarations.map(wire) } : answer));
+  return { answers: out, transfer: [...copies.values()] };
+}
+
 /** Longest failure reason kept from a reply (it only reaches console.warn). */
 const MAX_REASON_LENGTH = 1024;
 

@@ -260,6 +260,8 @@ export class SharedTaskMap<T> {
   /** Bytes charged per task (not per key): a retry after an eviction is a
    * different task, so charge and refund always pair one-to-one. */
   private readonly charged = new Map<SharedTask<T>, number>();
+  /** Results the map keeps, by task (see {@link SharedTaskMap.peek}). */
+  private readonly values = new Map<SharedTask<T>, T>();
   /** Who asked for each key (sessions for family resolutions, family
    * resolutions for stylesheets). An entry is kept only while at least one
    * holder needs it, so the map is bounded by its live holders' demand. */
@@ -278,6 +280,7 @@ export class SharedTaskMap<T> {
    * charge. Every removal path goes through here. */
   private drop(key: string, task: SharedTask<T>): void {
     if (this.tasks.get(key) === task) this.tasks.delete(key);
+    this.values.delete(task);
     const bytes = this.charged.get(task);
     if (bytes !== undefined) {
       this.charged.delete(task);
@@ -321,6 +324,7 @@ export class SharedTaskMap<T> {
           const bytes = this.weigh(value);
           chargeRetainedBytes(bytes);
           if (bytes > 0) this.charged.set(created, bytes);
+          this.values.set(created, value);
           return value;
         } catch (error) {
           this.drop(key, created);
@@ -349,6 +353,12 @@ export class SharedTaskMap<T> {
     }
   }
 
+  /** The settled result kept for `key`, if any (an in-flight task has none). */
+  peek(key: string): T | undefined {
+    const task = this.tasks.get(key);
+    return task ? this.values.get(task) : undefined;
+  }
+
   /** Whether a task (in flight or settled and kept) exists for `key`. */
   has(key: string): boolean { return this.tasks.has(key); }
 
@@ -361,6 +371,7 @@ export class SharedTaskMap<T> {
     // charged can remain without an entry.
     for (const bytes of this.charged.values()) refundRetainedBytes(bytes);
     this.charged.clear();
+    this.values.clear();
     this.holders.clear();
     this.held.clear();
   }
@@ -474,6 +485,13 @@ function handle(entry: CacheEntry): SourceCache {
     },
   };
   return view;
+}
+
+/** The resolution this realm's cache keeps for `scopedKey` of the source
+ * `sourceId`, if one is settled and held (a document's settled outcome:
+ * `resolver-failures.ts`). */
+export function peekFamilyResolution(sourceId: string, scopedKey: string): FamilyResolution | undefined {
+  return caches.get(sourceId)?.cache.families.peek(scopedKey);
 }
 
 /** Number of source identities with live holders (tests and leak checks). */

@@ -476,6 +476,65 @@ describe('fontResolver bridge: review findings', () => {
     });
   }
 
+  // Round 5: one outcome per family per document, success included,
+  // whatever the bridge's bootstrap state.
+  const delayedResponder = (ms: number) => () =>
+    new Promise<typeof main.responderModule>((resolve) => setTimeout(() => resolve(main.responderModule), ms));
+  const missingResponder = () => Promise.reject(new Error('Failed to fetch dynamically imported module'));
+  for (const [label, loadResponder] of [['delayed 17 s', delayedResponder(17_000)], ['missing', missingResponder]] as const) {
+    it(`gives the worker the viewer realm's loaded face while the responder is ${label}`, async () => {
+      vi.useFakeTimers();
+      let calls = 0;
+      const source = fontResolver(() => { calls++; return [FACE(12)]; });
+      const failures = new Map<string, string>();
+      const viewer = mainSession([source], failures);
+      expect((await viewer.session.ensure(demand(['Private Face']))).faces).toHaveLength(1);
+      const link = bridge([source], { failures, loadResponder });
+      const worker = link.session();
+      const pending = worker.session.ensure(demand(['Private Face']));
+      await vi.advanceTimersByTimeAsync(0);
+      // Answered from the document's settled outcome, before any deadline.
+      expect((await pending).faces).toHaveLength(1);
+      expect(worker.set.faces.map((face) => face.bytes)).toEqual([12]);
+      expect(calls).toBe(1);
+      await vi.advanceTimersByTimeAsync(20_000);
+    });
+
+    it(`fails the worker without a call after the viewer realm failed, while the responder is ${label}`, async () => {
+      vi.useFakeTimers();
+      let calls = 0;
+      const source = fontResolver(() => { calls++; if (calls === 1) throw new Error('flaky backend'); return [FACE(12)]; });
+      const failures = new Map<string, string>();
+      const viewer = mainSession([source], failures);
+      expect((await viewer.session.ensure(demand(['Private Face']))).faces).toEqual([]);
+      const link = bridge([source], { failures, loadResponder });
+      const pending = link.session().session.ensure(demand(['Private Face']));
+      await vi.advanceTimersByTimeAsync(0);
+      expect((await pending).faces).toEqual([]);
+      expect(String(warn.mock.calls.at(-1)?.[0])).toContain('Private Face (flaky backend)');
+      expect(calls).toBe(1);
+      await vi.advanceTimersByTimeAsync(20_000);
+    });
+  }
+
+  it('adopts the viewer realm\'s outcome reached while the request waits for the responder', async () => {
+    vi.useFakeTimers();
+    let calls = 0;
+    const source = fontResolver(() => { calls++; return [FACE(12)]; });
+    const failures = new Map<string, string>();
+    const link = bridge([source], { failures, loadResponder: delayedResponder(17_000) });
+    const worker = link.session();
+    const pending = worker.session.ensure(demand(['Private Face']));
+    await vi.advanceTimersByTimeAsync(1_000);
+    // The viewer realm resolves and loads the face while the request waits.
+    expect((await mainSession([source], failures).session.ensure(demand(['Private Face']))).faces).toHaveLength(1);
+    // At the request's deadline it adopts that success instead of failing.
+    await vi.advanceTimersByTimeAsync(14_000);
+    expect((await pending).faces).toHaveLength(1);
+    expect(calls).toBe(1);
+    await vi.advanceTimersByTimeAsync(5_000);
+  });
+
   // Finding 4: a worker reset abandons its calls on main too.
   it('cancels every pending call on reset, so a late answer is never posted or detached', async () => {
     let signal: AbortSignal | undefined;
@@ -630,7 +689,10 @@ describe('fontResolver bridge: abort and malformed replies', () => {
     responder.accept({ kind: 'ooxmlResolveFonts', generation: 0, requestId: 1, sourceIndex: 0, resolverId: source.id, demand: demand(['A']) } as never);
     await vi.advanceTimersByTimeAsync(15_000);
     expect(signal?.aborted).toBe(true);
-    expect(posts).toEqual([{ kind: 'ooxmlFontsResolved', generation: 0, requestId: 1, outcome: { status: 'failed', reason: 'timed out' } }]);
+    expect(posts).toEqual([{
+      kind: 'ooxmlFontsResolved', generation: 0, requestId: 1,
+      outcome: { status: 'families', families: [{ family: 'a', kind: 'failed', reason: 'timed out' }] },
+    }]);
     expect(responder.pendingCount).toBe(0);
     responder.dispose();
   });

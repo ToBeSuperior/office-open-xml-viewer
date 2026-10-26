@@ -11,13 +11,20 @@
  */
 import { FONT_LOAD_CEILING_MS } from './font-registry.js';
 import {
+  copiedForTransfer,
   isWorkerFontResolveMessage,
+  type BridgedFamilyAnswer,
+  type FontResolveOutcome,
   type MainFontResolveReply,
   type WorkerFontResolveMessage,
   type WorkerFontResolveRequest,
 } from './resolver-bridge.js';
 import type { FontResolverResponder } from './resolver-bridge-responder.js';
-import { recordBridgedRequestFailure, type FontResolverFailures } from './resolver-failures.js';
+import {
+  concludeBridgedRequest,
+  settledBridgedRequest,
+  type FontResolverFailures,
+} from './resolver-failures.js';
 import type { FontSource } from './source.js';
 
 type Post = (message: unknown, transfer?: Transferable[]) => void;
@@ -59,6 +66,7 @@ export class FontResolverBridgeHost {
     this.failures = options.resolverFailures ?? new Map();
     this.options = Array.isArray(options.sources) && options.sources.some((source) => source.kind === 'font-resolver')
       ? options : null;
+    if (this.options) void this.ensureResponder(this.options);
   }
 
   /** Route `message`; returns true when it belongs to the bridge. */
@@ -84,6 +92,13 @@ export class FontResolverBridgeHost {
           this.waiting.delete(waitingKey);
         }
       }
+      // Families this document already decided are answered now, whatever
+      // the responder's state: the worker adopts the viewer realm's outcome.
+      const split = settledBridgedRequest(this.failures, options.sources, bridged);
+      if (split && split.unsettled.length === 0) {
+        this.answer(bridged, split.settled);
+        return true;
+      }
       // The call's deadline starts on arrival: the worker's remaining ceiling
       // for its ensure, at most the font ceiling. Loading the responder counts
       // against it, and on expiry the call is failed here, recorded for the
@@ -99,18 +114,8 @@ export class FontResolverBridgeHost {
       }, budget);
       this.waiting.set(key, { request: bridged, deadline, timer });
     }
-    this.responder ??= (options.loadResponder ?? (() => import('./resolver-bridge-responder.js')))().then(({ FontResolverResponder: Responder }) => {
-      if (this.disposed || !this.options?.sources) return null;
-      return new Responder({
-        post: options.post,
-        sources: options.sources ?? [],
-        resolverFailures: this.failures,
-      });
-    }, (error: unknown) => {
-      console.warn(`[ooxml] font resolver bridge failed to load: ${error instanceof Error ? error.message : String(error)}`);
-      return null;
-    });
-    void this.responder.then((responder) => {
+    const responder = this.ensureResponder(options);
+    void responder.then((responder) => {
       if (this.disposed) return;
       if (bridged.kind === 'ooxmlCancelResolveFonts') { responder?.accept(bridged); return; }
       // Expired, cancelled or superseded while the responder loaded: not run.
@@ -133,16 +138,48 @@ export class FontResolverBridgeHost {
     return true;
   }
 
-  /** Fail one request: recorded for the whole document, then answered. */
+  /** Load the responder (once). Started eagerly for a document with a
+   * resolver, so the bootstrap window is small; the deadline and settled
+   * outcomes above do not depend on it. */
+  private ensureResponder(options: FontResolverBridgeHostOptions): Promise<FontResolverResponder | null> {
+    this.responder ??= (options.loadResponder ?? (() => import('./resolver-bridge-responder.js')))().then(({ FontResolverResponder: Responder }) => {
+      if (this.disposed || !this.options?.sources) return null;
+      return new Responder({
+        post: options.post,
+        sources: options.sources ?? [],
+        resolverFailures: this.failures,
+      });
+    }, (error: unknown) => {
+      console.warn(`[ooxml] font resolver bridge failed to load: ${error instanceof Error ? error.message : String(error)}`);
+      return null;
+    });
+    return this.responder;
+  }
+
+  /** End a request the responder will not run (its deadline expired, or
+   * the responder could not load), through the document's single
+   * conclusion path (`concludeBridgedRequest`). */
   private fail(request: WorkerFontResolveRequest, reason: string): void {
     const options = this.options;
+    if (this.disposed || !options?.sources) return;
+    const outcome = concludeBridgedRequest(this.failures, options.sources, request, reason);
+    if (outcome.status === 'families') this.answer(request, outcome.families);
+    else this.post(request, outcome);
+  }
+
+  /** Answer per family; the worker receives copies of held buffers. */
+  private answer(request: WorkerFontResolveRequest, families: readonly BridgedFamilyAnswer[]): void {
+    const sent = copiedForTransfer(families);
+    this.post(request, { status: 'families', families: sent.answers }, sent.transfer);
+  }
+
+  private post(request: WorkerFontResolveRequest, outcome: FontResolveOutcome, transfer: ArrayBuffer[] = []): void {
+    const options = this.options;
     if (this.disposed || !options) return;
-    recordBridgedRequestFailure(this.failures, options.sources ?? [], request, reason);
     try {
       options.post({
-        kind: 'ooxmlFontsResolved', generation: request.generation, requestId: request.requestId,
-        outcome: { status: 'failed', reason },
-      } satisfies MainFontResolveReply);
+        kind: 'ooxmlFontsResolved', generation: request.generation, requestId: request.requestId, outcome,
+      } satisfies MainFontResolveReply, transfer);
     } catch { /* worker terminated */ }
   }
 
