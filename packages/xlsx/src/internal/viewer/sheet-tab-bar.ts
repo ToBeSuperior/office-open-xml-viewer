@@ -159,7 +159,10 @@ export class SheetTabBar {
     this.tabListeners = new ListenerScope();
     this.tabList.innerHTML = '';
     this.tabs = [];
-    this.tabColors = tabColors.map((color) => (color && TAB_COLOR.test(color) ? color : null));
+    this.tabColors = sheetNames.map((_, i) => {
+      const color = tabColors[i];
+      return color && TAB_COLOR.test(color) ? color : null;
+    });
     sheetNames.forEach((name, i) => {
       const btn = this.ownerDocument.createElement('button');
       btn.textContent = name;
