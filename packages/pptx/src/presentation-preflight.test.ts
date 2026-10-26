@@ -407,6 +407,20 @@ describe('font-source demand facts (LoadOptions.fonts)', () => {
     }
   });
 
+  it('keeps facts for families named like Object.prototype members', () => {
+    const builder = new PresentationPreflightBuilder(bootstrap, { collectFontDemand: () => 'all' });
+    builder.addSlide(arabicDeck(0, 'العربية', '__proto__'));
+    builder.addSlide(arabicDeck(1, 'العربية', 'constructor'));
+    const full = builder.finish();
+    const scripts = full.fontPreloadFacts!.substituteScripts;
+    expect(Object.prototype.hasOwnProperty.call(scripts, '__proto__')).toBe(true);
+    expect(Object.prototype.hasOwnProperty.call(scripts, 'constructor')).toBe(true);
+    // The worker → main round trip keeps them as own entries too.
+    const cloned = structuredClone(full);
+    const normalized = normalizePresentationPreflight(cloned).fontPreloadFacts!.substituteScripts;
+    expect(Object.keys(normalized).sort()).toEqual(Object.keys(scripts).sort());
+  });
+
   it('demands bullet, break and end-of-paragraph faces, not only run families', () => {
     const marked: Slide = {
       ...slide(0, 'Item'),
@@ -443,3 +457,4 @@ describe('font-source demand facts (LoadOptions.fonts)', () => {
     expect(builder.finish().fontPreloadFacts?.substituteScripts).toEqual({ 'bullet face': ['arabic'] });
   });
 });
+

@@ -187,8 +187,14 @@ export function docxFontFamilyPlan(
     && (checked === undefined || checked.has(family.trim().toLowerCase())));
   // A family with an admissible substitute: unscoped, or scoped to a script
   // its text proves. Only such a substitute could have displaced it.
-  const substituted = (family: string) => substitutionsFor(substitutes, family,
-    candidates.substituteScripts[fontFamilyKey(family)] ?? []).length > 0;
+  // Own-property read: keys are document font names (e.g. `constructor`).
+  const scriptsOf = (family: string): readonly FontSubstituteScript[] => {
+    const key = fontFamilyKey(family);
+    return Object.prototype.hasOwnProperty.call(candidates.substituteScripts, key)
+      ? candidates.substituteScripts[key]
+      : [];
+  };
+  const substituted = (family: string) => substitutionsFor(substitutes, family, scriptsOf(family)).length > 0;
   const installedSubstituteFamilies = [...new Set(candidates.authored
     .filter((family) => installed(family) && substituted(family))
     .map((family) => family.trim().toLowerCase()))].sort();

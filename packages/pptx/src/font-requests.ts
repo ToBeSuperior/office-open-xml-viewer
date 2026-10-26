@@ -249,7 +249,8 @@ export class PptxFontPreloadAccumulator {
    * accumulator does not collect them. */
   demandFacts(): PptxFontDemandFacts | undefined {
     if (!this.demand) return undefined;
-    const substituteScripts: Record<string, readonly FontSubstituteScript[]> = {};
+    // Null prototype: keys are document font names (e.g. `__proto__`).
+    const substituteScripts = Object.create(null) as Record<string, readonly FontSubstituteScript[]>;
     for (const [key, scripts] of this.demand.scripts) {
       if (scripts.size) substituteScripts[key] = Object.freeze([...scripts].sort());
     }

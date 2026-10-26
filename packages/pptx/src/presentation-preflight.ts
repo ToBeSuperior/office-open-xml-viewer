@@ -95,7 +95,8 @@ function normalizeFontDemandFacts(value: unknown, nameCount: number): PptxFontDe
   });
   const scripts = candidate.substituteScripts;
   if (!scripts || typeof scripts !== 'object' || Array.isArray(scripts)) throw invalid();
-  const substituteScripts: Record<string, readonly import('@silurus/ooxml-core').FontSubstituteScript[]> = {};
+  // Null prototype: keys are document font names (e.g. `__proto__`).
+  const substituteScripts = Object.create(null) as Record<string, readonly import('@silurus/ooxml-core').FontSubstituteScript[]>;
   for (const [family, list] of Object.entries(scripts)) {
     if (!Array.isArray(list) || !list.every((script) => typeof script === 'string' && KNOWN_SUBSTITUTE_SCRIPTS.has(script))) {
       throw invalid();
