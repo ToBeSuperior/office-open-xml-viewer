@@ -16,6 +16,7 @@ import {
 import {
   FontSourceSession,
   type FontDemand,
+  type FontResolverRunner,
   type FontSource,
   type LoadedFontSources,
 } from '@silurus/ooxml-core/internal/font-sources';
@@ -187,12 +188,14 @@ export async function loadDocxFontSources(
   doc: DocxDocumentModel,
   plan: DocxFontFamilyPlan,
   sources: readonly FontSource[],
-  options: Readonly<{ fontSet?: FontFaceSet | null; signal?: AbortSignal }> = {},
+  options: Readonly<{ fontSet?: FontFaceSet | null; signal?: AbortSignal; runResolver?: FontResolverRunner }> = {},
 ): Promise<DocxLoadedFontSources> {
   const session = new FontSourceSession({
     sources,
     ...(options.fontSet === undefined ? {} : { fontSet: options.fontSet }),
     ...(options.signal ? { signal: options.signal } : {}),
+    // Worker mode: `fontResolver` functions run on main (core resolver-bridge.ts).
+    ...(options.runResolver ? { runResolver: options.runResolver } : {}),
   });
   try {
     const loaded = await session.ensure(docxFontDemand(doc, plan));

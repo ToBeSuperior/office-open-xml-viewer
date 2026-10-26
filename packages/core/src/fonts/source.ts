@@ -434,6 +434,25 @@ export function validateFontFaceDeclaration(
   });
 }
 
+/**
+ * Font bytes this realm's library objects reference: `fontFiles` descriptor
+ * buffers and resolver buffers a session admitted (cached for later sessions
+ * and realms). The resolver bridge never transfers (detaches) such a buffer to
+ * a worker; it sends a copy, so a descriptor or cache entry this realm still
+ * serves from stays intact (`resolver-bridge-responder.ts`, design §4.3).
+ */
+const heldFontBuffers = new WeakSet<ArrayBuffer>();
+
+/** Record that this realm's library keeps `buffer` (see {@link isFontBufferHeld}). */
+export function holdFontBuffer(buffer: ArrayBuffer): void {
+  heldFontBuffers.add(buffer);
+}
+
+/** Whether a library object of this realm references `buffer`. */
+export function isFontBufferHeld(buffer: ArrayBuffer): boolean {
+  return heldFontBuffers.has(buffer);
+}
+
 const TEMPLATE_PLACEHOLDER = /\{[^{}]*\}/g;
 
 function normalizeCssApi(fields: Fields, location: string): CssApiSource {
@@ -533,6 +552,7 @@ function normalizeFontFiles(fields: Fields, location: string, base: string | und
   }
   const declarations = Object.freeze(faces.map((face: unknown, index) =>
     validateFontFaceDeclaration(face, `${location}.faces[${index}]`, base)));
+  for (const declaration of declarations) if (declaration.data) holdFontBuffer(declaration.data);
   const substitutes = normalizeSubstitutes(fields.substitutes, `${location}.substitutes`);
   return Object.freeze({
     protocol: FONT_SOURCE_PROTOCOL,
@@ -617,9 +637,14 @@ let nextResolverId = 1;
 /**
  * Application resolution for authenticated, dynamic or in-memory fonts. The
  * function runs on the main thread only; in worker mode the worker asks main
- * to run it, so credentials and network clients stay in the application. The
- * same function always yields the same id, so documents sharing it share
- * resolutions.
+ * to run it (`resolver-bridge.ts`), so credentials and network clients stay in
+ * the application. The same function always yields the same id, so documents
+ * sharing it share resolutions.
+ *
+ * Returned `data` buffers are handed over to the library: in worker mode a
+ * buffer is transferred (detached) to the worker when the worker is the only
+ * realm that registers the faces, so a resolver returns a fresh buffer per
+ * call (`bytes.slice()`) rather than one it keeps.
  */
 export function fontResolver(resolve: FontResolveFn, options: FontResolverOptions = {}): FontResolverSource {
   if (typeof resolve !== 'function') throw new TypeError('fontResolver() requires a function');

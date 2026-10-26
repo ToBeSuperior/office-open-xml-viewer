@@ -50,7 +50,7 @@ import { mainThreadFallbackWarning } from './main-thread-fallback.js';
 import { admitDocxNativeRouteLines, measureDocxNativeRouteLines } from './native-route-line-metrics.js';
 import { buildBookmarkPageMap } from './bookmark-nav';
 import { completeDocxFontPresence, declaredFontSubstitutions, docxFontFamilyPlan, docxOfficeFontFallbackRequests, type DocxOfficeFontPresence } from './font-plan.js';
-import { chartFontSubstitutions, normalizeFontOptions, type FontSource } from '@silurus/ooxml-core/internal/font-sources';
+import { chartFontSubstitutions, FontResolverBridgeHost, normalizeFontOptions, type FontSource } from '@silurus/ooxml-core/internal/font-sources';
 import { loadEmbeddedFonts } from './embedded-fonts';
 import {
   attachDocumentLayoutRuntime,
@@ -424,6 +424,10 @@ export class DocxDocument {
    *  the SPA (refcounted in core, so a face shared with another open document
    *  survives until both go). */
   private _fontSourceSession: { release(): void } | null = null;
+  /** Worker mode: runs this document's `fontResolver` functions for the
+   *  worker's font-source session (core `resolver-bridge-host.ts`); disposed
+   *  in {@link destroy}, which aborts every in-flight resolver call. */
+  private _fontResolverBridge: FontResolverBridgeHost | null = null;
   /** The unscoped substitutions this document's font sources loaded,
    *  painted by chart text (ChartModel.fontSubstitutions). */
   private _chartFontSubstitutions: Readonly<Record<string, string>> | undefined;
@@ -553,6 +557,15 @@ export class DocxDocument {
       checkAbort();
       doc._metrics = metrics;
       doc._cjkFallback = cjkFallback;
+      if (mode === 'worker') {
+        // The worker is the only realm that registers the faces, so resolver
+        // bytes are transferred to it (design §4.3).
+        doc._fontResolverBridge = new FontResolverBridgeHost({
+          post: (message, transfer) => (worker.postMessage as (value: unknown, transfer?: Transferable[]) => void)(message, transfer),
+          sources: opts.fonts,
+          copyData: false,
+        });
+      }
       // Library default: continuation unless the caller passes exactly false
       // (LoadOptions.allowFootnoteContinuation). The normalized boolean then
       // reaches main, sliced and worker layout explicitly.
@@ -1081,6 +1094,7 @@ export class DocxDocument {
    * load this document has already moved past.
    */
   private _onWorkerLayoutPush(res: WorkerResponse | RenderWorkerResponse): void {
+    if (this._fontResolverBridge?.accept(res)) return;
     if (respondToWorkerSvgDecodeRequest(
       (message, transfer) => (
         this._worker.postMessage as (value: unknown, transfer?: Transferable[]) => void
@@ -1480,6 +1494,8 @@ export class DocxDocument {
     // destroyed too, and nothing leaks into `document.fonts` (SPA memory).
     this._fontSourceLoad?.abort();
     this._fontSourceLoad = null;
+    this._fontResolverBridge?.dispose();
+    this._fontResolverBridge = null;
     const fontSourceSession = this._fontSourceSession;
     this._fontSourceSession = null;
     this._chartFontSubstitutions = undefined;

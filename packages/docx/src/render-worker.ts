@@ -47,7 +47,7 @@ import { prepareMathRuns, renderLayoutSourceToCanvas } from './renderer';
 import { createLayoutServices, nativeRouteLineRequests } from './layout-runtime.js';
 import { completeDocxFontPresence, declaredFontSubstitutions, docxFontFamilyPlan, docxOfficeFontFallbackRequests } from './font-plan.js';
 import { loadDocxFontSources, type DocxLoadedFontSources } from './font-source-load.js';
-import { assertFontSourceDescriptors, chartFontSubstitutions, type FontSource } from '@silurus/ooxml-core/internal/font-sources';
+import { assertFontSourceDescriptors, chartFontSubstitutions, WorkerFontResolverClient, type FontSource } from '@silurus/ooxml-core/internal/font-sources';
 import { loadEmbeddedFonts } from './embedded-fonts';
 import type {
   RenderWorkerResponse,
@@ -161,6 +161,9 @@ const post = (
   transfer?: Transferable[],
 ) => rawPost(msg, transfer);
 const svgDecodeClient = new WorkerSvgDecodeClient(rawPost);
+/** Runs `fontResolver` sources on main (core `resolver-bridge.ts`); reset with
+ * every parse, so a reply for a superseded document is dropped. */
+const fontResolverClient = new WorkerFontResolverClient(rawPost);
 
 /** In-worker image-byte loader (twin of pptx's render-worker `getImage`). The
  *  renderer's `fetchImage` routes here in worker mode, so image bytes are
@@ -182,6 +185,7 @@ self.onmessage = async (e: MessageEvent<RenderWorkerWireRequest | WorkerSvgDecod
     svgDecodeClient.accept(req);
     return;
   }
+  if (fontResolverClient.accept(req)) return;
   if (isDocumentPullCommand(req)) {
     try {
       if (!fallbackPull) throw new Error('DOCX vertical fallback session is not open');
@@ -223,6 +227,7 @@ self.onmessage = async (e: MessageEvent<RenderWorkerWireRequest | WorkerSvgDecod
     }
     if (req.type === 'parse') {
       requestedGeneration = ++parseGeneration;
+      fontResolverClient.reset();
       for (const resolve of hostFontMeasurements.values()) resolve([]);
       hostFontMeasurements.clear();
       // A superseded parse's measurement reply is discarded by the host.
@@ -414,7 +419,7 @@ self.onmessage = async (e: MessageEvent<RenderWorkerWireRequest | WorkerSvgDecod
           if (requestedGeneration !== parseGeneration) throw new Error('render-worker parse was superseded');
           const plan = docxFontFamilyPlan(model, fontSources, req.cjkFallback, presence);
           installedSubstituteFamilies = plan.installedSubstituteFamilies;
-          loadedSources = await loadDocxFontSources(model, plan, fontSources);
+          loadedSources = await loadDocxFontSources(model, plan, fontSources, { runResolver: fontResolverClient.run });
           if (requestedGeneration !== parseGeneration) throw new Error('render-worker parse was superseded');
         }
         const preparedMath = requestedRenderers.math && source.mathOccurrences.length > 0

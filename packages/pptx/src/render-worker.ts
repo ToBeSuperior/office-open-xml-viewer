@@ -4,7 +4,7 @@ import init, { PptxArchive, reinit } from './wasm/pptx_parser.js';
 import type { PptxTextRunInfo } from './renderer';
 import { pptxSlideOfficeFontRequests } from './font-requests';
 import { FontSourceSession, PptxInstalledFamilies, pptxFontDemand } from './font-source-load.js';
-import { assertFontSourceDescriptors, type FontSource } from '@silurus/ooxml-core/internal/font-sources';
+import { assertFontSourceDescriptors, WorkerFontResolverClient, type FontSource } from '@silurus/ooxml-core/internal/font-sources';
 import { acquireOfficeRoutes, distinctOfficeRouteLoads, type AcquiredOfficeRoutes } from './office-route-acquisition.js';
 import {
   findPreflightMimeType,
@@ -131,6 +131,10 @@ const rawPost = (message: unknown, transfer?: Transferable[]) =>
   (self.postMessage as (value: unknown, transfer?: Transferable[]) => void)(message, transfer);
 const post = (message: RenderWorkerResponse, transfer?: Transferable[]) => rawPost(message, transfer);
 const svgDecodeClient = new WorkerSvgDecodeClient(rawPost);
+/** Runs `fontResolver` sources on main (core `resolver-bridge.ts`); reset
+ * whenever the presentation's session is reset, so a reply for a released
+ * session is dropped. */
+const fontResolverClient = new WorkerFontResolverClient(rawPost);
 
 function requirePreflight(): PresentationPreflight {
   if (preflight) return preflight;
@@ -187,6 +191,7 @@ async function openPresentation(request: Extract<RenderWorkerRequest, { kind: 'p
   embeddedFontFaces = [];
   fontSources?.release();
   fontSources = null;
+  fontResolverClient.reset();
   progressivePreflightGate.reset();
   await slidePull.reset();
   slides?.clear();
@@ -234,7 +239,7 @@ async function openPresentation(request: Extract<RenderWorkerRequest, { kind: 'p
     loadSlide,
   });
   // Same demand and session as main mode, registered into self.fonts.
-  if (sources.length > 0) fontSources = new FontSourceSession({ sources });
+  if (sources.length > 0) fontSources = new FontSourceSession({ sources, runResolver: fontResolverClient.run });
   const session = fontSources;
   // Installed authored faces are probed in self.fonts before any source face
   // of a delta registers, and never demanded, exactly as in main mode.
@@ -341,6 +346,7 @@ self.onmessage = async (event: MessageEvent<RenderWorkerRequest | WorkerSvgDecod
     svgDecodeClient.accept(request);
     return;
   }
+  if (fontResolverClient.accept(request)) return;
   if (request.kind === 'init') {
     host.setWasmInput(decodeDataUrl(request.wasmUrl) ?? request.wasmUrl);
     return;
@@ -513,6 +519,7 @@ self.onmessage = async (event: MessageEvent<RenderWorkerRequest | WorkerSvgDecod
       embeddedFontFaces = [];
       fontSources?.release();
       fontSources = null;
+      fontResolverClient.reset();
       rawParts.clear();
       try { host.run(() => host.disposeArchive()); } catch {}
       progressivePreflightGate.reset();

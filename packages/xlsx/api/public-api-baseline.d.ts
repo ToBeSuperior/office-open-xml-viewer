@@ -1327,6 +1327,17 @@ export interface FindMatchesOptions {
     caseSensitive?: boolean;
 }
 const FONT_SOURCE_PROTOCOL = 'ooxml-font-source/v1';
+export interface FontDemand {
+    readonly families: readonly string[];
+    readonly tuples: readonly {
+        readonly family: string;
+        readonly weight: number;
+        readonly style: 'normal' | 'italic';
+    }[];
+    readonly fallbackFamilies: readonly string[];
+    readonly scalars: 'all' | readonly number[];
+    readonly substituteScripts?: Readonly<Record<string, readonly FontSubstituteScript[]>>;
+}
 export function fontFaceCss(options: FontFaceCssOptions): FontFaceCssSource;
 export interface FontFaceCssOptions {
     readonly url: string;
@@ -1355,6 +1366,14 @@ export interface FontFilesOptions {
 export interface FontFilesSource extends FontSourceBase {
     readonly kind: 'font-files';
     readonly faces: readonly FontFaceDeclaration[];
+}
+export interface FontResolveContext {
+    readonly signal: AbortSignal;
+}
+export type FontResolveFn = (demand: FontDemand, context: FontResolveContext) => readonly FontFaceDeclaration[] | Promise<readonly FontFaceDeclaration[]>;
+export function fontResolver(resolve: FontResolveFn, options?: FontResolverOptions): FontResolverSource;
+export interface FontResolverOptions {
+    readonly substitutes?: readonly FontSubstitution[];
 }
 export interface FontResolverSource extends FontSourceBase {
     readonly kind: 'font-resolver';

@@ -9,6 +9,7 @@ import { xlsxCjkFallback } from './font-requests.js';
 import InlineWorker from './worker.ts?worker&inline';
 import wasmAssetUrl from './wasm/xlsx_parser_bg.wasm?url';
 import {
+  FontResolverBridgeHost,
   normalizeFontOptions,
   type FontDemand,
   type FontSource,
@@ -225,6 +226,10 @@ export class XlsxWorkbook {
   private fontDeltas: Promise<FontDemand>[] = [];
   private officeFontRequests: OfficeFontFallbackRequest[] = [];
   private readonly retainedFontSets = new Map<FontFaceSet, RetainedFontSet>();
+  /** Worker mode: runs this workbook's `fontResolver` functions for the
+   *  worker's font-source session (core `resolver-bridge-host.ts`); disposed
+   *  in {@link destroy}, which aborts every in-flight resolver call. */
+  private fontResolverBridge: FontResolverBridgeHost | null = null;
   private fontsDestroyed = false;
   private _mode: 'main' | 'worker' = 'main';
   private generation = 0;
@@ -262,6 +267,7 @@ export class XlsxWorkbook {
       toError: (res) =>
         'type' in res && res.type === 'error' ? deserializeWorkerError(res) : undefined,
       onUnsolicited: (res) => {
+        if (this.fontResolverBridge?.accept(res)) return;
         respondToWorkerSvgDecodeRequest(
           (message, transfer) => (
             worker.postMessage as (value: unknown, transfer?: Transferable[]) => void
@@ -523,6 +529,7 @@ export class XlsxWorkbook {
     // the resolved ZIP is literally the caller's buffer. URL and decrypted
     // buffers are library-owned and can transfer directly without a peak copy.
     const workerData = preserveCallerBuffer ? data.slice(0) : data;
+    this.attachFontResolverBridge(bridge, opts.fonts);
     const parsed = await bridge.request(
       (id) =>
         this._mode === 'worker'
@@ -606,6 +613,7 @@ export class XlsxWorkbook {
     const rendererDescriptors = this._mode === 'worker'
       ? workerRendererDescriptors(opts)
       : undefined;
+    this.attachFontResolverBridge(bridge, opts.fonts);
     const response = await bridge.request(
       (id) => ({
         type: 'parseDelimitedText',
@@ -650,6 +658,21 @@ export class XlsxWorkbook {
       const office = this.retainedFontSets.get(document.fonts)?.loaded?.office;
       bindXlsxWorksheetOfficeFontRoutes(worksheet, office?.routes, this.loadedFontSources(document.fonts));
     }
+  }
+
+  /** Worker mode: answer the render worker's `fontResolver` calls for the
+   * document about to be parsed (core `resolver-bridge-host.ts`). */
+  private attachFontResolverBridge(bridge: WorkbookBridge, fonts: readonly FontSource[] | undefined): void {
+    this.fontResolverBridge?.dispose();
+    this.fontResolverBridge = this._mode === 'worker'
+      ? new FontResolverBridgeHost({
+        post: (message, transfer) => bridge.post(message, transfer),
+        sources: fonts,
+        // This realm registers the same faces for viewer geometry, so it
+        // keeps every original buffer and transfers a copy (design §4.3).
+        copyData: true,
+      })
+      : null;
   }
 
   /**
@@ -1622,6 +1645,8 @@ export class XlsxWorkbook {
     }
     this.sheetPreviews?.clear();
     this.fontsDestroyed = true;
+    this.fontResolverBridge?.dispose();
+    this.fontResolverBridge = null;
     for (const retained of this.retainedFontSets.values()) {
       // Releasing settles an in-flight ensure (it resolves empty).
       retained.session?.release();

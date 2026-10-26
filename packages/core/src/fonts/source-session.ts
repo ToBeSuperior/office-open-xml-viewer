@@ -42,6 +42,7 @@
  */
 import { fontSourceLimitError } from '../errors/font-source-limit.js';
 import { createAbortError } from '../internal/abort.js';
+import { nullRecord } from '../internal/own-key.js';
 import {
   HARD_MAX_FONT_DEMAND_SCALARS,
   HARD_MAX_FONT_SOURCE_DECLARATIONS,
@@ -49,6 +50,7 @@ import {
 } from '../worker/resource-policy.generated.js';
 import { parseUnicodeRange, resolveCssSource } from './css-source.js';
 import { claimFromIndex, indexFontDeclarations, resolveFontFiles } from './files-source.js';
+import { admitFontResolverResult, isBridgedFontSourceLimitError } from './resolver-admission.js';
 import { activeFontSet, FONT_LOAD_CEILING_MS, releaseFaces, retainFace } from './font-registry.js';
 import {
   acquireSourceCache,
@@ -64,7 +66,7 @@ import {
   assertFontSourceDescriptors,
   dataUrlDecodedByteLength,
   fontResolverFunction,
-  validateFontFaceDeclaration,
+  holdFontBuffer,
   type FontDemand,
   type FontFaceDeclaration,
   type FontResolveContext,
@@ -574,8 +576,11 @@ export class FontSourceSession {
         tuples: Object.freeze(tuples.filter((tuple) => neededKeys.has(fontFamilyKey(tuple.family)))),
         scalars: this.all ? 'all' : Object.freeze([...this.points].sort((a, b) => a - b)),
         ...(needed.some(({ scripts }) => scripts !== 'all') ? {
-          substituteScripts: Object.freeze(Object.fromEntries(needed.flatMap(({ name, scripts }) =>
-            scripts === 'all' ? [] : [[fontFamilyKey(name), scripts] as const]))),
+          // Keyed by document family names: no prototype, in either realm
+          // (the worker bridge rebuilds the same record on main).
+          substituteScripts: Object.freeze(Object.assign(nullRecord<readonly FontSubstituteScript[]>(),
+            Object.fromEntries(needed.flatMap(({ name, scripts }) =>
+              scripts === 'all' ? [] : [[fontFamilyKey(name), scripts] as const])))),
         } : {}),
       });
       const runner = this.runResolver;
@@ -758,22 +763,18 @@ source: FontResolverSource,
   try {
     raw = await runResolver(source, demand, Object.freeze({ signal }));
   } catch (error) {
-    if (signal.aborted) throw error;
+    // A bridged call reports the main-side admission's ceiling breach, which
+    // rejects the load exactly as this realm's own admission would.
+    if (signal.aborted || isBridgedFontSourceLimitError(error)) throw error;
     return failAll(error instanceof Error ? error.message : String(error));
   }
   if (signal.aborted) throw createAbortError('Font resolver abandoned');
-  if (!Array.isArray(raw)) return failAll('resolver did not return an array');
-  if (raw.length > HARD_MAX_FONT_SOURCE_DECLARATIONS) {
-    throw fontSourceLimitError('declarations', HARD_MAX_FONT_SOURCE_DECLARATIONS, raw.length);
-  }
-  let declarations: FontFaceDeclaration[];
-  try {
-    declarations = raw.map((entry, index) =>
-      validateFontFaceDeclaration(entry, `font resolver declaration ${index}`));
-  } catch (error) {
-    if (!(error instanceof TypeError)) throw error;
-    return failAll(error.message);
-  }
+  const admitted = admitFontResolverResult(raw);
+  if (!admitted.ok) return failAll(admitted.reason);
+  const { declarations } = admitted;
+  // Cached for later sessions (and the resolver bridge's copies): never
+  // detached by a transfer from this realm.
+  for (const declaration of declarations) if (declaration.data) holdFontBuffer(declaration.data);
   const index = indexFontDeclarations(declarations);
   const scriptsOf = substituteScriptsOf(demand.substituteScripts);
   const restricted = demand.substituteScripts !== undefined;
