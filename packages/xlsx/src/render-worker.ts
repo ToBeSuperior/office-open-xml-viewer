@@ -7,9 +7,9 @@ import {
 import { bindCellFontLanguage } from './internal/cell-font-language.js';
 import { hasOwnKey, nullRecord } from '@silurus/ooxml-core/internal/own-key';
 import type { CjkLang } from '@silurus/ooxml-core';
-import { xlsxCjkFallback } from './google-fonts.js';
+import { xlsxCjkFallback } from './font-requests.js';
 /**
- * Render-capable worker entry: parse → font preload → (lazy) per-sheet parse →
+ * Render-capable worker entry: parse → font load → (lazy) per-sheet parse →
  * render, all worker-side; renders a sheet viewport into an OffscreenCanvas and
  * replies with a transferable ImageBitmap. Used by
  * XlsxWorkbook.load(src, { mode: 'worker' }); the slim parse-only worker.ts
@@ -22,10 +22,8 @@ import { xlsxCjkFallback } from './google-fonts.js';
 import init, { XlsxArchive, reinit } from './wasm/xlsx_parser.js';
 import {
   decodeDataUrl,
-  preloadGoogleFonts,
   loadOfficeFontFallbacks,
   unloadOfficeFontFallbacks,
-  unloadGoogleFonts,
   type OfficeFontFallbackRoute,
   WasmParserHost,
   dropDecodedBitmapCache,
@@ -48,7 +46,14 @@ import {
   type WorkerSvgDecodeResponse,
 } from '@silurus/ooxml-core/worker';
 import { workerRenderDeps } from './worker-render-deps.js';
-import { XLSX_GOOGLE_FONTS, xlsxFontPreloadNames, xlsxOfficeFontRequests, xlsxWorksheetOfficeFontRequests } from './google-fonts.js';
+import { xlsxOfficeFontRequests, xlsxWorksheetOfficeFontRequests } from './font-requests.js';
+import {
+  FontSourceSession,
+  InstalledFamilyExclusion,
+  XlsxFontDemand,
+  declaredFontSubstitutions,
+} from './font-source-load.js';
+import { assertFontSourceDescriptors, type FontSource } from '@silurus/ooxml-core/internal/font-sources';
 import { officeRequestKey } from './shape-office-line.js';
 import { resolveSharedStringRows } from './shared-strings.js';
 import {
@@ -100,23 +105,34 @@ let renderers: LoadedWorkerRenderers = {};
  *  Retained faces are released on replacement or unpublished parse failure. */
 let fontsLoaded: Promise<unknown> = Promise.resolve();
 let officeFontFaces: FontFace[] = [];
-let googleFontFaces: FontFace[] = [];
+/** This workbook's font-source session (LoadOptions.fonts) in self.fonts, its
+ * incremental demand and installed-family probe; reset with every parse and
+ * on a failed parse, and gone with the worker. */
+let fontSources: FontSourceSession | null = null;
+let fontDemand: XlsxFontDemand | null = null;
+let installedFamilies: InstalledFamilyExclusion | null = null;
+/** Serialises worksheet demand deltas so every render waits for the faces
+ * any concurrent render demanded before it. */
+let fontSourceTail: Promise<void> = Promise.resolve();
 // Keyed by authored face names: null prototype, so merging a route for a face
 // named `__proto__` creates an own entry instead of replacing the prototype.
 let officeFontRoutes: Record<string, OfficeFontFallbackRoute> = nullRecord();
 let checkedOfficeTupleSet = new Set<string>();
-let googleSubstitutes = false;
 let officeSheetLoads = new WeakMap<Worksheet, Promise<void>>();
 let officeSheetLoadQueue: Promise<void> = Promise.resolve();
 
-function startFontLoad(parsed: ParsedWorkbook, useGoogleFonts: boolean): void {
-  googleSubstitutes = useGoogleFonts;
+function startFontLoad(parsed: ParsedWorkbook, sources: readonly FontSource[]): void {
   // Each load-time resource is owned and awaited by parse. Sequential adoption
   // also lets parse cleanup release earlier faces if the next loader rejects.
   fontsLoaded = (async () => {
-    googleFontFaces = useGoogleFonts
-      ? await preloadGoogleFonts(xlsxFontPreloadNames(parsed, cjkFallback), XLSX_GOOGLE_FONTS)
-      : [];
+    if (sources.length > 0) {
+      // Same demand, probe and session as main mode, registered into self.fonts.
+      fontDemand = new XlsxFontDemand(parsed, cjkFallback, declaredFontSubstitutions(sources));
+      installedFamilies = new InstalledFamilyExclusion();
+      fontSources = new FontSourceSession({ sources });
+      const delta = fontDemand.take();
+      if (delta) await fontSources.ensure(await installedFamilies.exclude(delta));
+    }
     const office = await loadOfficeFontFallbacks(xlsxOfficeFontRequests(parsed));
     officeFontFaces = office.faces;
     officeFontRoutes = office.routes;
@@ -298,11 +314,17 @@ self.onmessage = async (e: MessageEvent<
       // workers (issue #781).
       cjkFallback = req.cjkFallback ?? 'jp';
       japaneseCellFonts = req.japaneseCellFonts === true;
+      // Descriptors crossed the realm boundary: validate them as strictly as
+      // the factories did (TypeError / font-source-limit reject the parse).
+      const sources: readonly FontSource[] = req.fonts === undefined ? [] : assertFontSourceDescriptors(req.fonts);
       await fontsLoaded;
       await officeSheetLoadQueue;
       ownsParseResources = true;
-      unloadGoogleFonts(googleFontFaces);
-      googleFontFaces = [];
+      fontSources?.release();
+      fontSources = null;
+      fontDemand = null;
+      installedFamilies = null;
+      fontSourceTail = Promise.resolve();
       unloadOfficeFontFallbacks(officeFontFaces);
       officeFontFaces = [];
       officeFontRoutes = nullRecord();
@@ -336,7 +358,7 @@ self.onmessage = async (e: MessageEvent<
         retainedSheetUsage = measured;
         sheetCache.set(0, parsed.worksheet);
         sheetCacheUsage.set(0, measured);
-        startFontLoad(parsed.workbook, !!req.useGoogleFonts);
+        startFontLoad(parsed.workbook, sources);
         await fontsLoaded;
         const worksheetJson = new TextEncoder()
           .encode(JSON.stringify(parsed.worksheet)).buffer as ArrayBuffer;
@@ -367,8 +389,10 @@ self.onmessage = async (e: MessageEvent<
           (font) => computeMdw(
             font.family,
             font.sizePt,
+            // Measured while the model source opens, before this workbook's
+            // font sources are known: no source substitution yet.
             undefined,
-            !!req.useGoogleFonts,
+            undefined,
             font.bold ? 700 : 400,
             font.italic ? 'italic' : 'normal',
           ),
@@ -400,7 +424,7 @@ self.onmessage = async (e: MessageEvent<
       const maximumDigitWidth = source?.maximumDigitWidth;
       if (maximumDigitWidth !== undefined) workbook.layoutMetrics = { maximumDigitWidth };
       cjkFallback = xlsxCjkFallback(workbook, cjkFallback);
-      startFontLoad(workbook, !!req.useGoogleFonts);
+      startFontLoad(workbook, sources);
       await fontsLoaded;
       post({ type: 'parsed', id, workbook, usage: bootstrap.usage });
       return;
@@ -435,6 +459,19 @@ self.onmessage = async (e: MessageEvent<
         officeSheetLoads.set(ws, sheetFonts);
       }
       await sheetFonts;
+      if (fontDemand && fontSources && installedFamilies) {
+        // This worksheet's font-source delta: its drawings once, and rows not
+        // demanded yet (a provisional sheet's rows keep growing).
+        fontDemand.worksheetParts(ws);
+        fontDemand.newRowsOf(ws);
+        const delta = fontDemand.take();
+        const session = fontSources, installed = installedFamilies;
+        const ready = fontSourceTail.then(async () => {
+          if (delta) await session.ensure(await installed.exclude(delta));
+        });
+        fontSourceTail = ready.catch(() => undefined);
+        await ready;
+      }
       // Apply view-only size mutations to a render-local projection. Multiple
       // viewers may share this worker cache while retaining different outline
       // and resize state, so the cached worksheet itself must stay unchanged.
@@ -465,7 +502,7 @@ self.onmessage = async (e: MessageEvent<
         // invalidate it on first use.
         { ...renderOpts, authoritativeMdw: req.layoutMetrics?.maximumDigitWidth
           ?? workbook?.layoutMetrics?.maximumDigitWidth,
-          officeFontRoutes, googleSubstitutes, fetchImage: getImage },
+          officeFontRoutes, fontSources: fontSources?.loaded, fetchImage: getImage },
         svgDecodeClient.decode,
       );
       const bitmap = canvas.transferToImageBitmap();
@@ -519,9 +556,12 @@ self.onmessage = async (e: MessageEvent<
       try { source?.closeModelSource(); } catch {}
       try { host.run(() => host.disposeArchive()); } catch {}
       try { unloadOfficeFontFallbacks(officeFontFaces); } catch {}
-      try { unloadGoogleFonts(googleFontFaces); } catch {}
+      try { fontSources?.release(); } catch {}
+      fontSources = null;
+      fontDemand = null;
+      installedFamilies = null;
+      fontSourceTail = Promise.resolve();
       officeFontFaces = [];
-      googleFontFaces = [];
       officeFontRoutes = nullRecord();
       checkedOfficeTupleSet.clear();
       fontsLoaded = Promise.resolve();

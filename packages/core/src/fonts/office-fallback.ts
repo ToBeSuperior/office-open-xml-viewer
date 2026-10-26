@@ -1,5 +1,5 @@
 import { hadLocalFontProbeTimeout, loadLocalFontMetrics, normalizeLocalFontMetricFamily, unloadLocalFontMetrics } from './local-metrics.js';
-import { activeFontSet } from './preload.js';
+import { activeFontSet } from './font-registry.js';
 import { findReferenceFontMetrics } from './reference-font-metrics.js';
 import type { ResolvedFontMetric } from './resource-metrics.js';
 

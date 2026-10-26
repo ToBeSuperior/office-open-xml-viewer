@@ -117,14 +117,11 @@ export interface LoadOptions {
    *
    * A hosted source receives the end user's IP address and User-Agent, which
    * may have privacy / GDPR implications for your application.
-   *
-   * Currently consumed by DOCX; PPTX and XLSX keep their `useGoogleFonts`
-   * path for this release.
    */
   fonts?: readonly FontSource[];
   /**
    * @deprecated Since 0.90; removed in 0.91. Replace `useGoogleFonts: true`
-   * with `fonts: [googleFonts()]`. DOCX normalises it to exactly that and
+   * with `fonts: [googleFonts()]`. Every format normalises it to exactly that and
    * warns once per JavaScript realm; passing it together with `fonts` throws
    * a `TypeError`, and `false` is a no-op that still warns.
    *

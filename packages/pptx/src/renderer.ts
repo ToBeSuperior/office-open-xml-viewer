@@ -12,6 +12,7 @@ import { preparedPowerPointText } from './font-display-text.js';
 import { pptxSlideCjkFallback } from './font-requests.js';
 import { formatAutoNum } from './autonum-label.js';
 import { fontFamilyKey } from '@silurus/ooxml-core/internal/font-sources';
+import { chartFontSubstitutions, withChartFontSubstitutions } from '@silurus/ooxml-core/internal/chart-font-sources';
 import type { CjkLang } from '@silurus/ooxml-core';
 import { normalizeLocalFontMetricFamily } from '@silurus/ooxml-core';
 import { containsHanScript } from '@silurus/ooxml-core/internal/script-preload-accumulator';
@@ -1208,21 +1209,6 @@ export function cssFontStack(
     : `${quoteCssFontFamily(normalized)}, ${subPart}${nonCjkPart}${cjkPart}${arabicPart}${generic}`;
 }
 
-/** The chart model a slide paints: with the unscoped substitutions this
- *  presentation's font sources loaded (`ChartModel.fontSubstitutions`), so
- *  chart text paints through the same substitution map as shape text. Chart
- *  labels are not split by script, so script-scoped substitutes are left out.
- *  Without one the parsed model is painted unchanged. */
-function chartWithFontSubstitutions(
-  chart: ChartElement['chart'],
-  substitutions: LoadedFontSubstitutions | undefined,
-): ChartElement['chart'] {
-  if (!substitutions?.size) return chart;
-  // Null prototype: keys are document font names (e.g. `__proto__`).
-  const unscoped: Record<string, string> = Object.create(null) as Record<string, string>;
-  for (const [family, substitution] of substitutions) if (!substitution.script) unscoped[family] = substitution.family;
-  return Object.keys(unscoped).length ? { ...chart, fontSubstitutions: Object.freeze(unscoped) } : chart;
-}
 
 /**
  * Stable string key for a {@link HyperlinkTarget} so adjacent same-format runs
@@ -8998,7 +8984,7 @@ async function renderSlideLeased(
         applyFrameTransform(ctx, el, scale);
         renderChart(
           ctx,
-          chartWithFontSubstitutions(el.chart, rc.fontSubstitutions),
+          withChartFontSubstitutions(el.chart, chartFontSubstitutions(rc.fontSubstitutions)),
           {
             x: emuToPx(el.x, scale),
             y: emuToPx(el.y, scale),

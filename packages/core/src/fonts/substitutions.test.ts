@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { GOOGLE_FONT_SUBSTITUTES } from './google-fonts.js';
 import {
   OFFICE_FONT_SUBSTITUTIONS,
   loadedRegularAliases,
@@ -9,14 +8,12 @@ import {
 } from './substitutions.js';
 
 describe('vendor-neutral Office substitutions', () => {
-  it('carry exactly the substitution policy of the former table, without URLs', () => {
-    const policy = Object.entries(GOOGLE_FONT_SUBSTITUTES)
-      .filter(([key, entry]) => entry.loadFamily && entry.loadFamily.toLowerCase() !== key)
-      .map(([key, entry]) => ({ for: key, use: entry.loadFamily, script: entry.script ?? null }));
-    expect(OFFICE_FONT_SUBSTITUTIONS.map((entry) => ({
-      for: entry.for.toLowerCase(), use: entry.use, script: entry.script ?? null,
-    }))).toEqual(policy);
+  // The served family and scope of every former table entry are pinned by the
+  // frozen oracle in presets/google-fonts.test.ts; the policy itself names
+  // no provider and no URL.
+  it('carry no URL and no provider naming', () => {
     expect(JSON.stringify(OFFICE_FONT_SUBSTITUTIONS)).not.toMatch(/https?:|google/i);
+    expect(Object.isFrozen(OFFICE_FONT_SUBSTITUTIONS)).toBe(true);
   });
 });
 

@@ -3066,7 +3066,7 @@ impl ThemeColors {
 
     /// Read a theme typeface directly by group ("major" / "minor") and axis
     /// ("latin" / "ea" / "cs"). Used by the document loader to expose the
-    /// heading / body fonts to TS callers (e.g. for Google Fonts preload).
+    /// heading / body fonts to TS callers (e.g. for font-source demand).
     pub fn theme_font(&self, group: &str, axis: &str) -> Option<String> {
         self.fonts.get(&format!("{group}/{axis}")).cloned()
     }

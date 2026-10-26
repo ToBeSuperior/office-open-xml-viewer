@@ -1745,7 +1745,7 @@ function appendRunsToSegments(
             segment.metricOnly = true;
             // An absent authored face (native CSS fallback) has no selected-face
             // metric, so the host's vertical box comes from its painting face.
-            // Every present face (embedded, local, substitute, CSS, Google)
+            // Every present face (embedded, local, substitute, CSS, font source)
             // keeps its established metric-only behaviour.
             if (segment.fontSource === 'native' && segment.fontInstalledFamily !== true) segment.metricProbeText = 'x';
             segment.sourceRunIndex = runIndex;

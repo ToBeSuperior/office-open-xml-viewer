@@ -14,6 +14,7 @@ import {
   fontFamilyKey,
   type FontDemand,
 } from '@silurus/ooxml-core/internal/font-sources';
+import { chartFontFamilies } from '@silurus/ooxml-core/internal/chart-font-sources';
 import type { Slide, SlideElement, TextBody } from './types';
 import { officeFaceWeight } from './powerpoint-line-metrics.js';
 
@@ -191,7 +192,7 @@ export class PptxFontPreloadAccumulator {
         this.demand.tuples.set(`${fontFamilyKey(tuple.family)}:${tuple.weight}:${tuple.style}`, tuple);
       }
       for (const el of slide.elements) {
-        if (el.type === 'chart') for (const family of pptxChartFontFamilies(el.chart)) this.families.add(family);
+        if (el.type === 'chart') for (const family of chartFontFamilies(el.chart)) this.families.add(family);
       }
     }
   }
@@ -361,39 +362,4 @@ export function pptxSlideOfficeFontRequests(
 export function pptxSlideCjkFallback(slide: Slide, major: string | null, minor: string | null, fallback: CjkLang): CjkLang {
   return cjkFallbackForText(pptxSlideTextRuns(slide),
     classifyCjkFont(major) ?? classifyCjkFont(minor) ?? fallback);
-}
-
-/** Keys of a chart model whose string value names a text face: every
- * `…FontFace` / `fontFace` (title, axes, axis titles, data labels, legend,
- * legend entries, rich runs, secondary axes) and the theme faces charts
- * default to (ECMA-376 §21.2.2.216 txPr, §20.1.4.2 font scheme). */
-const CHART_FACE_KEY = /^(?:fontFace|[A-Za-z]+FontFace|themeMajorFontLatin|themeMinorFontLatin)$/;
-
-/** The families a chart paints with, from one generic walk over its model, so
- * a face named only by a chart is demanded too. Theme references (`+mj-*` /
- * `+mn-*`, §20.1.4.1.16) resolve to the chart's theme faces. The library
- * fallback faces of chart stacks (Calibri, Arial) are not demanded: they are
- * fallbacks, painted with a source face only when one loaded for them. */
-export function pptxChartFontFamilies(chart: unknown): string[] {
-  const families = new Set<string>();
-  const model = chart as { themeMajorFontLatin?: string | null; themeMinorFontLatin?: string | null } | null;
-  const pending: unknown[] = [chart];
-  const seen = new Set<object>();
-  while (pending.length) {
-    const value = pending.pop();
-    if (value === null || typeof value !== 'object' || seen.has(value) || ArrayBuffer.isView(value)) continue;
-    seen.add(value);
-    for (const [key, child] of Object.entries(value)) {
-      if (typeof child === 'string') {
-        if (!CHART_FACE_KEY.test(key)) continue;
-        const face = child.startsWith('+mj') ? model?.themeMajorFontLatin
-          : child.startsWith('+mn') ? model?.themeMinorFontLatin : child;
-        const name = face?.trim();
-        if (name && !name.startsWith('+')) families.add(name);
-      } else if (child !== null && typeof child === 'object') {
-        pending.push(child);
-      }
-    }
-  }
-  return [...families];
 }

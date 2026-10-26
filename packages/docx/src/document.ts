@@ -50,7 +50,7 @@ import { mainThreadFallbackWarning } from './main-thread-fallback.js';
 import { admitDocxNativeRouteLines, measureDocxNativeRouteLines } from './native-route-line-metrics.js';
 import { buildBookmarkPageMap } from './bookmark-nav';
 import { completeDocxFontPresence, declaredFontSubstitutions, docxFontFamilyPlan, docxOfficeFontFallbackRequests, type DocxOfficeFontPresence } from './font-plan.js';
-import { normalizeFontOptions, type FontSource } from '@silurus/ooxml-core/internal/font-sources';
+import { chartFontSubstitutions, normalizeFontOptions, type FontSource } from '@silurus/ooxml-core/internal/font-sources';
 import { loadEmbeddedFonts } from './embedded-fonts';
 import {
   attachDocumentLayoutRuntime,
@@ -424,6 +424,9 @@ export class DocxDocument {
    *  the SPA (refcounted in core, so a face shared with another open document
    *  survives until both go). */
   private _fontSourceSession: { release(): void } | null = null;
+  /** The unscoped substitutions this document's font sources loaded,
+   *  painted by chart text (ChartModel.fontSubstitutions). */
+  private _chartFontSubstitutions: Readonly<Record<string, string>> | undefined;
   /** One stable closure per instance: core's path-keyed SVG cache namespaces on
    *  this identity, so two open documents never swap a shared zip path (e.g.
    *  word/media/image1.svg). Reusing one reference also lets the SVG cache hit
@@ -996,6 +999,7 @@ export class DocxDocument {
       throw new PaginationAbortError();
     }
     this._fontSourceSession = loaded.session;
+    this._chartFontSubstitutions = chartFontSubstitutions(loaded.loaded.substitutions);
     return {
       installedSubstituteFamilies: plan.installedSubstituteFamilies,
       sourceFonts: { names: loaded.names, loaded: loaded.loaded },
@@ -1478,6 +1482,7 @@ export class DocxDocument {
     this._fontSourceLoad = null;
     const fontSourceSession = this._fontSourceSession;
     this._fontSourceSession = null;
+    this._chartFontSubstitutions = undefined;
     fontSourceSession?.release();
     // Release both image owners keyed by this document's stable loader: the
     // shared decoded owner (base + derived colour surfaces) and the SVG lookup
@@ -1939,6 +1944,7 @@ export class DocxDocument {
       regionMap: this._regionMap,
       chartEx: this._chartEx,
       tiff: this._tiff,
+      chartFontSubstitutions: this._chartFontSubstitutions,
     });
   }
 

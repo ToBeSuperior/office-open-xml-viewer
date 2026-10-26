@@ -8,6 +8,7 @@ import {
   substituteEntryCoversText,
 } from '@silurus/ooxml-core';
 import {
+  chartFontFamilies,
   fontFamilyKey,
   probeFontFamilyPresence,
   substitutionsFor,
@@ -40,6 +41,24 @@ import { docxRenderedTextUsages } from './document-content.js';
  * `font-source-load.ts`, so the default (no source) path never loads the
  * collector's tables.
  */
+
+/** Every chart model of the document (§17.3.3.9 drawing → c:chart), from
+ * one generic walk over the parsed model. */
+function* docxChartModels(doc: DocxDocumentModel): Generator<unknown> {
+  const pending: unknown[] = [doc];
+  const seen = new Set<object>();
+  while (pending.length > 0) {
+    const value = pending.pop();
+    if (value === null || typeof value !== 'object' || seen.has(value) || ArrayBuffer.isView(value)) continue;
+    seen.add(value);
+    const record = value as Record<string, unknown>;
+    if (record.type === 'chart' && record.chart && typeof record.chart === 'object') {
+      yield record.chart;
+      continue;
+    }
+    for (const child of Object.values(record)) if (child !== null && typeof child === 'object') pending.push(child);
+  }
+}
 
 function* docxTextRuns(doc: DocxDocumentModel): Generator<string> {
   for (const usage of docxRenderedTextUsages(doc)) yield usage.text;
@@ -130,6 +149,10 @@ export function docxFontDemandCandidates(
       scripts.addText([usage.text]);
     }
   }
+  // Chart text paints its own faces (title, axes, labels, legend, theme
+  // faces) with the loaded unscoped substitutions (ChartModel
+  // .fontSubstitutions), so a face named only by a chart is demanded too.
+  for (const chart of docxChartModels(doc)) for (const family of chartFontFamilies(chart)) addAuthored(family);
   return {
     authored: [...authored.values()],
     fallback: [...new Set([...scripts.names(), ...languageNames])],

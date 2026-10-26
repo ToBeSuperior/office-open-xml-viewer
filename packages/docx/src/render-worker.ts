@@ -47,7 +47,7 @@ import { prepareMathRuns, renderLayoutSourceToCanvas } from './renderer';
 import { createLayoutServices, nativeRouteLineRequests } from './layout-runtime.js';
 import { completeDocxFontPresence, declaredFontSubstitutions, docxFontFamilyPlan, docxOfficeFontFallbackRequests } from './font-plan.js';
 import { loadDocxFontSources, type DocxLoadedFontSources } from './font-source-load.js';
-import { assertFontSourceDescriptors, type FontSource } from '@silurus/ooxml-core/internal/font-sources';
+import { assertFontSourceDescriptors, chartFontSubstitutions, type FontSource } from '@silurus/ooxml-core/internal/font-sources';
 import { loadEmbeddedFonts } from './embedded-fonts';
 import type {
   RenderWorkerResponse,
@@ -130,6 +130,8 @@ const LAYOUT_PROGRESS_POST_INTERVAL_MS = 100;
 let renderers: LoadedWorkerRenderers = {};
 /** This document's font-source session (LoadOptions.fonts) in self.fonts. */
 let fontSourceSession: DocxLoadedFontSources['session'] | null = null;
+/** The unscoped substitutions it loaded, painted by chart text. */
+let chartFontSubstitutionsOfDoc: Readonly<Record<string, string>> | undefined;
 let embeddedFontFaces: FontFace[] = [];
 let fontDiagnostics: readonly LayoutDiagnostic[] = [];
 let officeFontFaces: FontFace[] = [];
@@ -139,6 +141,7 @@ function releaseRetainedFonts(): void {
   const embedded = embeddedFontFaces;
   officeFontFaces = [];
   fontSourceSession = null;
+  chartFontSubstitutionsOfDoc = undefined;
   embeddedFontFaces = [];
   try { unloadOfficeFontFallbacks(office); } catch {}
   try { sources?.release(); } catch {}
@@ -447,6 +450,7 @@ self.onmessage = async (e: MessageEvent<RenderWorkerWireRequest | WorkerSvgDecod
         if (requestedGeneration !== parseGeneration) throw new Error('render-worker parse was superseded');
         officeFontFaces = officeFaces;
         fontSourceSession = loadedSources?.session ?? null;
+        chartFontSubstitutionsOfDoc = chartFontSubstitutions(loadedSources?.loaded.substitutions);
         embeddedFontFaces = embeddedFonts.faces;
         fontDiagnostics = embeddedFonts.diagnostics ?? [];
         fontsTransferred = true;
@@ -581,6 +585,7 @@ self.onmessage = async (e: MessageEvent<RenderWorkerWireRequest | WorkerSvgDecod
         regionMap: renderers.regionMap,
         chartEx: renderers.chartEx,
         tiff: renderers.tiff,
+        chartFontSubstitutions: chartFontSubstitutionsOfDoc,
       });
       const runs = textRunsForSelectedPage(doc.layoutServices, req.pageIndex, {
         ...req.opts,

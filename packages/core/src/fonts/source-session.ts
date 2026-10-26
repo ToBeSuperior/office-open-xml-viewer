@@ -1,8 +1,8 @@
 /**
  * `FontSourceSession`: one document's font sources in one painting realm.
  *
- * The generalisation of `GoogleFontPreloadLease` (`preload.ts`) to every
- * source kind. Library resource policy, not OOXML behaviour: ECMA-376 names
+ * One generic loader for every source kind (descriptor-only sources and
+ * application resolvers alike). Library resource policy, not OOXML behaviour: ECMA-376 names
  * faces but leaves their provision to the host. Each {@link
  * FontSourceSession.ensure} takes a demand delta and
  *
@@ -49,8 +49,7 @@ import {
 } from '../worker/resource-policy.generated.js';
 import { parseUnicodeRange, resolveCssSource } from './css-source.js';
 import { claimFromIndex, indexFontDeclarations, resolveFontFiles } from './files-source.js';
-import { releaseFaces, retainFace } from './font-registry.js';
-import { activeFontSet, FONT_LOAD_CEILING_MS } from './preload.js';
+import { activeFontSet, FONT_LOAD_CEILING_MS, releaseFaces, retainFace } from './font-registry.js';
 import {
   acquireSourceCache,
   chargeRetainedBytes,

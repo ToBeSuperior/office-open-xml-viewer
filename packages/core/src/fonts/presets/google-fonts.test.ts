@@ -1,14 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { GOOGLE_FONT_SUBSTITUTES } from '../google-fonts.js';
-import { SCRIPT_GOOGLE_FONTS } from '../scripts.js';
 import { assertFontSourceDescriptors, cssApiRequests, type CssApiSource } from '../source.js';
 import { GOOGLE_FONTS_CATALOG, googleFonts } from './google-fonts.js';
+import { cjkFallbackChain, NON_CJK_SANS_FALLBACKS, NON_CJK_SERIF_FALLBACKS } from '../scripts.js';
+import { arabicFallbackFamilies } from '../font-stack.js';
 
 /**
- * Oracle: every request the loaders issue with `useGoogleFonts: true`, frozen
- * from the per-format tables (`DOCX_GOOGLE_FONTS`, `PPTX_GOOGLE_FONTS`,
- * `XLSX_GOOGLE_FONTS`, each exactly `GOOGLE_FONT_SUBSTITUTES` +
- * `SCRIPT_GOOGLE_FONTS`) as of 0.89.4. Row: authored family key, the former
+ * Oracle: every request the loaders issued with `useGoogleFonts: true`, frozen
+ * from the former per-format tables (`DOCX_GOOGLE_FONTS`, `PPTX_GOOGLE_FONTS`,
+ * `XLSX_GOOGLE_FONTS`, each exactly the former `GOOGLE_FONT_SUBSTITUTES` +
+ * `SCRIPT_GOOGLE_FONTS`) as of 0.89.4, which no longer exist. Row: authored family key, the former
  * `loadFamily` (the family the request serves, when recorded), script scope,
  * and the CSS2 `family=` value. The preset must issue byte-identical requests.
  */
@@ -71,15 +71,6 @@ function onlyRequest(source: CssApiSource, family: string) {
 }
 
 describe('googleFonts() preset', () => {
-  it('freezes exactly the requests of the current per-format tables', () => {
-    const live = { ...GOOGLE_FONT_SUBSTITUTES, ...SCRIPT_GOOGLE_FONTS };
-    expect(Object.fromEntries(LEGACY_REQUESTS.map(([key, served, script, family]) => [key, {
-      url: legacyUrl(family),
-      ...(served ? { loadFamily: served } : {}),
-      ...(script ? { script } : {}),
-    }]))).toEqual(live);
-  });
-
   it('issues byte-identical requests and the same served family and scope per authored name', () => {
     const source = googleFonts();
     for (const [key, served, script, family] of LEGACY_REQUESTS) {
@@ -107,6 +98,19 @@ describe('googleFonts() preset', () => {
     // Distinct Office faces without a compatible substitute stay unanswered.
     for (const family of ['Calibri Light', 'Cambria Math', 'Noto Serif CJK HK', 'Noto Serif HK']) {
       expect(cssApiRequests(source, family), family).toEqual([]);
+    }
+  });
+
+  it('serves every library fallback family a renderer stack may append', () => {
+    const source = googleFonts();
+    const fallbacks = new Set([
+      ...(['kr', 'sc', 'tc', 'hk', 'jp'] as const).flatMap((lang) =>
+        [...cjkFallbackChain(lang, 'sans'), ...cjkFallbackChain(lang, 'serif')]),
+      ...NON_CJK_SANS_FALLBACKS, ...NON_CJK_SERIF_FALLBACKS,
+      ...arabicFallbackFamilies(true), ...arabicFallbackFamilies(false),
+    ]);
+    for (const family of fallbacks) {
+      expect(onlyRequest(source, family).family, family).toBe(family);
     }
   });
 
