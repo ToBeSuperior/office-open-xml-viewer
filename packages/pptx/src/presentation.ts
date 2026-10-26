@@ -63,6 +63,7 @@ import { ProgressiveLayoutLifecycle } from '@silurus/ooxml-core/internal/progres
 import { ProgressiveLayoutObserverNotifier } from '@silurus/ooxml-core/internal/progressive-layout-observers';
 import { pptxSlideOfficeFontRequests, type PptxFontDemandFacts } from './font-requests';
 import {
+  FontResolverBridgeHost,
   normalizeFontOptions,
   type FontSource,
   type FontSourceSession,
@@ -270,6 +271,10 @@ export class PptxPresentation {
    *  the SPA (refcounted in core, so a face shared with another open deck
    *  survives until both go). */
   private _fontSources: FontSourceSession | null = null;
+  /** Worker mode: runs this deck's `fontResolver` functions for the worker's
+   *  font-source session (core `resolver-bridge-host.ts`); disposed in
+   *  {@link destroy}, which aborts every in-flight resolver call. */
+  private _fontResolverBridge: FontResolverBridgeHost | null = null;
   /** Presence of the authored families demanded so far (main mode). */
   private _installedFamilies: import('./font-source-load.js').PptxInstalledFamilies | null = null;
   private readonly _officeFontLoads = new Map<FontFaceSet, Map<string, Promise<LoadedOfficeFontFallbacks>>>();
@@ -494,6 +499,17 @@ export class PptxPresentation {
     await this._fontSources.ensure(demand);
   }
 
+  /** Worker mode: answer the render worker's `fontResolver` calls for the
+   *  document about to be parsed (core `resolver-bridge-host.ts`): resolved
+   *  through this realm's resolution cache and held until destroy. */
+  private _attachFontResolverBridge(fonts: readonly FontSource[] | undefined): void {
+    this._fontResolverBridge?.dispose();
+    this._fontResolverBridge = new FontResolverBridgeHost({
+      post: (message, transfer) => (this._worker.postMessage as (value: unknown, transfer?: Transferable[]) => void)(message, transfer),
+      sources: fonts,
+    });
+  }
+
   private async _parse(
     buffer: ArrayBuffer,
     resourcePolicy: NormalizedOoxmlResourcePolicy,
@@ -503,6 +519,9 @@ export class PptxPresentation {
     renderers?: WorkerRendererDescriptors,
     progressive?: ProgressiveLoad,
   ): Promise<void> {
+    // Every load path (ordinary and model-source loaders alike) parses here,
+    // so the worker's `fontResolver` calls always find their main-side bridge.
+    if (this._mode === 'worker') this._attachFontResolverBridge(fonts);
     if (progressive) {
       this._progressive = progressive;
       if (this._mode === 'worker') {
@@ -760,6 +779,7 @@ export class PptxPresentation {
   private _onWorkerLayoutPush(
     response: PptxWorkerResponse | RenderWorkerResponse | PullSessionResponse<ArrayBuffer, number>,
   ): void {
+    if (this._fontResolverBridge?.accept(response)) return;
     if (respondToWorkerSvgDecodeRequest(
       (message, transfer) => (
         this._worker.postMessage as (value: unknown, transfer?: Transferable[]) => void
@@ -1539,6 +1559,8 @@ export class PptxPresentation {
     const fontSources = this._fontSources;
     this._fontSources = null;
     fontSources?.release();
+    this._fontResolverBridge?.dispose();
+    this._fontResolverBridge = null;
     // The descriptors may hold application font bytes (fontFiles data,
     // inline data: URLs): a destroyed presentation must not keep them
     // reachable. In worker mode the worker's copy ends with the worker.

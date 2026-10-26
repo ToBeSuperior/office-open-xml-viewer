@@ -53,7 +53,7 @@ import {
   XlsxFontDemand,
   declaredFontSubstitutions,
 } from './font-source-load.js';
-import { assertFontSourceDescriptors, type FontSource } from '@silurus/ooxml-core/internal/font-sources';
+import { assertFontSourceDescriptors, WorkerFontResolverClient, type FontSource } from '@silurus/ooxml-core/internal/font-sources';
 import { officeRequestKey } from './shape-office-line.js';
 import { resolveSharedStringRows } from './shared-strings.js';
 import {
@@ -129,7 +129,7 @@ function startFontLoad(parsed: ParsedWorkbook, sources: readonly FontSource[]): 
       // Same demand, probe and session as main mode, registered into self.fonts.
       fontDemand = new XlsxFontDemand(parsed, cjkFallback, declaredFontSubstitutions(sources));
       installedFamilies = new InstalledFamilyExclusion();
-      fontSources = new FontSourceSession({ sources });
+      fontSources = new FontSourceSession({ sources, ...fontResolverClient.sessionOptions });
       const delta = fontDemand.take();
       if (delta) await fontSources.ensure(await installedFamilies.exclude(delta));
     }
@@ -219,6 +219,10 @@ const rawPost = (msg: unknown, transfer?: Transferable[]) =>
 const post = (msg: RenderWorkerResponse | PullSessionResponse<ArrayBuffer, number>, transfer?: Transferable[]) =>
   rawPost(msg, transfer);
 const svgDecodeClient = new WorkerSvgDecodeClient(rawPost);
+/** Runs `fontResolver` sources on main (core `resolver-bridge.ts`); reset
+ * whenever the workbook's session is reset, so a reply for a released session
+ * is dropped. */
+const fontResolverClient = new WorkerFontResolverClient(rawPost);
 
 /** In-worker image-byte loader (twin of the docx render-worker `getImage`). The
  *  orchestrator's `fetchImage` routes here in worker mode, so image bytes are
@@ -242,6 +246,7 @@ self.onmessage = async (e: MessageEvent<
     svgDecodeClient.accept(req);
     return;
   }
+  if (fontResolverClient.accept(req)) return;
   if (isWorksheetPullCommand(req)) {
     await worksheetPull.dispatchSafely(req, post);
     return;
@@ -322,6 +327,7 @@ self.onmessage = async (e: MessageEvent<
       ownsParseResources = true;
       fontSources?.release();
       fontSources = null;
+      fontResolverClient.reset();
       fontDemand = null;
       installedFamilies = null;
       fontSourceTail = Promise.resolve();
@@ -558,6 +564,7 @@ self.onmessage = async (e: MessageEvent<
       try { unloadOfficeFontFallbacks(officeFontFaces); } catch {}
       try { fontSources?.release(); } catch {}
       fontSources = null;
+      fontResolverClient.reset();
       fontDemand = null;
       installedFamilies = null;
       fontSourceTail = Promise.resolve();

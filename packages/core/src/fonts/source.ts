@@ -617,9 +617,13 @@ let nextResolverId = 1;
 /**
  * Application resolution for authenticated, dynamic or in-memory fonts. The
  * function runs on the main thread only; in worker mode the worker asks main
- * to run it, so credentials and network clients stay in the application. The
- * same function always yields the same id, so documents sharing it share
- * resolutions.
+ * to run it (`resolver-bridge.ts`), so credentials and network clients stay in
+ * the application. The same function always yields the same id, so documents
+ * sharing it share resolutions.
+ *
+ * Returned `data` buffers are owned by the library from then on (cached and
+ * shared across documents of this realm); the application must not modify
+ * them. In worker mode the worker receives a copy; nothing is detached.
  */
 export function fontResolver(resolve: FontResolveFn, options: FontResolverOptions = {}): FontResolverSource {
   if (typeof resolve !== 'function') throw new TypeError('fontResolver() requires a function');

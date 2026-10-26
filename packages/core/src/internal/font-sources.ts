@@ -48,12 +48,24 @@ export { fontSourceLimitError } from '../errors/font-source-limit.js';
 export {
   FontSourceSession,
   normalizeFontDemand,
+  type FontResolverFailures,
   type FontResolverRunner,
   type FontSourceSessionOptions,
   type LoadedFontSources,
   type LoadedSourceFace,
 } from '../fonts/source-session.js';
 export { fetchFontStylesheet, parseFontFaceCss, parseUnicodeRange } from '../fonts/css-source.js';
+export {
+  WorkerFontResolverClient,
+  isMainFontResolveReply,
+  isWorkerFontResolveMessage,
+  type FontResolveOutcome,
+  type MainFontResolveReply,
+  type WorkerFontResolveCancel,
+  type WorkerFontResolveMessage,
+  type WorkerFontResolveRequest,
+} from '../fonts/resolver-bridge.js';
+export { FontResolverBridgeHost, type FontResolverBridgeHostOptions } from '../fonts/resolver-bridge-host.js';
 export {
   USE_GOOGLE_FONTS_DEPRECATION_MESSAGE,
   normalizeFontOptions,

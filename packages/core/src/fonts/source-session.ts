@@ -48,7 +48,15 @@ import {
   HARD_MAX_FONT_SOURCE_FAMILIES,
 } from '../worker/resource-policy.generated.js';
 import { parseUnicodeRange, resolveCssSource } from './css-source.js';
-import { claimFromIndex, indexFontDeclarations, resolveFontFiles } from './files-source.js';
+import { resolveFontFiles } from './files-source.js';
+import { concludeFamilies } from './resolver-failures.js';
+import {
+  resolveFamiliesThroughCache,
+  runResolverInRealm,
+  substituteScriptsOf,
+  type FontResolverFailures,
+  type FontResolverRunner,
+} from './resolver-resolution.js';
 import { activeFontSet, FONT_LOAD_CEILING_MS, releaseFaces, retainFace } from './font-registry.js';
 import {
   acquireSourceCache,
@@ -56,26 +64,21 @@ import {
   fontContentKey,
   refundRetainedBytes,
   retainedFontSourceBytes,
-  SharedTask,
   type FamilyResolution,
   type SourceCache,
 } from './source-cache.js';
 import {
   assertFontSourceDescriptors,
   dataUrlDecodedByteLength,
-  fontResolverFunction,
-  validateFontFaceDeclaration,
   type FontDemand,
   type FontFaceDeclaration,
-  type FontResolveContext,
   type FontResolverSource,
   type FontSource,
 } from './source.js';
-import { FONT_SUBSTITUTE_SCRIPTS, type FontSubstituteScript } from './substitute-script.js';
+import type { FontSubstituteScript } from './substitute-script.js';
 import {
   fontFamilyKey,
   loadedRegularAliases,
-  scopedFamilyKey,
   type FontSubstituteScripts,
   type FontSubstitution,
 } from './substitutions.js';
@@ -104,13 +107,7 @@ export interface LoadedFontSources {
   readonly regularAliases: ReadonlyMap<string, string>;
 }
 
-/** Runs one `font-resolver` source. The worker bridge supplies its own
- * implementation; the default calls this realm's function directly. */
-export type FontResolverRunner = (
-  source: FontResolverSource,
-  demand: FontDemand,
-  context: FontResolveContext,
-) => readonly unknown[] | Promise<readonly unknown[]>;
+export type { FontResolverFailures, FontResolverRunner };
 
 export interface FontSourceSessionOptions {
   /** The `fonts` option value; validated here. */
@@ -120,6 +117,13 @@ export interface FontSourceSessionOptions {
   /** Aborting releases the session and rejects pending and later ensures. */
   readonly signal?: AbortSignal;
   readonly runResolver?: FontResolverRunner;
+  /** Resolver failures shared by every requester of one document (XLSX: the
+   * viewer-realm sessions and the worker bridge); see `resolver-resolution.ts`. */
+  readonly resolverFailures?: FontResolverFailures;
+  /** The runner enforces the font ceiling itself and always settles (the
+   * worker bridge, whose main side times calls out and records the outcome
+   * for the whole document), so resolver waits ignore this realm's ceiling. */
+  readonly resolverCeilingOwnedByRunner?: boolean;
 }
 
 const EMPTY_SNAPSHOT: LoadedFontSources = Object.freeze({
@@ -143,23 +147,6 @@ interface DemandedName {
   readonly name: string;
   readonly fallback: boolean;
   readonly scripts: FontSubstituteScripts;
-}
-
-const KNOWN_SUBSTITUTE_SCRIPTS: ReadonlySet<string> = new Set<FontSubstituteScript>(FONT_SUBSTITUTE_SCRIPTS);
-
-function substituteScriptsOf(value: unknown): (name: string) => FontSubstituteScripts {
-  if (value === undefined) return () => 'all';
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new TypeError('font demand substituteScripts must be an object');
-  }
-  const scripts = new Map<string, readonly FontSubstituteScript[]>();
-  for (const [family, list] of Object.entries(value)) {
-    if (!Array.isArray(list) || !list.every((script) => typeof script === 'string' && KNOWN_SUBSTITUTE_SCRIPTS.has(script))) {
-      throw new TypeError(`font demand substituteScripts[${JSON.stringify(family)}] must list substitute scripts`);
-    }
-    scripts.set(fontFamilyKey(family), Object.freeze([...new Set(list as FontSubstituteScript[])].sort()));
-  }
-  return (name) => scripts.get(fontFamilyKey(name)) ?? [];
 }
 
 function familyList(value: unknown, location: string): string[] {
@@ -241,9 +228,12 @@ function cssUrl(url: string): string {
 const isAbortError = (error: unknown) => error instanceof Error && error.name === 'AbortError';
 
 /** A signal aborted by `parent` or after `ms`; `dispose()` clears the timer. */
-function ceilingSignal(parent: AbortSignal, ms: number): { signal: AbortSignal; expired: () => boolean; dispose: () => void } {
+function ceilingSignal(parent: AbortSignal, ms: number): {
+  signal: AbortSignal; expired: () => boolean; remaining: () => number; dispose: () => void;
+} {
   const controller = new AbortController();
   let expired = false;
+  const deadline = Date.now() + ms;
   const onAbort = () => controller.abort();
   parent.addEventListener('abort', onAbort, { once: true });
   const timer = setTimeout(() => { expired = true; controller.abort(); }, ms);
@@ -251,6 +241,7 @@ function ceilingSignal(parent: AbortSignal, ms: number): { signal: AbortSignal; 
   return {
     signal: controller.signal,
     expired: () => expired,
+    remaining: () => (expired ? 0 : Math.max(0, deadline - Date.now())),
     // Abandon whatever still waits on this phase (a sibling rejected first).
     dispose: () => { clearTimeout(timer); parent.removeEventListener('abort', onAbort); controller.abort(); },
   };
@@ -344,6 +335,8 @@ export class FontSourceSession {
   private caches: readonly SourceCache[];
   private fontSet: FontFaceSet | null;
   private runResolver: FontResolverRunner;
+  private resolverFailures: FontResolverFailures | undefined;
+  private readonly runnerOwnsCeiling: boolean;
   private readonly controller = new AbortController();
   private detachSignal: () => void = () => undefined;
   private closed = false;
@@ -361,6 +354,8 @@ export class FontSourceSession {
     this.sources = assertFontSourceDescriptors(options.sources);
     this.fontSet = options.fontSet === undefined ? activeFontSet() : options.fontSet;
     this.runResolver = options.runResolver ?? runResolverInRealm;
+    this.resolverFailures = options.resolverFailures;
+    this.runnerOwnsCeiling = options.resolverCeilingOwnedByRunner === true;
     this.caches = this.sources.map(acquireSourceCache);
     const signal = options.signal;
     if (signal) {
@@ -415,6 +410,7 @@ export class FontSourceSession {
     this.sources = [];
     this.fontSet = null;
     this.runResolver = releasedRunner;
+    this.resolverFailures = undefined;
     this.warned.clear();
     this.snapshot = EMPTY_SNAPSHOT;
   }
@@ -498,13 +494,33 @@ export class FontSourceSession {
       for (let sourceIndex = 0; sourceIndex < this.sources.length && pending.length; sourceIndex++) {
         if (this.closed) throw createAbortError('Font source session released');
         let answers: ReadonlyMap<string, FamilyResolution>;
+        const source = this.sources[sourceIndex];
+        // A runner that owns the deadline (the worker bridge: main times the
+        // call out for the whole document) is not abandoned at this realm's
+        // ceiling; only a release aborts the wait.
+        const sourceSignal = source.kind === 'font-resolver' && this.runnerOwnsCeiling
+          ? this.controller.signal : ceiling.signal;
         try {
-          answers = await this.resolveWithSource(sourceIndex, pending, tuples, ceiling.signal);
+          answers = await this.resolveWithSource(sourceIndex, pending, tuples, sourceSignal, ceiling.remaining);
         } catch (error) {
-          if (!isAbortError(error) || !ceiling.expired()) throw error;
-          for (const { name } of pending) result.set(fontFamilyKey(name), { kind: 'failed', name, reason: 'timed out' });
-          pending = [];
-          break;
+          const timedOut = isAbortError(error) && ceiling.expired() && sourceSignal === ceiling.signal;
+          if (source.kind !== 'font-resolver') {
+            if (!timedOut) throw error;
+            for (const { name } of pending) result.set(fontFamilyKey(name), { kind: 'failed', name, reason: 'timed out' });
+            pending = [];
+            break;
+          }
+          // A release is no outcome. A timeout or any other error concludes
+          // the batch per family (resolver-failures.ts `concludeFamilies`):
+          // a family this document already decided (another requester's
+          // resolution held in the cache, or a recorded failure) keeps it;
+          // only undecided families fail, recorded for the whole document.
+          if (isAbortError(error) && !timedOut) throw error;
+          const cache = this.caches[sourceIndex];
+          answers = concludeFamilies(this.resolverFailures, cache, pending,
+            timedOut ? 'timed out' : error instanceof Error ? error.message : String(error), cache);
+          // A ceiling breach still rejects the ensure.
+          if (!timedOut) throw error;
         }
         const next: typeof pending[number][] = [];
         for (const entry of pending) {
@@ -533,6 +549,7 @@ export class FontSourceSession {
     families: NormalizedDemand['names'],
     tuples: FontDemand['tuples'],
     signal: AbortSignal,
+    remainingMs: () => number,
   ): Promise<ReadonlyMap<string, FamilyResolution>> {
     const source = this.sources[sourceIndex];
     const cache = this.caches[sourceIndex];
@@ -546,53 +563,27 @@ export class FontSourceSession {
       case 'font-files':
         return resolveFontFiles(source, cache, names, scriptsOf);
       case 'font-resolver':
-        return this.resolveWithResolver(source, cache, families, tuples, signal);
+        return this.resolveWithResolver(source, sourceIndex, cache, families, tuples, signal, remainingMs);
     }
   }
 
-  /** One resolver call for the families no session has resolved through this
-   * source identity yet; cached families join earlier results. The batch
-   * result is handed out per family (each family takes and removes its own
-   * entry) and only per-family results are cached, so nothing outlives the
-   * call except what each family claimed and was charged for: unclaimed or
-   * rejected declarations are unreachable once the call settles. */
-  private async resolveWithResolver(
+  /** Resolve through the realm's shared resolution cache (one application
+   * call per family across every requester; `resolver-resolution.ts`). */
+  private resolveWithResolver(
     source: FontResolverSource,
+    sourceIndex: number,
     cache: SourceCache,
     families: NormalizedDemand['names'],
     tuples: FontDemand['tuples'],
     signal: AbortSignal,
+    remainingMs: () => number,
   ): Promise<ReadonlyMap<string, FamilyResolution>> {
-    const needed: NormalizedDemand['names'] = families.filter(({ name, scripts }) =>
-      !cache.families.has(scopedFamilyKey(name, scripts)));
-    let call: SharedTask<Map<string, FamilyResolution>> | undefined;
-    if (needed.length) {
-      const neededKeys = new Set(needed.map(({ name }) => fontFamilyKey(name)));
-      const demand: FontDemand = Object.freeze({
-        families: Object.freeze(needed.filter((entry) => !entry.fallback).map(({ name }) => name)),
-        fallbackFamilies: Object.freeze(needed.filter((entry) => entry.fallback).map(({ name }) => name)),
-        tuples: Object.freeze(tuples.filter((tuple) => neededKeys.has(fontFamilyKey(tuple.family)))),
-        scalars: this.all ? 'all' : Object.freeze([...this.points].sort((a, b) => a - b)),
-        ...(needed.some(({ scripts }) => scripts !== 'all') ? {
-          substituteScripts: Object.freeze(Object.fromEntries(needed.flatMap(({ name, scripts }) =>
-            scripts === 'all' ? [] : [[fontFamilyKey(name), scripts] as const]))),
-        } : {}),
-      });
-      const runner = this.runResolver;
-      call = new SharedTask((callSignal) => callResolver(runner, source, demand, callSignal), () => undefined);
-    }
-    const entries = await Promise.all(families.map(async ({ name, scripts }) => {
-      const key = fontFamilyKey(name);
-      const answer = await cache.families.join(scopedFamilyKey(name, scripts), async (taskSignal) => {
-        if (!call) return { kind: 'absent' } satisfies FamilyResolution;
-        const batch = await call.join(taskSignal);
-        const own = batch.get(key) ?? { kind: 'absent' };
-        batch.delete(key);
-        return own;
-      }, signal, cache);
-      return [key, answer] as const;
-    }));
-    return new Map(entries);
+    return resolveFamiliesThroughCache({
+      source, cache, runner: this.runResolver, families, tuples,
+      scalars: this.all ? 'all' : [...this.points].sort((a, b) => a - b),
+      signal, holder: cache, sourceIndex, remainingMs,
+      ...(this.resolverFailures ? { failures: this.resolverFailures } : {}),
+    });
   }
 
   /** Admit and register one claimed family's declarations, in order. */
@@ -738,57 +729,6 @@ export class FontSourceSession {
   }
 }
 
-/**
- * Run one shared resolver call. Module-level and given its runner explicitly:
- * the call is shared by every session waiting on the same families, so it
- * must not read any session's state. The runner of the session that created
- * the call is kept by the call until it settles, so releasing that session
- * (which drops its own runner reference) never breaks the other waiters.
- */
-async function callResolver(
-runResolver: FontResolverRunner,
-source: FontResolverSource,
-  demand: FontDemand,
-  signal: AbortSignal,
-): Promise<Map<string, FamilyResolution>> {
-  const failAll = (reason: string) => new Map(
-    [...demand.families, ...demand.fallbackFamilies].map((name) =>
-      [fontFamilyKey(name), { kind: 'failed', reason } satisfies FamilyResolution]));
-  let raw: readonly unknown[];
-  try {
-    raw = await runResolver(source, demand, Object.freeze({ signal }));
-  } catch (error) {
-    if (signal.aborted) throw error;
-    return failAll(error instanceof Error ? error.message : String(error));
-  }
-  if (signal.aborted) throw createAbortError('Font resolver abandoned');
-  if (!Array.isArray(raw)) return failAll('resolver did not return an array');
-  if (raw.length > HARD_MAX_FONT_SOURCE_DECLARATIONS) {
-    throw fontSourceLimitError('declarations', HARD_MAX_FONT_SOURCE_DECLARATIONS, raw.length);
-  }
-  let declarations: FontFaceDeclaration[];
-  try {
-    declarations = raw.map((entry, index) =>
-      validateFontFaceDeclaration(entry, `font resolver declaration ${index}`));
-  } catch (error) {
-    if (!(error instanceof TypeError)) throw error;
-    return failAll(error.message);
-  }
-  const index = indexFontDeclarations(declarations);
-  const scriptsOf = substituteScriptsOf(demand.substituteScripts);
-  const restricted = demand.substituteScripts !== undefined;
-  return new Map([...demand.families, ...demand.fallbackFamilies].map((name) =>
-    [fontFamilyKey(name), claimFromIndex(index, name, source.substitutes, restricted ? scriptsOf(name) : 'all')]));
-}
-
 const releasedRunner: FontResolverRunner = () => {
   throw createAbortError('Font source session released');
-};
-
-/** Main-realm resolver execution: the application function behind a
- * descriptor this realm's `fontResolver()` issued. */
-const runResolverInRealm: FontResolverRunner = (source, demand, context) => {
-  const resolve = fontResolverFunction(source);
-  if (!resolve) throw new Error('font resolver function is not available in this realm');
-  return resolve(demand, context);
 };
