@@ -450,6 +450,9 @@ describe('PPTX chart picture-marker preload', () => {
     // The worker render path passes its host SVG bridge through this entry.
     await renderSlideWithEmbeddedFonts(canvas(), slide, 9_144_000, 6_858_000, {
       width: 960, dpr: 1, fetchImage, svgDecoder,
+      // Strict planning keeps the fitting 12x10 PNG at its native grid, so the
+      // leaked entry would carry a 120-pixel retained ceiling.
+      imageResources: { strategy: 'strict' },
     });
 
     // The SVG is rasterized for its own display coverage; the raster plan's
