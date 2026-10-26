@@ -5,6 +5,7 @@ import {
 import { ownValue } from '@silurus/ooxml-core/internal/own-key';
 import { inheritCellFontLanguage, usesJapaneseCellFonts } from './internal/cell-font-language.js';
 import { drawShapeStackedText } from './shape-stacked-text.js';
+import { cellXfAt, effectiveCellStyleIndex } from './internal/cell-style.js';
 import type { CjkLang } from '@silurus/ooxml-core';
 import { quoteCssFontFamily } from '@silurus/ooxml-core/internal/css-font-family';
 import { arabicFallbackFamilies, containsArabicFallbackText } from '@silurus/ooxml-core/internal/font-stack';
@@ -1315,30 +1316,13 @@ function applyRunFont(base: CellFont, run: Run): CellFont {
 }
 
 function resolveXf(styles: Styles, styleIndex: number): { font: CellFont; fill: CellFill; border: Border; xf: CellXf } {
-  const xf: CellXf = styles.cellXfs[styleIndex] ?? styles.cellXfs[0] ?? {
+  const xf: CellXf = cellXfAt(styles, styleIndex) ?? {
     fontId: 0, fillId: 0, borderId: 0, numFmtId: 0, alignH: null, alignV: null, wrapText: false,
   };
   const font: CellFont = styles.fonts[xf.fontId] ?? { bold: false, italic: false, underline: false, strike: false, size: DEFAULT_FONT_SIZE, color: null, name: null };
   const fill: CellFill = styles.fills[xf.fillId] ?? { patternType: 'none', fgColor: null, bgColor: null };
   const border: Border = styles.borders[xf.borderId] ?? { left: null, right: null, top: null, bottom: null };
   return { font, fill, border, xf };
-}
-
-function columnStyleIndex(worksheet: Worksheet, col: number): number {
-  const ranges = worksheet.colStyleRanges ?? [];
-  for (let index = ranges.length - 1; index >= 0; index--) {
-    const range = ranges[index];
-    if (col >= range.min && col <= range.max) return range.styleIndex;
-  }
-  return 0;
-}
-
-function effectiveCellStyleIndex(
-  worksheet: Worksheet,
-  cell: Cell | undefined,
-  col: number,
-): number {
-  return cell?.styleIndex ?? columnStyleIndex(worksheet, col);
 }
 
 function wrapTextLines(

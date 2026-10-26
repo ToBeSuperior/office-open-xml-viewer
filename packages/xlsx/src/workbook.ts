@@ -1009,6 +1009,7 @@ export class XlsxWorkbook {
     let nextCacheUsage: WorksheetCacheUsage | undefined;
     let terminalUsage: WorksheetCacheUsage | undefined;
     let terminalAcknowledged = false;
+    let rowsWithoutColumnStyles = false;
     // The compatibility adapter knows the workbook sheet index/name but not
     // the resolved OPC relationship target. Omit `part` rather than fabricate
     // a package address; Rust-originated violations carry the real xl/... path.
@@ -1040,7 +1041,10 @@ export class XlsxWorkbook {
             unit.usage,
             policy,
           );
-          // Faces for these cells load before any of them is measured.
+          // Faces for these cells load before any of them is measured. Without
+          // a preview model the column styles are unknown yet: the terminal
+          // model charges these rows again with them.
+          if (!progress.worksheet) rowsWithoutColumnStyles = true;
           await this.demandWorksheetFonts(progress.worksheet, unit.rows);
           progress.append(unit.rows);
           modelUsage = nextUsage;
@@ -1161,7 +1165,7 @@ export class XlsxWorkbook {
       await this.retainWorksheetOfficeFonts(terminal);
       // Rows were demanded as they streamed in; the terminal model adds its
       // drawings (shapes, charts, slicers).
-      await this.demandWorksheetFonts(terminal);
+      await this.demandWorksheetFonts(terminal, rowsWithoutColumnStyles ? terminal.rows : undefined);
       const mainFonts = typeof document !== 'undefined' ? document.fonts : undefined;
       const mainOffice = mainFonts ? this.retainedFontSets.get(mainFonts)?.loaded?.office : undefined;
       bindXlsxWorksheetOfficeFontRoutes(terminal, mainOffice?.routes, this.loadedFontSources(mainFonts));

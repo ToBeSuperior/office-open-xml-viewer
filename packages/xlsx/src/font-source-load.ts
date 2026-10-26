@@ -35,7 +35,8 @@ import {
 } from '@silurus/ooxml-core/internal/font-sources';
 import { usesJapaneseCellFonts } from './internal/cell-font-language.js';
 import { numberFormatPaintTexts } from './number-format.js';
-import type { CellFont, ParsedWorkbook, Row, ShapeInfo, Worksheet } from './types.js';
+import type { Cell, CellFont, ParsedWorkbook, Row, ShapeInfo, Worksheet } from './types.js';
+import { cellXfAt, effectiveCellStyleIndex } from './internal/cell-style.js';
 
 export { FontSourceSession, InstalledFamilyExclusion } from '@silurus/ooxml-core/internal/font-sources';
 
@@ -208,8 +209,11 @@ export class XlsxFontDemand {
     if (regular?.[1]?.trim()) this.addFamily(regular[1].trim(), font.bold, font.italic);
   }
 
-  private fontOfStyle(styleIndex: number | undefined): CellFont | undefined {
-    const xf = this.workbook.styles?.cellXfs?.[styleIndex ?? 0];
+  /** The font a cell paints with, through the renderer's effective-style rule
+   * (internal/cell-style.ts: cell style, else its column's style, else Normal). */
+  private fontOfCell(worksheet: Worksheet | undefined, cell: Cell): CellFont | undefined {
+    const index = worksheet ? effectiveCellStyleIndex(worksheet, cell, cell.col) : cell.styleIndex ?? 0;
+    const xf = this.workbook.styles ? cellXfAt(this.workbook.styles, index) : undefined;
     return xf ? this.workbook.styles.fonts?.[xf.fontId] : undefined;
   }
 
@@ -222,7 +226,7 @@ export class XlsxFontDemand {
       const value = cell.value;
       if (value.type === 'error') { this.collector.add(value.error); continue; }
       if (value.type !== 'text') continue;
-      const font = this.fontOfStyle(cell.styleIndex);
+      const font = this.fontOfCell(worksheet, cell);
       const family = font?.name?.trim() || 'Calibri';
       if (value.runs?.length) {
         for (const run of value.runs) {

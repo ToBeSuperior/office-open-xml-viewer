@@ -5,6 +5,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { storedZip } from '../../../tests/fixtures/chart-ex-packages.mjs';
 import { initSync, XlsxArchive } from './wasm/xlsx_parser.js';
 import { XlsxFontDemand } from './font-source-load.js';
+import { OFFICE_FONT_SUBSTITUTIONS } from '@silurus/ooxml-core/internal/font-sources';
 import { renderViewport } from './renderer.js';
 import { resolveSharedStringRows } from './shared-strings.js';
 import type { ParsedWorkbook, Row, Worksheet } from './types.js';
@@ -21,7 +22,7 @@ import type { ParsedWorkbook, Row, Worksheet } from './types.js';
 const MAIN = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
 const REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
 
-function workbookBytes(styles: string, sheet: string, sharedStrings?: string, drawing?: string): Uint8Array {
+function workbookBytes(styles: string, sheet: string, sharedStrings?: string, drawing?: string, cols = ''): Uint8Array {
   return storedZip([
     ['[Content_Types].xml', '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
       + '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
@@ -41,7 +42,7 @@ function workbookBytes(styles: string, sheet: string, sharedStrings?: string, dr
       + '</Relationships>'],
     ['xl/styles.xml', `<styleSheet xmlns="${MAIN}">${styles}</styleSheet>`],
     ...(sharedStrings ? [['xl/sharedStrings.xml', `<sst xmlns="${MAIN}">${sharedStrings}</sst>`]] : []),
-    ['xl/worksheets/sheet1.xml', `<worksheet xmlns="${MAIN}" xmlns:r="${REL}"><sheetData>${sheet}</sheetData>${drawing ? '<drawing r:id="rIdD"/>' : ''}</worksheet>`],
+    ['xl/worksheets/sheet1.xml', `<worksheet xmlns="${MAIN}" xmlns:r="${REL}">${cols}<sheetData>${sheet}</sheetData>${drawing ? '<drawing r:id="rIdD"/>' : ''}</worksheet>`],
     ...(drawing ? [
       ['xl/worksheets/_rels/sheet1.xml.rels', `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdD" Type="${REL}/drawing" Target="../drawings/drawing1.xml"/></Relationships>`],
       ['xl/drawings/drawing1.xml', '<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">'
@@ -227,4 +228,53 @@ describe('XLSX font demand covers every measured or painted scalar', () => {
     // The invariant is vacuous for 'all' demand; record that some sheets are finite.
     expect(outcomes).toContain('finite');
   }, 120_000);
+});
+
+describe('cell text is charged to the face the renderer paints it with', () => {
+  const styles = '<fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><sz val="11"/><name val="Sakkal Majalla"/></font></fonts>'
+    + base + '<cellXfs count="2"><xf numFmtId="0" fontId="0"/><xf numFmtId="0" fontId="1"/></cellXfs>';
+  const arabic = 'مرحبا';
+  const painted = (workbook: ParsedWorkbook, ws: Worksheet) => {
+    const fonts: string[] = [];
+    let font = '10px serif';
+    const noop = () => {};
+    const ctx = new Proxy({
+      get font() { return font; }, set font(value: string) { font = value; },
+      canvas: { width: 800, height: 400 }, globalAlpha: 1,
+      measureText: (text: string) => ({ width: [...text].length * 5, actualBoundingBoxAscent: 8, actualBoundingBoxDescent: 2, fontBoundingBoxAscent: 8, fontBoundingBoxDescent: 2 }),
+      fillText: (text: string) => { if (text.includes(arabic)) fonts.push(font); },
+      createLinearGradient: () => ({ addColorStop: noop }), createRadialGradient: () => ({ addColorStop: noop }),
+      createPattern: () => null, getLineDash: () => [],
+      getTransform: () => ({ a: 1, b: 0, c: 0, d: 1, e: 0, f: 0, isIdentity: true }),
+    } as Record<string | symbol, unknown>, {
+      get(target, key) { return key in target ? target[key] : noop; },
+      set(target, key, value) { target[key] = value; return true; },
+    }) as unknown as CanvasRenderingContext2D;
+    renderViewport(ctx, ws, workbook.styles, { row: 1, col: 1, rows: 5, cols: 3 }, { dpr: 1, loadedImages: new Map() }, 'jp');
+    return fonts;
+  };
+  const provenFor = (sheetXml: string, cols = '') => {
+    const { workbook, sheets } = parse(workbookBytes(styles, sheetXml, undefined, undefined, cols));
+    const ws = sheets[0]!;
+    const demand = new XlsxFontDemand(workbook, 'jp', OFFICE_FONT_SUBSTITUTIONS);
+    demand.take();
+    demand.worksheetParts(ws);
+    demand.newRowsOf(ws);
+    return { scripts: demand.take()?.substituteScripts?.['sakkal majalla'] ?? [], paint: painted(workbook, ws) };
+  };
+
+  it('a cell without c@s in a column styled with the scoped face proves its script', () => {
+    const { scripts, paint } = provenFor(`<row r="1"><c r="A1" t="inlineStr"><is><t>${arabic}</t></is></c></row>`,
+      '<cols><col min="1" max="1" width="20" style="1"/></cols>');
+    expect(paint.length).toBeGreaterThan(0);
+    for (const font of paint) expect(font).toContain('"Sakkal Majalla"');
+    expect(scripts).toContain('arabic');
+  });
+
+  it('a row default style (not in the worksheet model) is not charged, exactly as the renderer paints', () => {
+    const { scripts, paint } = provenFor(`<row r="1" s="1" customFormat="1"><c r="A1" t="inlineStr"><is><t>${arabic}</t></is></c></row>`);
+    expect(paint.length).toBeGreaterThan(0);
+    for (const font of paint) expect(font).not.toContain('Sakkal Majalla');
+    expect(scripts).toEqual([]);
+  });
 });
