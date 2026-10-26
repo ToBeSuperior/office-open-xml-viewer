@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { OoxmlResourceLimitError } from '@silurus/ooxml-core';
+import { buildMergeCoverageIndex } from './merge-coverage-index.js';
 import { getSheetRenderCache } from './renderer.js';
 import type { MergeCell, Worksheet } from './types.js';
 
@@ -75,21 +77,7 @@ describe('merge coverage index', () => {
   });
 
   it('marks exactly the cells some merge covers without being its top-left', () => {
-    // Deterministic pseudo-random overlapping, contained, duplicate and
-    // anchor-sharing ranges on a small grid, checked against the definition.
-    let seed = 1958;
-    const next = (bound: number) => {
-      seed = (seed * 1103515245 + 12345) % 2147483648;
-      return 1 + (seed % bound);
-    };
-    for (let trial = 0; trial < 50; trial++) {
-      const merges: MergeCell[] = [];
-      for (let i = 0; i < 6; i++) {
-        const top = next(8), left = next(8);
-        merges.push({ top, left, bottom: top + next(4) - 1, right: left + next(4) - 1 });
-      }
-      merges.push({ ...merges[0] });
-      merges.push({ ...merges[1], bottom: merges[1].bottom + 1 });
+    const expectDefinition = (merges: MergeCell[]) => {
       const expected = new Set<string>();
       for (const m of merges) {
         for (let r = m.top; r <= m.bottom; r++) {
@@ -102,7 +90,65 @@ describe('merge coverage index', () => {
       expect([...cache.mergeSkipSet].sort()).toEqual([...expected].sort());
       expect([...cache.mergeAnchorSet].sort())
         .toEqual([...new Set(merges.map((m) => `${m.top}:${m.left}`))].sort());
+    };
+    // Partial overlap, containment, a shared top-left, a top-left inside
+    // another range, separated runs persisting across bands, and 1×1 ranges.
+    expectDefinition([
+      { top: 1, left: 1, bottom: 3, right: 3 },
+      { top: 2, left: 2, bottom: 5, right: 4 },
+      { top: 1, left: 1, bottom: 2, right: 5 },
+      { top: 4, left: 7, bottom: 9, right: 7 },
+      { top: 6, left: 10, bottom: 9, right: 10 },
+      { top: 7, left: 7, bottom: 7, right: 7 },
+      { top: 8, left: 12, bottom: 8, right: 12 },
+      { top: 2, left: 2, bottom: 2, right: 2 },
+    ]);
+    // Deterministic pseudo-random ranges on a small grid (32-bit LCG).
+    let seed = 1958;
+    const next = (bound: number) => {
+      seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+      return 1 + (seed >>> 8) % bound;
+    };
+    for (let trial = 0; trial < 200; trial++) {
+      const merges: MergeCell[] = [];
+      for (let i = 0; i < 8; i++) {
+        const top = next(10), left = next(10);
+        merges.push({ top, left, bottom: top + next(5) - 1, right: left + next(5) - 1 });
+      }
+      merges.push({ ...merges[0] });
+      merges.push({ ...merges[1], bottom: merges[1].bottom + 1 });
+      expectDefinition(merges);
     }
+  });
+
+  it('reports per-range refusals before the combined coverage budget', () => {
+    const anchors = { resource: 'anchors', operation: 'index-anchors', limit: 2 };
+    const coverage = { resource: 'coverage', operation: 'expand-coverage', limit: 2 };
+    const refusal = (merges: MergeCell[]) => {
+      try {
+        buildMergeCoverageIndex(merges, anchors, coverage);
+      } catch (error) {
+        expect(error).toBeInstanceOf(OoxmlResourceLimitError);
+        const { violation } = (error as OoxmlResourceLimitError).details as {
+          violation: { resource: string; configurable: boolean };
+        };
+        return [violation.resource, violation.configurable];
+      }
+      return undefined;
+    };
+    // Coverage alone (3 continuations) overflows only once combined.
+    const overCoverage: MergeCell[] = [
+      { top: 1, left: 1, bottom: 1, right: 3 },
+      { top: 2, left: 1, bottom: 2, right: 2 },
+    ];
+    expect(refusal(overCoverage)).toEqual(['coverage', true]);
+    // A later range's anchor or malformed coordinates win over it.
+    expect(refusal([...overCoverage, { top: 3, left: 1, bottom: 3, right: 1 }]))
+      .toEqual(['anchors', true]);
+    expect(refusal([
+      { top: 1, left: 1, bottom: 1, right: 3 },
+      { top: 2, left: 1, bottom: 2, right: 1.5 },
+    ])).toEqual(['coverage', false]);
   });
 
   it('keeps an inverted range as an anchor without coverage', () => {

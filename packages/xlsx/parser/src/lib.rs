@@ -1863,7 +1863,6 @@ fn parse_projected_worksheet(
     let mut col_hidden: BTreeMap<u32, bool> = BTreeMap::new();
     let mut outline_pr: Option<crate::types::OutlinePr> = None;
     let mut merge_cells: Vec<MergeCell> = Vec::new();
-    let mut merge_ranges_seen: HashSet<(u32, u32, u32, u32)> = HashSet::new();
     let mut freeze_rows: u32 = 0;
     let mut freeze_cols: u32 = 0;
     // Fallback for an absent sheetFormatPr. 8.43 is this library's UI-width
@@ -2380,21 +2379,12 @@ fn parse_projected_worksheet(
                     .filter(|r| r.split(':').count() == 2)
                     .and_then(worksheet_reference::parse_a1_range)
                 {
-                    // §18.3.1.55 lists the merged ranges; a repeated identical
-                    // `<mergeCell>` names no new cells, so only its first
-                    // occurrence is kept. Overlapping distinct ranges stay as
-                    // authored; consumers resolve them by coverage (see
-                    // `buildMergeCoverageIndex` / markdown
-                    // `clear_merge_continuation_cells`).
-                    if merge_ranges_seen.insert((range.top, range.left, range.bottom, range.right))
-                    {
-                        merge_cells.push(MergeCell {
-                            top: range.top,
-                            left: range.left,
-                            bottom: range.bottom,
-                            right: range.right,
-                        });
-                    }
+                    merge_cells.push(MergeCell {
+                        top: range.top,
+                        left: range.left,
+                        bottom: range.bottom,
+                        right: range.right,
+                    });
                 }
             }
             "conditionalFormatting"
@@ -2835,7 +2825,7 @@ fn parse_projected_worksheet(
         default_col_width_is_ui,
         default_row_height,
         default_row_height_custom,
-        merge_cells,
+        merge_cells: without_repeated_merge_ranges(merge_cells),
         freeze_rows,
         freeze_cols,
         conditional_formats,
@@ -3017,6 +3007,27 @@ fn load_sheet_comments(
 /// placeholder is metadata for a thread, not a second user-visible note. `None`
 /// means the worksheet has no threaded-comment relationship; `Some(empty)`
 /// preserves the fact that a declared part yielded no valid thread records.
+/// §18.3.1.55 lists the merged ranges and does not define a repeated
+/// `<mergeCell>`; a repeat of an identical (corner-normalized) range names no
+/// new cells, so it is dropped (#1958: thousands of repeats of one large
+/// range otherwise multiply every per-range consumer's work). The LAST
+/// occurrence is kept, in place: consumers that key ranges by top-left cell
+/// let a later range win (the renderer's anchor map), and keeping each
+/// range's last position preserves which range wins and the order in which
+/// distinct ranges are painted. Distinct overlapping ranges stay as authored;
+/// consumers resolve them by coverage (`buildMergeCoverageIndex`, markdown
+/// `clear_merge_continuation_cells`).
+fn without_repeated_merge_ranges(merge_cells: Vec<MergeCell>) -> Vec<MergeCell> {
+    let mut seen: HashSet<(u32, u32, u32, u32)> = HashSet::with_capacity(merge_cells.len());
+    let mut kept: Vec<MergeCell> = merge_cells
+        .into_iter()
+        .rev()
+        .filter(|m| seen.insert((m.top, m.left, m.bottom, m.right)))
+        .collect();
+    kept.reverse();
+    kept
+}
+
 fn merge_sheet_comments(
     threaded_part: Option<Vec<XlsxComment>>,
     classic: Vec<XlsxComment>,
@@ -8258,8 +8269,9 @@ mod rb7_partial_degradation_tests {
     }
 
     /// Repeated identical ranges (#1958) — including the same range written
-    /// with swapped corners — collapse to their first occurrence, while
-    /// distinct overlapping ranges stay as authored, in document order.
+    /// with swapped corners — collapse to their last occurrence, while
+    /// distinct overlapping ranges stay as authored, in document order. For
+    /// a shared top-left cell the last-authored range stays last.
     #[test]
     fn repeated_identical_merge_cells_collapse_to_one() {
         let mut merges = String::new();
@@ -8267,7 +8279,7 @@ mod rb7_partial_degradation_tests {
             merges.push_str(r#"<mergeCell ref="A1:ZZ300"/>"#);
         }
         let sheet = format!(
-            r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData/><mergeCells count="1204">{merges}<mergeCell ref="C3:B2"/><mergeCell ref="B2:C3"/><mergeCell ref="A1:ZZ299"/><mergeCell ref="ZZ300:A1"/></mergeCells></worksheet>"#
+            r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData/><mergeCells count="1207">{merges}<mergeCell ref="C3:B2"/><mergeCell ref="B2:C3"/><mergeCell ref="A1:ZZ299"/><mergeCell ref="ZZ300:A1"/><mergeCell ref="E5:F5"/><mergeCell ref="E5:G5"/><mergeCell ref="E5:F5"/></mergeCells></worksheet>"#
         );
         let json = parse_sheet_native(&build_single_sheet_workbook(&sheet), 0, "Sheet1")
             .expect("sheet parses");
@@ -8283,7 +8295,13 @@ mod rb7_partial_degradation_tests {
             .collect();
         assert_eq!(
             merges,
-            vec![(1, 1, 300, 702), (2, 2, 3, 3), (1, 1, 299, 702)]
+            vec![
+                (2, 2, 3, 3),
+                (1, 1, 299, 702),
+                (1, 1, 300, 702),
+                (5, 5, 5, 7),
+                (5, 5, 5, 6),
+            ]
         );
     }
 

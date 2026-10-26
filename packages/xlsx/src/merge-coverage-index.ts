@@ -17,10 +17,9 @@ export interface MergeCoverageIndex {
  *
  * ECMA-376 §18.3.1.55 lists merged ranges and stores a range's value and
  * format in its top-left cell; it says nothing about two `<mergeCell>`
- * entries naming the same or intersecting cells, and Excel never writes such
- * a collection (its UI absorbs an existing merge into a new one). How Excel
- * repairs such a file on open has not been verified, so the library keeps
- * one policy for every consumer, shared with the Markdown projection
+ * entries naming the same or intersecting cells. Excel's handling of such a
+ * collection has not been verified, so the library keeps one policy for
+ * every consumer, shared with the Markdown projection
  * (`clear_merge_continuation_cells` in `parser/src/markdown.rs`):
  *
  * - a cell is a continuation cell exactly when some merge covers it without
@@ -31,13 +30,20 @@ export interface MergeCoverageIndex {
  * Work is independent of how often cells are re-covered. Each range is
  * validated arithmetically, then a row sweep keeps the covered columns in a
  * segment tree over the compressed column boundaries. Between two event
- * rows the covered set is constant, so its runs are enumerated once and each
- * covered cell of the band is visited exactly once. Every visited cell is a
- * new continuation entry (charged against `continuationIdentity`) or one of
- * the at most `merges.length` top-left cells, so the total is
- * O(merges · log merges + distinct covered cells) and stops at the entry
+ * rows the covered set is constant, so its runs are enumerated once per
+ * band (O(log merges) tree nodes per run) and each covered cell of the band
+ * is visited exactly once. Every visited cell is a new continuation entry
+ * (charged against `continuationIdentity`) or one of the at most
+ * `merges.length` top-left cells, and every enumerated run holds at least
+ * one visited cell per band row, so the total is
+ * O((merges + distinct covered cells) · log merges) and stops at the entry
  * budget. Re-walking every authored range instead made N repeats of one
  * large range cost N times its area while charging it only once.
+ *
+ * Refusal order: ranges are checked in document order — anchor entry, then
+ * the range's own representability and area — and only then is the
+ * combined coverage charged. A worksheet that breaks several limits
+ * therefore reports a per-range refusal before a cumulative-coverage one.
  */
 export function buildMergeCoverageIndex(
   merges: readonly CoordinateRange[],
