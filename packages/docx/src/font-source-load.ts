@@ -188,7 +188,12 @@ export async function loadDocxFontSources(
   doc: DocxDocumentModel,
   plan: DocxFontFamilyPlan,
   sources: readonly FontSource[],
-  options: Readonly<{ fontSet?: FontFaceSet | null; signal?: AbortSignal; runResolver?: FontResolverRunner }> = {},
+  options: Readonly<{
+    fontSet?: FontFaceSet | null;
+    signal?: AbortSignal;
+    runResolver?: FontResolverRunner;
+    resolverCeilingOwnedByRunner?: boolean;
+  }> = {},
 ): Promise<DocxLoadedFontSources> {
   const session = new FontSourceSession({
     sources,
@@ -196,6 +201,7 @@ export async function loadDocxFontSources(
     ...(options.signal ? { signal: options.signal } : {}),
     // Worker mode: `fontResolver` functions run on main (core resolver-bridge.ts).
     ...(options.runResolver ? { runResolver: options.runResolver } : {}),
+    ...(options.resolverCeilingOwnedByRunner ? { resolverCeilingOwnedByRunner: true } : {}),
   });
   try {
     const loaded = await session.ensure(docxFontDemand(doc, plan));

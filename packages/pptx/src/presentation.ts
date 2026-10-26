@@ -442,14 +442,6 @@ export class PptxPresentation {
           } satisfies ProgressiveLoad
         : undefined;
       pres._fonts = opts.fonts;
-      if (mode === 'worker') {
-        // Resolves through this realm's resolution cache, held until destroy
-        // (core resolver-bridge-responder.ts).
-        pres._fontResolverBridge = new FontResolverBridgeHost({
-          post: (message, transfer) => (worker.postMessage as (value: unknown, transfer?: Transferable[]) => void)(message, transfer),
-          sources: opts.fonts,
-        });
-      }
       await pres._parse(
         buffer,
         resourceOptions.policy,
@@ -507,6 +499,17 @@ export class PptxPresentation {
     await this._fontSources.ensure(demand);
   }
 
+  /** Worker mode: answer the render worker's `fontResolver` calls for the
+   *  document about to be parsed (core `resolver-bridge-host.ts`): resolved
+   *  through this realm's resolution cache and held until destroy. */
+  private _attachFontResolverBridge(fonts: readonly FontSource[] | undefined): void {
+    this._fontResolverBridge?.dispose();
+    this._fontResolverBridge = new FontResolverBridgeHost({
+      post: (message, transfer) => (this._worker.postMessage as (value: unknown, transfer?: Transferable[]) => void)(message, transfer),
+      sources: fonts,
+    });
+  }
+
   private async _parse(
     buffer: ArrayBuffer,
     resourcePolicy: NormalizedOoxmlResourcePolicy,
@@ -516,6 +519,9 @@ export class PptxPresentation {
     renderers?: WorkerRendererDescriptors,
     progressive?: ProgressiveLoad,
   ): Promise<void> {
+    // Every load path (ordinary and model-source loaders alike) parses here,
+    // so the worker's `fontResolver` calls always find their main-side bridge.
+    if (this._mode === 'worker') this._attachFontResolverBridge(fonts);
     if (progressive) {
       this._progressive = progressive;
       if (this._mode === 'worker') {

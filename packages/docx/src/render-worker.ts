@@ -419,7 +419,7 @@ self.onmessage = async (e: MessageEvent<RenderWorkerWireRequest | WorkerSvgDecod
           if (requestedGeneration !== parseGeneration) throw new Error('render-worker parse was superseded');
           const plan = docxFontFamilyPlan(model, fontSources, req.cjkFallback, presence);
           installedSubstituteFamilies = plan.installedSubstituteFamilies;
-          loadedSources = await loadDocxFontSources(model, plan, fontSources, { runResolver: fontResolverClient.run });
+          loadedSources = await loadDocxFontSources(model, plan, fontSources, fontResolverClient.sessionOptions);
           if (requestedGeneration !== parseGeneration) throw new Error('render-worker parse was superseded');
         }
         const preparedMath = requestedRenderers.math && source.mathOccurrences.length > 0

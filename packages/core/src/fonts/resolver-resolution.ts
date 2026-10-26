@@ -146,17 +146,51 @@ export async function resolveFamiliesThroughCache(options: {
   }
   const entries = await Promise.all(families.map(async ({ name, scripts }) => {
     const key = fontFamilyKey(name);
-    const answer = await cache.families.join(scopedFamilyKey(name, scripts), async (taskSignal) => {
-      if (!call) return { kind: 'absent' } satisfies FamilyResolution;
-      const batch = await call.join(taskSignal);
-      const own = batch.get(key) ?? { kind: 'absent' };
-      batch.delete(key);
-      return own;
-    }, signal, holder);
+    let answer: FamilyResolution;
+    try {
+      answer = await cache.families.join(scopedFamilyKey(name, scripts), async (taskSignal) => {
+        if (!call) return { kind: 'absent' } satisfies FamilyResolution;
+        const batch = await call.join(taskSignal);
+        const own = batch.get(key) ?? { kind: 'absent' };
+        batch.delete(key);
+        return own;
+      }, signal, holder);
+    } catch (error) {
+      // A ceiling breach is terminal for the document too. (An abort is
+      // recorded by the requester that knows why it aborted: a timeout is,
+      // a release is not; see recordFontResolverFailures.)
+      if (isFontSourceLimitError(error)) failures?.set(failureKey(name, scripts), error.message);
+      throw error;
+    }
+    // Another requester of this document reached a terminal failure while
+    // this answer was in flight (its ceiling expired first): one outcome.
+    const recorded = failures?.get(failureKey(name, scripts));
+    if (recorded !== undefined) return [key, { kind: 'failed', reason: recorded } satisfies FamilyResolution] as const;
     if (answer.kind === 'failed') failures?.set(failureKey(name, scripts), answer.reason);
     return [key, answer] as const;
   }));
   return new Map([...settled, ...entries]);
+}
+
+const isFontSourceLimitError = (error: unknown): error is Error =>
+  error instanceof Error && (error as { code?: unknown }).code === 'font-source-limit';
+
+/**
+ * Record a terminal failure that no answer carried (the requester's font
+ * ceiling expired while it waited) for `families` of `cache`'s source, so
+ * every other requester of the document reports the same outcome.
+ */
+export function recordFontResolverFailures(
+  failures: FontResolverFailures | undefined,
+  cache: SourceCache,
+  families: readonly Pick<ResolverDemandedName, 'name' | 'scripts'>[],
+  reason: string,
+): void {
+  if (!failures) return;
+  for (const { name, scripts } of families) {
+    const key = `${cache.id}\u0000${scopedFamilyKey(name, scripts)}`;
+    if (!failures.has(key)) failures.set(key, reason);
+  }
 }
 
 /**

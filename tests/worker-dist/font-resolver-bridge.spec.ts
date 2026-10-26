@@ -81,7 +81,10 @@ interface Rendered {
   readonly answeredBytes: readonly number[];
 }
 
-async function render(browser: Browser, format: Format, mode: 'main' | 'worker', source: Source): Promise<Rendered> {
+/** `modelSource`: load through an application model source (the repository's
+ * test-only `fake-model-source.mjs`, which opens the OOXML package itself),
+ * the path model-source loaders take instead of the ordinary loader. */
+async function render(browser: Browser, format: Format, mode: 'main' | 'worker', source: Source, modelSource = false): Promise<Rendered> {
   // A fresh context per load: no shared FontFaceSet, worker or realm state.
   const context = await browser.newContext();
   try {
@@ -90,7 +93,7 @@ async function render(browser: Browser, format: Format, mode: 'main' | 'worker',
       contentType: 'text/html', body: '<!doctype html><body></body>',
     }));
     await page.goto('/font-resolver-bridge');
-    const result = await page.evaluate(async ({ format, mode, source, documentBytes, fontBytes, family }) => {
+    const result = await page.evaluate(async ({ format, mode, source, modelSource, documentBytes, fontBytes, family }) => {
       const entry = `/dist/${format}.mjs`;
       const api = await import(entry);
       const font = new Uint8Array(fontBytes);
@@ -111,7 +114,23 @@ async function render(browser: Browser, format: Format, mode: 'main' | 'worker',
         for (const byte of font) binary += String.fromCharCode(byte);
         fonts = [api.fontFiles({ faces: [{ family, url: `data:font/ttf;base64,${btoa(binary)}` }] })];
       }
-      const options = { mode, ...(fonts ? { fonts } : {}) };
+      const sourceOption = { docx: 'legacyDoc', pptx: 'legacyPpt', xlsx: 'legacyXls' }[format];
+      const modelSourceOptions = modelSource ? {
+        [sourceOption]: {
+          target: format,
+          claim: () => true,
+          beginLoad: () => ({
+            module: {
+              protocol: 'ooxml-model-source-module/v2',
+              target: format,
+              moduleUrl: new URL('/tests/worker-dist/fake-model-source.mjs', location.href).href,
+              config: { format },
+            },
+            release() {},
+          }),
+        },
+      } : {};
+      const options = { mode, ...(fonts ? { fonts } : {}), ...modelSourceOptions };
       const bytes = new Uint8Array(documentBytes).buffer;
       let bitmap: ImageBitmap;
       if (format === 'docx') {
@@ -145,7 +164,7 @@ async function render(browser: Browser, format: Format, mode: 'main' | 'worker',
         demandedScalars: calls.map((call) => call.scalars),
         answeredBytes: answered.map((buffer) => buffer.byteLength),
       };
-    }, { format, mode, source, documentBytes: [...FIXTURES[format]], fontBytes: [...FONT], family: FAMILY });
+    }, { format, mode, source, modelSource, documentBytes: [...FIXTURES[format]], fontBytes: [...FONT], family: FAMILY });
     return {
       png: { width: result.width, height: result.height, data: Buffer.from(result.rgba, 'base64') },
       calls: result.calls,
@@ -198,5 +217,18 @@ for (const format of ['docx', 'pptx', 'xlsx'] as const) {
       expect(worker.calls).toBe(1);
       expect(worker.answeredBytes).toEqual([FONT.byteLength]);
     }
+  });
+}
+
+// Model-source loaders construct the document and parse through their own
+// path; the worker's resolver calls must still reach this document's bridge.
+for (const format of ['docx', 'pptx', 'xlsx'] as const) {
+  test(`${format}: a model-source load in worker mode runs the fontResolver on main`, async ({ browser }) => {
+    test.setTimeout(120_000);
+    const main = await render(browser, format, 'main', 'resolver');
+    const worker = await render(browser, format, 'worker', 'resolver', true);
+    expect(worker.calls).toBe(1);
+    expect(worker.answeredBytes).toEqual([FONT.byteLength]);
+    expect(diffPct(main.png, worker.png)).toBeLessThanOrEqual(0.2);
   });
 }

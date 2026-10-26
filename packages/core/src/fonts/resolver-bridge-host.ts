@@ -30,7 +30,8 @@ export class FontResolverBridgeHost {
   constructor(options: FontResolverBridgeHostOptions) {
     // Only a document configured with a resolver ever answers; any other
     // bridge message is consumed and ignored.
-    this.options = options.sources?.some((source) => source.kind === 'font-resolver') ? options : null;
+    this.options = Array.isArray(options.sources) && options.sources.some((source) => source.kind === 'font-resolver')
+      ? options : null;
   }
 
   /** Route `message`; returns true when it belongs to the bridge. */

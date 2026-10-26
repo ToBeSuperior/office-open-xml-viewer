@@ -50,6 +50,7 @@ import {
 import { parseUnicodeRange, resolveCssSource } from './css-source.js';
 import { resolveFontFiles } from './files-source.js';
 import {
+  recordFontResolverFailures,
   resolveFamiliesThroughCache,
   runResolverInRealm,
   substituteScriptsOf,
@@ -119,6 +120,10 @@ export interface FontSourceSessionOptions {
   /** Resolver failures shared by every requester of one document (XLSX: the
    * viewer-realm sessions and the worker bridge); see `resolver-resolution.ts`. */
   readonly resolverFailures?: FontResolverFailures;
+  /** The runner enforces the font ceiling itself and always settles (the
+   * worker bridge, whose main side times calls out and records the outcome
+   * for the whole document), so resolver waits ignore this realm's ceiling. */
+  readonly resolverCeilingOwnedByRunner?: boolean;
 }
 
 const EMPTY_SNAPSHOT: LoadedFontSources = Object.freeze({
@@ -327,6 +332,7 @@ export class FontSourceSession {
   private fontSet: FontFaceSet | null;
   private runResolver: FontResolverRunner;
   private resolverFailures: FontResolverFailures | undefined;
+  private readonly runnerOwnsCeiling: boolean;
   private readonly controller = new AbortController();
   private detachSignal: () => void = () => undefined;
   private closed = false;
@@ -345,6 +351,7 @@ export class FontSourceSession {
     this.fontSet = options.fontSet === undefined ? activeFontSet() : options.fontSet;
     this.runResolver = options.runResolver ?? runResolverInRealm;
     this.resolverFailures = options.resolverFailures;
+    this.runnerOwnsCeiling = options.resolverCeilingOwnedByRunner === true;
     this.caches = this.sources.map(acquireSourceCache);
     const signal = options.signal;
     if (signal) {
@@ -483,10 +490,20 @@ export class FontSourceSession {
       for (let sourceIndex = 0; sourceIndex < this.sources.length && pending.length; sourceIndex++) {
         if (this.closed) throw createAbortError('Font source session released');
         let answers: ReadonlyMap<string, FamilyResolution>;
+        const source = this.sources[sourceIndex];
+        // A runner that owns the deadline (the worker bridge: main times the
+        // call out for the whole document) is not abandoned at this realm's
+        // ceiling; only a release aborts the wait.
+        const sourceSignal = source.kind === 'font-resolver' && this.runnerOwnsCeiling
+          ? this.controller.signal : ceiling.signal;
         try {
-          answers = await this.resolveWithSource(sourceIndex, pending, tuples, ceiling.signal);
+          answers = await this.resolveWithSource(sourceIndex, pending, tuples, sourceSignal);
         } catch (error) {
-          if (!isAbortError(error) || !ceiling.expired()) throw error;
+          if (!isAbortError(error) || !ceiling.expired() || sourceSignal !== ceiling.signal) throw error;
+          // The timeout is this document's outcome for these families.
+          if (source.kind === 'font-resolver') {
+            recordFontResolverFailures(this.resolverFailures, this.caches[sourceIndex], pending, 'timed out');
+          }
           for (const { name } of pending) result.set(fontFamilyKey(name), { kind: 'failed', name, reason: 'timed out' });
           pending = [];
           break;

@@ -49,6 +49,7 @@ import type {
   WorkerFontResolveRequest,
 } from './resolver-bridge.js';
 import {
+  recordFontResolverFailures,
   resolveFamiliesThroughCache,
   runResolverInRealm,
   substituteScriptsOf,
@@ -242,7 +243,7 @@ export class FontResolverResponder {
     const timer = setTimeout(() => { expired = true; controller.abort(); }, FONT_LOAD_CEILING_MS);
     let outcome: FontResolveOutcome;
     try {
-      outcome = await this.resolve(sourceIndex, resolverId, rawDemand, controller.signal);
+      outcome = await this.resolve(sourceIndex, resolverId, rawDemand, controller.signal, () => expired);
     } finally {
       clearTimeout(timer);
     }
@@ -284,7 +285,9 @@ export class FontResolverResponder {
     return cache;
   }
 
-  private async resolve(sourceIndex: unknown, resolverId: unknown, rawDemand: unknown, signal: AbortSignal): Promise<FontResolveOutcome> {
+  private async resolve(
+    sourceIndex: unknown, resolverId: unknown, rawDemand: unknown, signal: AbortSignal, expired: () => boolean,
+  ): Promise<FontResolveOutcome> {
     const demand = copyBridgedFontDemand(rawDemand);
     if (!demand || typeof resolverId !== 'string' || !isNonNegativeSafeInteger(sourceIndex)) {
       return { status: 'failed', reason: 'malformed font resolver request' };
@@ -301,6 +304,13 @@ export class FontResolverResponder {
       ...demand.fallbackFamilies.map((name) => ({ name, fallback: true, scripts: scriptsOf(name) })),
     ];
     const cache = this.cacheOf(sourceIndex, source);
+    // Main owns the deadline of a bridged call (the worker session waits for
+    // this reply): a timeout is the document's outcome for these families, so
+    // a viewer-realm session of the same document reports it too.
+    const timedOut = (): FontResolveOutcome => {
+      recordFontResolverFailures(this.failures, cache, families, 'timed out');
+      return { status: 'failed', reason: 'timed out' };
+    };
     try {
       const answers = await resolveFamiliesThroughCache({
         source, cache, runner: runResolverInRealm, families,
@@ -308,6 +318,7 @@ export class FontResolverResponder {
         // Held until dispose, like a main-mode session's entries.
         holder: cache, sourceIndex, failures: this.failures,
       });
+      if (expired()) return timedOut();
       return {
         status: 'families',
         families: [...answers].map(([family, answer]): BridgedFamilyAnswer =>
@@ -316,6 +327,7 @@ export class FontResolverResponder {
               : { family, kind: 'absent' }),
       };
     } catch (error) {
+      if (expired()) return timedOut();
       if (isFontSourceLimit(error)) return { status: 'limit', violation: error.violation };
       return { status: 'failed', reason: error instanceof Error ? error.message : String(error) };
     }

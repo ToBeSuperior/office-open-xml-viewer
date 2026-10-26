@@ -239,7 +239,7 @@ async function openPresentation(request: Extract<RenderWorkerRequest, { kind: 'p
     loadSlide,
   });
   // Same demand and session as main mode, registered into self.fonts.
-  if (sources.length > 0) fontSources = new FontSourceSession({ sources, runResolver: fontResolverClient.run });
+  if (sources.length > 0) fontSources = new FontSourceSession({ sources, ...fontResolverClient.sessionOptions });
   const session = fontSources;
   // Installed authored faces are probed in self.fonts before any source face
   // of a delta registers, and never demanded, exactly as in main mode.

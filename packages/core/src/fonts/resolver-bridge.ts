@@ -40,6 +40,7 @@ import {
   HARD_MAX_FONT_SOURCE_DECLARATIONS,
   HARD_MAX_FONT_SOURCE_FAMILIES,
 } from '../worker/resource-policy.generated.js';
+import { FONT_LOAD_CEILING_MS } from './font-registry.js';
 import { bridgedFontSourceLimitError } from './resolver-admission.js';
 import { BridgedFamilyResolutions } from './resolver-resolution.js';
 import type { FontDemand, FontFaceDeclaration, FontResolveContext, FontResolverSource } from './source.js';
@@ -125,6 +126,14 @@ export class WorkerFontResolverClient {
 
   constructor(private readonly post: Post) {}
 
+  /** Spread into `FontSourceSessionOptions`: the runner, and the fact that
+   * main owns the deadline of a bridged call (it times the call out and
+   * records the outcome for the whole document, so a workbook's viewer realm
+   * and worker agree), so the session does not abandon the wait itself. */
+  get sessionOptions(): { readonly runResolver: WorkerFontResolverClient['run']; readonly resolverCeilingOwnedByRunner: true } {
+    return { runResolver: this.run, resolverCeilingOwnedByRunner: true };
+  }
+
   /** Pass as `FontSourceSessionOptions.runResolver`. */
   readonly run = (
     source: FontResolverSource,
@@ -137,14 +146,20 @@ export class WorkerFontResolverClient {
     const generation = this.generation;
     const requestId = this.nextRequestId++;
     return new Promise<BridgedFamilyResolutions>((resolve, reject) => {
-      const onAbort = () => {
+      const abandon = (error: Error) => {
         if (!this.settle(requestId)) return;
-        reject(createAbortError('Font resolver abandoned'));
+        reject(error);
         this.postQuietly({ kind: 'ooxmlCancelResolveFonts', generation, requestId } satisfies WorkerFontResolveCancel);
       };
+      const onAbort = () => abandon(createAbortError('Font resolver abandoned'));
       signal.addEventListener('abort', onAbort, { once: true });
+      // Main answers every request within its own font ceiling; this backstop
+      // only guards a main realm that never answers (no bridge host), and is
+      // longer than main's deadline plus the request's transit.
+      const backstop = setTimeout(() => abandon(new Error('timed out')), 2 * FONT_LOAD_CEILING_MS);
       this.pending.set(requestId, {
-        resolve, reject, generation, detach: () => signal.removeEventListener('abort', onAbort),
+        resolve, reject, generation,
+        detach: () => { clearTimeout(backstop); signal.removeEventListener('abort', onAbort); },
       });
       try {
         this.post({

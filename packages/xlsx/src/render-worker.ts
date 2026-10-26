@@ -129,7 +129,7 @@ function startFontLoad(parsed: ParsedWorkbook, sources: readonly FontSource[]): 
       // Same demand, probe and session as main mode, registered into self.fonts.
       fontDemand = new XlsxFontDemand(parsed, cjkFallback, declaredFontSubstitutions(sources));
       installedFamilies = new InstalledFamilyExclusion();
-      fontSources = new FontSourceSession({ sources, runResolver: fontResolverClient.run });
+      fontSources = new FontSourceSession({ sources, ...fontResolverClient.sessionOptions });
       const delta = fontDemand.take();
       if (delta) await fontSources.ensure(await installedFamilies.exclude(delta));
     }

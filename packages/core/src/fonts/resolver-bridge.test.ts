@@ -139,7 +139,7 @@ function bridge(sources: readonly FontSource[], options: { realm?: WorkerRealm; 
     pause() { hold = true; },
     resume() { hold = false; for (const fn of held.splice(0)) void Promise.resolve().then(fn); },
     session(set = fakeSet()) {
-      const session = new realm.FontSourceSession({ sources: workerSources, fontSet: asSet(set), runResolver: client.run });
+      const session = new realm.FontSourceSession({ sources: workerSources, fontSet: asSet(set), ...client.sessionOptions });
       sessions.push(session);
       return { session, set };
     },
@@ -332,6 +332,55 @@ describe('fontResolver bridge: review findings', () => {
       const other = mainSession([source]);
       expect((await other.session.ensure(demand(['Private Face']))).faces).toHaveLength(1);
       expect(calls).toBe(2);
+    });
+  }
+
+  // Round 2, finding 1: a timeout is the document's outcome too.
+  for (const order of ['worker first', 'viewer first', 'overlapping, answer after the worker deadline'] as const) {
+    it(`gives a workbook's viewer and worker one outcome when the resolver times out (${order})`, async () => {
+      vi.useFakeTimers();
+      let calls = 0;
+      const source = fontResolver(() => {
+        calls++;
+        // The first call answers after 17 s (or never); a retry would succeed at once.
+        if (calls > 1) return [FACE(8)];
+        return order === 'overlapping, answer after the worker deadline'
+          ? new Promise((resolve) => setTimeout(() => resolve([FACE(8)]), 17_000))
+          : new Promise(() => undefined);
+      });
+      const failures = new Map<string, string>();
+      const link = bridge([source], { failures });
+      const viewer = mainSession([source], failures);
+      const worker = link.session();
+      const ensureViewer = () => viewer.session.ensure(demand(['Private Face']));
+      const ensureWorker = () => worker.session.ensure(demand(['Private Face']));
+      let viewerLoaded: Awaited<ReturnType<typeof ensureViewer>>;
+      let workerLoaded: Awaited<ReturnType<typeof ensureWorker>>;
+      if (order === 'worker first') {
+        const pending = ensureWorker();
+        await vi.advanceTimersByTimeAsync(15_000);
+        workerLoaded = await pending;
+        viewerLoaded = await ensureViewer();
+      } else if (order === 'viewer first') {
+        const pending = ensureViewer();
+        await vi.advanceTimersByTimeAsync(15_000);
+        viewerLoaded = await pending;
+        workerLoaded = await ensureWorker();
+      } else {
+        // The worker asks at 0 s, the viewer joins at 5 s; main times the
+        // worker's call out at 15 s, the answer arrives at 17 s, within the
+        // viewer's own ceiling (20 s).
+        const workerPending = ensureWorker();
+        await vi.advanceTimersByTimeAsync(5_000);
+        const viewerPending = ensureViewer();
+        await vi.advanceTimersByTimeAsync(13_000);
+        [workerLoaded, viewerLoaded] = await Promise.all([workerPending, viewerPending]);
+      }
+      expect(calls).toBe(1);
+      expect(workerLoaded.faces).toEqual([]);
+      expect(viewerLoaded.faces).toEqual([]);
+      expect(viewer.set.faces.filter((face) => face.status === 'loaded')).toEqual([]);
+      expect(String(warn.mock.calls.at(-1)?.[0])).toContain('Private Face (timed out)');
     });
   }
 
