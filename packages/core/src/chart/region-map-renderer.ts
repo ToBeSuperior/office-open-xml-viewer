@@ -7,7 +7,7 @@ import type {
   ChartexValueColorStop,
 } from '../types/chart.js';
 import { ownValue } from '../internal/own-key.js';
-import { fontFamilyKey } from '../fonts/substitutions.js';
+import { chartFontSubstitute } from './shared/fonts.js';
 import { hex6ToRgb } from '../image/duotone.js';
 import { chartTitleBand, resolveManualLayoutRect, titleExtraLinesPx } from './layout.js';
 import { paintLegendFrame } from './legend-frame.js';
@@ -494,6 +494,6 @@ export function renderRegionMapChart(
 /** A quoted region-map face, followed by the family a font source loaded for
  *  it ({@link ChartModel.fontSubstitutions}); unchanged without one. */
 function regionFontFamily(chart: ChartModel, face: string): string {
-  const substitute = chart.fontSubstitutions?.[fontFamilyKey(face)];
+  const substitute = chartFontSubstitute(chart, face);
   return substitute ? `${JSON.stringify(face)}, ${JSON.stringify(substitute)}` : JSON.stringify(face);
 }

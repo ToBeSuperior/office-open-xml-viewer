@@ -30,15 +30,27 @@ type ChartFontSubstitutions = Pick<ChartModel, 'fontSubstitutions'>;
 /** `"face"`, followed by the family a font source loaded for it
  *  ({@link ChartModel.fontSubstitutions}); the authored face stays first, so an
  *  installed authored face still wins. */
+/** The family a font source loaded for `face`, read as an own string property
+ *  only: chart faces are document text, so a face such as `constructor` or
+ *  `__proto__` must never resolve through the object prototype. */
+export function chartFontSubstitute(chart: ChartFontSubstitutions | undefined, face: string): string | undefined {
+  const map = chart?.fontSubstitutions;
+  if (!map) return undefined;
+  const key = fontFamilyKey(face);
+  if (!Object.prototype.hasOwnProperty.call(map, key)) return undefined;
+  const substitute = (map as Record<string, unknown>)[key];
+  return typeof substitute === 'string' && substitute ? substitute : undefined;
+}
+
 export function chartFaceList(face: string, chart?: ChartFontSubstitutions): string {
-  const substitute = chart?.fontSubstitutions?.[fontFamilyKey(face)];
+  const substitute = chartFontSubstitute(chart, face);
   return substitute ? `"${face}", "${substitute.replace(/["\\]/g, '')}"` : `"${face}"`;
 }
 
 /** {@link CHART_FALLBACK_FONT_STACK} with the loaded substitute of its
  *  Calibri head, when a font source loaded one. */
 export function chartFallbackFontStack(chart?: ChartFontSubstitutions): string {
-  const substitute = chart?.fontSubstitutions?.calibri;
+  const substitute = chartFontSubstitute(chart, 'Calibri');
   return substitute ? `Calibri, "${substitute.replace(/["\\]/g, '')}", Arial, sans-serif` : CHART_FALLBACK_FONT_STACK;
 }
 

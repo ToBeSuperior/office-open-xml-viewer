@@ -1218,7 +1218,8 @@ function chartWithFontSubstitutions(
   substitutions: LoadedFontSubstitutions | undefined,
 ): ChartElement['chart'] {
   if (!substitutions?.size) return chart;
-  const unscoped: Record<string, string> = {};
+  // Null prototype: keys are document font names (e.g. `__proto__`).
+  const unscoped: Record<string, string> = Object.create(null) as Record<string, string>;
   for (const [family, substitution] of substitutions) if (!substitution.script) unscoped[family] = substitution.family;
   return Object.keys(unscoped).length ? { ...chart, fontSubstitutions: Object.freeze(unscoped) } : chart;
 }
