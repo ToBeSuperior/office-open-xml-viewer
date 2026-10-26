@@ -23,8 +23,10 @@ import type { FontResolverResponder } from './resolver-bridge-responder.js';
 import {
   concludeBridgedRequest,
   settledBridgedRequest,
+  type DocumentSourceCache,
   type FontResolverFailures,
 } from './resolver-failures.js';
+import { acquireSourceCache, type SourceCache } from './source-cache.js';
 import type { FontSource } from './source.js';
 
 type Post = (message: unknown, transfer?: Transferable[]) => void;
@@ -51,6 +53,17 @@ export class FontResolverBridgeHost {
   private readonly failures: FontResolverFailures;
   private responder: Promise<FontResolverResponder | null> | null = null;
   private disposed = false;
+  /** This document's handle on each resolver source's realm cache, by its
+   * index in `fonts`: the holder of every entry the host answers from. */
+  private readonly caches = new Map<number, SourceCache>();
+  private readonly cacheFor: DocumentSourceCache = (sourceIndex, source) => {
+    let cache = this.caches.get(sourceIndex);
+    if (!cache) {
+      cache = acquireSourceCache(source);
+      this.caches.set(sourceIndex, cache);
+    }
+    return cache;
+  };
   /** Newest worker generation seen. */
   private generation = -1;
   /** Requests not yet handed to the responder, with their deadline. */
@@ -94,7 +107,7 @@ export class FontResolverBridgeHost {
       }
       // Families this document already decided are answered now, whatever
       // the responder's state: the worker adopts the viewer realm's outcome.
-      const split = settledBridgedRequest(this.failures, options.sources, bridged);
+      const split = settledBridgedRequest(this.failures, options.sources, bridged, this.cacheFor);
       if (split && split.unsettled.length === 0) {
         this.answer(bridged, split.settled);
         return true;
@@ -162,7 +175,7 @@ export class FontResolverBridgeHost {
   private fail(request: WorkerFontResolveRequest, reason: string): void {
     const options = this.options;
     if (this.disposed || !options?.sources) return;
-    const outcome = concludeBridgedRequest(this.failures, options.sources, request, reason);
+    const outcome = concludeBridgedRequest(this.failures, options.sources, request, reason, this.cacheFor);
     if (outcome.status === 'families') this.answer(request, outcome.families);
     else this.post(request, outcome);
   }
@@ -190,6 +203,9 @@ export class FontResolverBridgeHost {
     this.options = null;
     for (const { timer } of this.waiting.values()) clearTimeout(timer);
     this.waiting.clear();
+    // Every entry this document answered from is released with it.
+    for (const cache of this.caches.values()) cache.release();
+    this.caches.clear();
     void this.responder?.then((responder) => responder?.dispose());
   }
 }

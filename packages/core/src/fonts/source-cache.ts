@@ -260,7 +260,7 @@ export class SharedTaskMap<T> {
   /** Bytes charged per task (not per key): a retry after an eviction is a
    * different task, so charge and refund always pair one-to-one. */
   private readonly charged = new Map<SharedTask<T>, number>();
-  /** Results the map keeps, by task (see {@link SharedTaskMap.peek}). */
+  /** Results the map keeps, by task (see {@link SharedTaskMap.holdKept}). */
   private readonly values = new Map<SharedTask<T>, T>();
   /** Who asked for each key (sessions for family resolutions, family
    * resolutions for stylesheets). An entry is kept only while at least one
@@ -353,10 +353,17 @@ export class SharedTaskMap<T> {
     }
   }
 
-  /** The settled result kept for `key`, if any (an in-flight task has none). */
-  peek(key: string): T | undefined {
+  /**
+   * The settled result kept for `key`, now also held by `holder` (as a join
+   * would hold it), or undefined when none is kept (in flight, absent). The
+   * only way to read a kept result: an answer taken from the cache always
+   * keeps its entry alive for whoever received it.
+   */
+  holdKept(key: string, holder: object): T | undefined {
     const task = this.tasks.get(key);
-    return task ? this.values.get(task) : undefined;
+    const value = task ? this.values.get(task) : undefined;
+    if (value !== undefined) this.hold(key, holder);
+    return value;
   }
 
   /** Whether a task (in flight or settled and kept) exists for `key`. */
@@ -485,13 +492,6 @@ function handle(entry: CacheEntry): SourceCache {
     },
   };
   return view;
-}
-
-/** The resolution this realm's cache keeps for `scopedKey` of the source
- * `sourceId`, if one is settled and held (a document's settled outcome:
- * `resolver-failures.ts`). */
-export function peekFamilyResolution(sourceId: string, scopedKey: string): FamilyResolution | undefined {
-  return caches.get(sourceId)?.cache.families.peek(scopedKey);
 }
 
 /** Number of source identities with live holders (tests and leak checks). */

@@ -219,7 +219,10 @@ export class FontResolverResponder {
     this.calls.set(key, call);
     // The single path for a failed reply (`concludeBridgedRequest`): families
     // the document already decided adopt that outcome, the rest are recorded.
-    const fail = (reason: string): FontResolveOutcome => concludeBridgedRequest(this.failures, this.sources, request, reason);
+    const fail = (reason: string): FontResolveOutcome => (this.disposed
+      // Nothing is posted after dispose; never take a hold for a gone document.
+      ? { status: 'failed', reason }
+      : concludeBridgedRequest(this.failures, this.sources, request, reason, (index, source) => this.cacheOf(index, source)));
     // The worker's remaining ceiling for its current ensure: main mode's
     // deadline is cumulative over the source walk, and so is this one.
     const { remainingMs } = request;

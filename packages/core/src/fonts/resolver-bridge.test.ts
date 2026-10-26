@@ -535,6 +535,50 @@ describe('fontResolver bridge: review findings', () => {
     await vi.advanceTimersByTimeAsync(5_000);
   });
 
+  // Round 6: an answer taken from the cache is held by the receiving document.
+  for (const producer of ['a main-mode document', 'another worker-mode document'] as const) {
+    it(`keeps a family answered from ${producer}'s resolution for the receiving document`, async () => {
+      let calls = 0;
+      const source = fontResolver(() => {
+        calls++;
+        if (calls > 1) throw new Error('token expired');
+        return [FACE(12)];
+      });
+      // Document X resolves the family first.
+      let releaseX: () => void;
+      if (producer === 'a main-mode document') {
+        const x = mainSession([source]);
+        expect((await x.session.ensure(demand(['Private Face']))).faces).toHaveLength(1);
+        releaseX = () => x.session.release();
+      } else {
+        const x = bridge([source]);
+        const xWorker = x.session();
+        expect((await xWorker.session.ensure(demand(['Private Face']))).faces).toHaveLength(1);
+        releaseX = () => { xWorker.session.release(); x.host.dispose(); };
+      }
+      // Workbook Y (worker mode) receives it from the cache, its responder
+      // chunk unavailable, so only the host's settled answer can serve it.
+      const failures = new Map<string, string>();
+      // Its own worker (each worker-mode document has one).
+      const y = bridge([source], { failures, loadResponder: missingResponder, realm: worker2 });
+      const yWorker = y.session();
+      expect((await yWorker.session.ensure(demand(['Private Face']))).faces).toHaveLength(1);
+      // X goes away; Y's viewer realm must still see Y's outcome.
+      releaseX();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const yViewer = mainSession([source], failures);
+      expect((await yViewer.session.ensure(demand(['Private Face']))).faces).toHaveLength(1);
+      expect(calls).toBe(1);
+      // Everything returns to 0/0 once Y is gone too (checked after each test).
+      yViewer.session.release();
+      yWorker.session.release();
+      y.host.dispose();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(main.liveSourceCacheCount()).toBe(0);
+      expect(main.retainedFontSourceBytes()).toBe(0);
+    });
+  }
+
   // Finding 4: a worker reset abandons its calls on main too.
   it('cancels every pending call on reset, so a late answer is never posted or detached', async () => {
     let signal: AbortSignal | undefined;
