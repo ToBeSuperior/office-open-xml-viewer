@@ -10317,11 +10317,38 @@ fn parse_anchor_group_wire(
 /// that §§2.1.1710-.1711 apply to shape and shapetype) both place Word's wrap polygon
 /// in one fixed 21600×21600 square mapped anisotropically onto the shape's
 /// bounding rectangle with its origin at the top-left corner.
-fn anchor_wrap_polygon(edited: bool, points: Vec<AnchorPointWire>) -> AnchorPolygonWire {
+///
+/// Neither schema bounds the vertex count, and retained layout compiles tight
+/// and through polygons exactly in time quadratic in their vertices (about
+/// 0.7s for 4096). Library resource governance, not an Office rule: a larger
+/// polygon wraps around its own bounding rectangle, so the object still paints
+/// and excludes text from the authored extent. An invalid polygon keeps only
+/// its invalid count, which already rejects it.
+const MAX_WRAP_POLYGON_POINTS: usize = 4096;
+
+fn anchor_wrap_polygon(edited: bool, mut points: Vec<AnchorPointWire>) -> AnchorPolygonWire {
     let invalid_point_count = points
         .iter()
         .filter(|point| point.x.is_none() || point.y.is_none())
         .count();
+    if points.len() > MAX_WRAP_POLYGON_POINTS {
+        let xs = points.iter().filter_map(|point| point.x);
+        let ys = points.iter().filter_map(|point| point.y);
+        let (x0, x1) = (xs.clone().min(), xs.max());
+        let (y0, y1) = (ys.clone().min(), ys.max());
+        points = match (invalid_point_count, x0, x1, y0, y1) {
+            (0, Some(x0), Some(x1), Some(y0), Some(y1)) => [(x0, y0), (x0, y1), (x1, y1), (x1, y0)]
+                .into_iter()
+                .map(|(x, y)| AnchorPointWire {
+                    x: Some(x),
+                    y: Some(y),
+                    raw_x: None,
+                    raw_y: None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+    }
     AnchorPolygonWire {
         edited,
         coordinate_space: AnchorPolygonSpaceWire {
@@ -12507,17 +12534,37 @@ fn with_vml_shape_type<R>(
             && node.tag_name().name() == "shapetype"
             && type_id.is_some_and(|id| node.attribute("id") == Some(id))
     };
-    let local_type = type_id.and_then(|_| pict.descendants().find(is_type));
-    let recorded = if local_type.is_none() {
-        type_id.and_then(|id| preceding_vml_shape_type(id, shape.range().start))
-    } else {
-        None
+    with_recorded_vml_shape_type(
+        type_id.and_then(|_| pict.descendants().find(is_type)),
+        shape,
+        use_type,
+    )
+}
+
+/// Use `local_type` when the shape's own pict defines it; otherwise fall back
+/// to the definition recorded earlier in the story.
+pub(super) fn with_recorded_vml_shape_type<R>(
+    local_type: Option<roxmltree::Node>,
+    shape: roxmltree::Node,
+    use_type: impl FnOnce(Option<roxmltree::Node>) -> R,
+) -> R {
+    if local_type.is_some() {
+        return use_type(local_type);
+    }
+    let Some(type_id) = shape
+        .attribute("type")
+        .map(|value| value.trim_start_matches('#'))
+    else {
+        return use_type(None);
     };
+    let recorded = preceding_vml_shape_type(type_id, shape.range().start);
     let recorded_doc = recorded.as_deref().and_then(|xml| parse_guarded(xml).ok());
-    use_type(local_type.or_else(|| {
-        recorded_doc
-            .as_ref()
-            .and_then(|doc| doc.root_element().children().find(is_type))
+    use_type(recorded_doc.as_ref().and_then(|doc| {
+        doc.root_element().children().find(|node| {
+            node.is_element()
+                && node.tag_name().name() == "shapetype"
+                && node.attribute("id") == Some(type_id)
+        })
     }))
 }
 

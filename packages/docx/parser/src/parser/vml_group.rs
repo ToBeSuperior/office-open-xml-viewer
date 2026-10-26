@@ -425,11 +425,48 @@ fn acquire_leaf<'a, 'input>(
             return None;
         }
     }
-    let style = child.attribute("style").unwrap_or("");
-    let shape_type = child
+    let local_type = child
         .attribute("type")
         .and_then(|id| shape_types.get(id.trim_start_matches('#')))
         .copied();
+    // Like an ungrouped pict shape, a definition Word wrote in an earlier
+    // pict of the same story still applies (Part 4 §19.1.2.20).
+    with_recorded_vml_shape_type(local_type, child, |shape_type| {
+        acquire_typed_leaf(
+            style_map,
+            num_map,
+            child,
+            shape_type,
+            transform,
+            within_group,
+            z_order,
+            theme,
+            media_map,
+            chart_map,
+            rel_map,
+            depth,
+            diagnostics,
+        )
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn acquire_typed_leaf(
+    style_map: &StyleMap,
+    num_map: &mut NumberingMap,
+    child: roxmltree::Node,
+    shape_type: Option<roxmltree::Node>,
+    transform: GroupTransform,
+    within_group: bool,
+    z_order: u32,
+    theme: &ThemeColors,
+    media_map: &HashMap<String, String>,
+    chart_map: &ChartMap,
+    rel_map: &HashMap<String, String>,
+    depth: DepthGuard,
+    diagnostics: &mut Vec<PendingParseDiagnostic>,
+) -> Option<DocRun> {
+    let style = child.attribute("style").unwrap_or("");
     let hidden = hidden(child);
     if !hidden && vml_geometry::incomplete_leaf(child, shape_type) {
         unsupported(diagnostics);
