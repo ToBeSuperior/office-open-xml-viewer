@@ -5,6 +5,33 @@ semantic versioning. While the major version is zero, minor releases may contain
 explicitly documented breaking changes; patch releases remain compatible with
 the corresponding minor release.
 
+## 0.90.0 — Unreleased
+
+Minor release that lets applications choose where web fonts come from. Migration
+is required only if you pass `useGoogleFonts`: replace `useGoogleFonts: true`
+with `fonts: [googleFonts()]`. The alias still works in 0.90 with a warning and
+is removed in 0.91.0. See the [0.89 to 0.90 migration guide](docs/migration-0.90.md).
+
+- **Font sources:** the new `fonts` load option takes an ordered list of
+  sources, built with `googleFonts({ cssOrigin? })`, `cssApi()`,
+  `fontFaceCss()`, `fontFiles()` (URLs, `data:` URLs or bytes) and
+  `fontResolver()` for authenticated or private services. The factories are
+  exported from `@silurus/ooxml` and from each format entry, along with
+  `officeFontSubstitutions`. DOCX, XLSX and PPTX behave the same in main and
+  worker mode. Nothing is requested without a source (#1497).
+- **Custom Google Fonts origin:** `googleFonts({ cssOrigin })` sends every
+  request to a regional mirror or an internal proxy and never to
+  `fonts.googleapis.com`. A failing origin keeps the host fonts and is never
+  replaced by another source (#1497).
+- **Fewer font downloads:** DOCX and XLSX now load only the `unicode-range`
+  subsets that the document's text paints, as PPTX already did.
+- **Resource safety:** font sources have fixed limits and fail closed with the
+  new `OoxmlError` code `font-source-limit`.
+- **Deprecated:** `useGoogleFonts` is an alias of `fonts: [googleFonts()]` and
+  warns once per JavaScript realm. Combining `useGoogleFonts: true` with
+  `fonts` throws a `TypeError`. The VS Code extension keeps its
+  `ooxmlViewer.useGoogleFonts` setting.
+
 ## 0.89.4 — 2026-10-25
 
 Compatible patch release. No migration is required.

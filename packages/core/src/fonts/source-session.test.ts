@@ -244,6 +244,55 @@ describe('FontSourceSession: isolation and sharing', () => {
     expect(main.faces[0]).not.toBe(popup.faces[0]);
   });
 
+  // #1497 regressions. Covered elsewhere, not repeated here: request URL
+  // composition per origin (`presets/google-fonts.test.ts`), relative asset
+  // URLs behind a redirect ('FontSourceSession: stylesheet URLs' above and
+  // `css-source.test.ts`), a failing origin keeping host fallback with no
+  // request elsewhere (the first test of this block) and failed families never
+  // retrying a later source ('claim-once chaining' below).
+  it('sends every request of a custom-origin preset to that origin only (#1497)', async () => {
+    const CN = 'https://fonts.googleapis.cn';
+    const { calls } = installFetch({
+      [carlitoAt(CN)]: { css: rule('Carlito', 'https://fonts.gstatic.cn/s/carlito/latin.woff2', LATIN) },
+      [`${CN}/css2?family=Noto+Sans+JP:wght@400;700&display=swap`]: {
+        css: rule('Noto Sans JP', 'https://fonts.gstatic.cn/s/notosansjp/kana.woff2', KANA),
+      },
+    });
+    const set = fakeSet();
+    const loaded = await open([googleFonts({ cssOrigin: CN })], set)
+      .ensure(demand(['Calibri'], [0x61, 0x3042], ['Noto Sans JP']));
+    expect(calls).toHaveLength(2);
+    expect(calls.every((call) => new URL(call.url).origin === CN)).toBe(true);
+    const contacted = [...calls.map((call) => call.url), ...set.faces.map(urlOf)];
+    expect(contacted.filter((url) => /fonts\.(googleapis|gstatic)\.com/.test(String(url)))).toEqual([]);
+    expect(loaded.faces.map((face) => face.family)).toEqual(['Carlito', 'Noto Sans JP']);
+    expect(loaded.substitutions.get('calibri')).toEqual({ family: 'Carlito' });
+  });
+
+  it('keeps two concurrent documents on two origins apart within one realm (#1497)', async () => {
+    const OTHER = 'https://fonts.other-mirror.example';
+    const { calls } = installFetch({
+      [carlitoAt(MIRROR)]: { css: rule('Carlito', 'carlito.woff2') },
+      [carlitoAt(OTHER)]: { css: rule('Carlito', 'carlito.woff2') },
+    });
+    const set = fakeSet();
+    const first = open([googleFonts({ cssOrigin: MIRROR })], set);
+    const second = open([googleFonts({ cssOrigin: OTHER })], set);
+    const [loadedFirst, loadedSecond] = await Promise.all([
+      first.ensure(demand(['Calibri'])), second.ensure(demand(['Calibri'])),
+    ]);
+    // One stylesheet request and one registered face per origin, although the
+    // family and descriptors are identical.
+    expect(calls.map((call) => call.url).sort()).toEqual([carlitoAt(MIRROR), carlitoAt(OTHER)].sort());
+    expect(set.faces.map(urlOf).sort()).toEqual([`${MIRROR}/carlito.woff2`, `${OTHER}/carlito.woff2`]);
+    expect(urlOf(loadedFirst.faces[0].face as unknown as FakeFontFace)).toBe(`${MIRROR}/carlito.woff2`);
+    expect(urlOf(loadedSecond.faces[0].face as unknown as FakeFontFace)).toBe(`${OTHER}/carlito.woff2`);
+    // Releasing one document leaves the other's registration alone.
+    first.release();
+    expect(set.faces.map(urlOf)).toEqual([`${OTHER}/carlito.woff2`]);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it('does not cache failures: a later document retries the same source', async () => {
     const routes: Record<string, Route> = { 'https://fonts.example/a.css': { status: 500 } };
     const { fetchMock } = installFetch(routes);
