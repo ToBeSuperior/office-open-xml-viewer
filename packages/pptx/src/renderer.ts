@@ -8639,14 +8639,19 @@ async function renderSlideLeased(
         // native-sized, even when another chart stretches the same blip.
         const preserveNaturalSize = prior.preserveNaturalSize || usage.preserveNaturalSize;
         const hasSourceCrop = prior.hasSourceCrop || usage.hasSourceCrop;
-        const planned = preserveNaturalSize || pixelTransform(fill)
-          ? undefined
-          : plannedRasterOptions(imagePlan, imagePlanKey(fill.imagePath, pixelTransform(fill)));
         const vector = !pixelTransform(fill)
           && (fill.mimeType === 'image/svg+xml' || preferVectorBlip({
             svgImagePath: fill.svgImagePath,
             srcRect: hasSourceCrop ? true : null,
           }));
+        // The raster plan is keyed by the raster twin's part. Another
+        // non-vector consumer of that part can create a plan entry, but its
+        // grid and retained ceiling describe the raster, not this SVG: SVG
+        // targets are aspect-preserving coverage minimums whose admitted grid
+        // core derives from the SVG itself. Vector fills stay display-targeted.
+        const planned = preserveNaturalSize || pixelTransform(fill) || vector
+          ? undefined
+          : plannedRasterOptions(imagePlan, imagePlanKey(fill.imagePath, pixelTransform(fill)));
         // A picture fill may cover a marker, chart/plot area, wall, or floor.
         // The owning chart frame is the smallest format-derived upper bound
         // common to all consumers. Core has already aggregated each same-chart
