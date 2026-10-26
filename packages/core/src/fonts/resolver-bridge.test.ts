@@ -35,6 +35,7 @@ interface MainRealm extends WorkerRealm {
   readonly FontResolverResponder: typeof import('./resolver-bridge-responder.js').FontResolverResponder;
   readonly copyBridgedFontDemand: typeof import('./resolver-bridge-responder.js').copyBridgedFontDemand;
   readonly sourceCacheEntryCount: () => number;
+  readonly responderModule: typeof import('./resolver-bridge-responder.js');
 }
 const worker1: WorkerRealm = {
   FontSourceSession, WorkerFontResolverClient, assertFontSourceDescriptors, retainedFontSourceBytes, liveSourceCacheCount,
@@ -61,6 +62,7 @@ async function loadRealm() {
     FontResolverResponder: responder.FontResolverResponder,
     copyBridgedFontDemand: responder.copyBridgedFontDemand,
     sourceCacheEntryCount: cache.sourceCacheEntryCount,
+    responderModule: responder,
   };
 }
 beforeAll(async () => {
@@ -437,6 +439,42 @@ describe('fontResolver bridge: review findings', () => {
     expect(calls).toBe(0);
     expect(String(warn.mock.calls.at(-1)?.[0])).toContain('Private Face (font resolver bridge unavailable)');
   });
+
+  // Round 4: the responder's bootstrap counts against the call's deadline.
+  for (const repro of ['10 s bootstrap, 10 s resolver', '35 s bootstrap, immediate resolver'] as const) {
+    it(`starts a bridged call's deadline on arrival (${repro})`, async () => {
+      vi.useFakeTimers();
+      const slowBootstrap = repro.startsWith('10') ? 10_000 : 35_000;
+      let calls = 0;
+      const source = fontResolver(() => {
+        calls++;
+        return repro.startsWith('10')
+          ? new Promise((resolve) => setTimeout(() => resolve([FACE(8)]), 10_000))
+          : [FACE(8)];
+      });
+      const failures = new Map<string, string>();
+      const link = bridge([source], {
+        failures,
+        loadResponder: () => new Promise((resolve) => setTimeout(() => resolve(main.responderModule), slowBootstrap)),
+      });
+      let settled = false;
+      const pending = link.session().session.ensure(demand(['Private Face'])).then((loaded) => { settled = true; return loaded; });
+      await vi.advanceTimersByTimeAsync(15_000);
+      // Answered at the 15 s ceiling, as main mode times out: never by the
+      // worker's backstop, and never with the face.
+      expect(settled).toBe(true);
+      expect((await pending).faces).toEqual([]);
+      expect(String(warn.mock.calls.at(-1)?.[0])).toContain('Private Face (timed out)');
+      await vi.advanceTimersByTimeAsync(30_000);
+      // An expired call is not run once the responder loads (35 s case); the
+      // 10 s case ran it with the 5 s left.
+      expect(calls).toBe(repro.startsWith('10') ? 1 : 0);
+      // The viewer realm of the same workbook reports the same outcome.
+      const viewer = mainSession([source], failures);
+      expect((await viewer.session.ensure(demand(['Private Face']))).faces).toEqual([]);
+      expect(calls).toBe(repro.startsWith('10') ? 1 : 0);
+    });
+  }
 
   // Finding 4: a worker reset abandons its calls on main too.
   it('cancels every pending call on reset, so a late answer is never posted or detached', async () => {
