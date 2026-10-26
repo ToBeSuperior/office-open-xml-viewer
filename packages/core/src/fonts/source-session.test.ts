@@ -852,4 +852,25 @@ describe('FontSourceSession: script-scoped substitution proof (FontDemand.substi
     });
     expect(own.faces.map((face) => face.family)).toEqual(['Sakkal Majalla']);
   });
+
+  it('resolves an absent family again when a later delta widens its proven scope', async () => {
+    // Progressive loading: the family's first text (Latin) proves no script,
+    // a later slide's Arabic text in the same family proves 'arabic'.
+    const files = fontFiles({
+      faces: [{ family: 'Served', url: 'https://app.example/served.woff2' }],
+      substitutes: [{ for: 'Authored', use: 'Served', script: 'arabic' }],
+    });
+    const set = fakeSet();
+    const session = open([files], set);
+    const first = await session.ensure({ ...demand(['Authored'], [0x61]), substituteScripts: { authored: [] } });
+    expect(first.substitutions.size).toBe(0);
+    expect(set.faces).toHaveLength(0);
+    const second = await session.ensure({ ...demand(['Authored'], [0x645]), substituteScripts: { authored: ['arabic'] } });
+    expect(second.substitutions.get('authored')).toEqual({ family: 'Served', script: 'arabic' });
+    expect(set.faces.map((face) => face.family)).toEqual(['Served']);
+    // A repeated demand with the same scope resolves nothing further.
+    await session.ensure({ ...demand(['Authored'], [0x646]), substituteScripts: { authored: ['arabic'] } });
+    expect(set.faces).toHaveLength(1);
+    session.release();
+  });
 });

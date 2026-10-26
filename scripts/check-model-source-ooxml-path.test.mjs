@@ -32,6 +32,18 @@ test('PPTX retains the same opt-in font barrier when its owner becomes a lease',
   assert.throws(() => auditAwaitCase(file, 'load', previous, optional), /OOXML awaits changed/);
 });
 
+test('PPTX admits only the font-source barrier in place of the Google lease barrier', () => {
+  const file = 'packages/pptx/src/presentation.ts';
+  const previous = 'async function load() { await parse(); if (mode === "main" && opts.useGoogleFonts && ready) await pres._ensureGoogleFonts(names); }';
+  const changed = 'async function load() { await parse(); if (mode === "main" && opts.fonts && ready) await pres._ensureFontSources(names); }';
+  assert.equal(auditAwaitCase(file, 'load', previous, changed), 2);
+  const moved = 'async function load() { if (opts.fonts) await pres._ensureFontSources(names); await parse(); }';
+  assert.throws(() => auditAwaitCase(file, 'load', previous, moved), /OOXML awaits changed/);
+  const twice = 'async function load() { await parse(); await pres._ensureFontSources(names); await pres._ensureFontSources(names); }';
+  assert.throws(() => auditAwaitCase(file, 'load', previous, twice), /OOXML awaits changed/);
+  assert.throws(() => auditAwaitCase('sample.ts', 'load', previous, changed), /OOXML awaits changed/);
+});
+
 test('DOCX admits only the native route barrier after math preparation', () => {
   const file = 'packages/docx/src/document.ts';
   const previous = 'async function load() { await parse(); await prepareMathRuns(); await publish(); }';

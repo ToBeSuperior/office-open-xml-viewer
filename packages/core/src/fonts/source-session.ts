@@ -72,7 +72,7 @@ import {
   type FontResolverSource,
   type FontSource,
 } from './source.js';
-import type { FontSubstituteScript } from './substitute-script.js';
+import { FONT_SUBSTITUTE_SCRIPTS, type FontSubstituteScript } from './substitute-script.js';
 import {
   fontFamilyKey,
   loadedRegularAliases,
@@ -146,7 +146,7 @@ interface DemandedName {
   readonly scripts: FontSubstituteScripts;
 }
 
-const KNOWN_SUBSTITUTE_SCRIPTS: ReadonlySet<string> = new Set<FontSubstituteScript>(['arabic']);
+const KNOWN_SUBSTITUTE_SCRIPTS: ReadonlySet<string> = new Set<FontSubstituteScript>(FONT_SUBSTITUTE_SCRIPTS);
 
 function substituteScriptsOf(value: unknown): (name: string) => FontSubstituteScripts {
   if (value === undefined) return () => 'all';
@@ -322,7 +322,21 @@ type FamilyState =
     readonly substitution?: FontSubstitution; readonly declarations: readonly FontFaceDeclaration[];
     readonly faces: OwnedFace[] }
   | { readonly kind: 'failed'; readonly name: string; readonly reason: string }
-  | { readonly kind: 'absent'; readonly name: string };
+  /** No source declared a face for the family under substitution scope
+   * `scripts`. A later demand that proves a wider scope resolves it again. */
+  | { readonly kind: 'absent'; readonly name: string; readonly scripts: FontSubstituteScripts };
+
+/** The union of two substitution scopes. */
+function widenScope(a: FontSubstituteScripts, b: FontSubstituteScripts): FontSubstituteScripts {
+  if (a === 'all' || b === 'all') return 'all';
+  return Object.freeze([...new Set([...a, ...b])].sort());
+}
+
+/** Whether scope `b` admits a script-scoped substitution `a` does not. */
+function scopeWidens(a: FontSubstituteScripts, b: FontSubstituteScripts): boolean {
+  if (a === 'all') return false;
+  return b === 'all' || b.some((script) => !a.includes(script));
+}
 
 export class FontSourceSession {
   // Cleared on release: descriptors hold font bytes (fontFiles data,
@@ -416,18 +430,31 @@ export class FontSourceSession {
     if (this.closed || this.failure !== undefined) return this.settledState();
     if (!this.fontSet || typeof FontFace === 'undefined' || this.sources.length === 0) return this.snapshot;
     try {
-      const fresh = demand.names.filter(({ name }) => !this.families.has(fontFamilyKey(name)));
-      if (this.families.size + fresh.length > HARD_MAX_FONT_SOURCE_FAMILIES) {
-        throw fontSourceLimitError('families', HARD_MAX_FONT_SOURCE_FAMILIES, this.families.size + fresh.length);
+      // A family is resolved once, except that an absent family is resolved
+      // again when a later delta proves a substitution scope its earlier
+      // resolution excluded (progressive loading: Latin text on one slide,
+      // Arabic text in the same family on a later one), under the union of
+      // both scopes. A claimed or failed family is final.
+      const fresh: DemandedName[] = [];
+      let added = 0;
+      for (const entry of demand.names) {
+        const prior = this.families.get(fontFamilyKey(entry.name));
+        if (!prior) { fresh.push(entry); added++; continue; }
+        if (prior.kind === 'absent' && scopeWidens(prior.scripts, entry.scripts)) {
+          fresh.push({ ...entry, scripts: widenScope(prior.scripts, entry.scripts) });
+        }
+      }
+      if (this.families.size + added > HARD_MAX_FONT_SOURCE_FAMILIES) {
+        throw fontSourceLimitError('families', HARD_MAX_FONT_SOURCE_FAMILIES, this.families.size + added);
       }
       const delta = this.addScalars(demand.scalars);
       const resolved = fresh.length ? await this.resolve(fresh, demand.tuples) : new Map<string, FamilyState>();
       if (this.closed) return this.settledState();
       const registered = new Set<OwnedFace>();
       const failures = new Map<string, string>();
-      for (const { name } of fresh) {
+      for (const { name, scripts } of fresh) {
         const key = fontFamilyKey(name);
-        const state = resolved.get(key) ?? { kind: 'absent', name };
+        const state = resolved.get(key) ?? { kind: 'absent', name, scripts };
         this.families.set(key, state);
         if (state.kind === 'failed') failures.set(name, state.reason);
         if (state.kind === 'claimed') this.register(state, registered, failures);

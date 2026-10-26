@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { googleFonts } from '@silurus/ooxml-core/internal/font-sources';
 import {
+  completeDocxFontPresence,
   declaredFontSubstitutions,
   docxFontDemandCandidates,
   docxFontFamilyPlan,
   docxOfficeFontFallbackRequests,
+  type DocxOfficeFontPresence,
 } from './font-plan.js';
 import type { DocxDocumentModel } from './types.js';
 
@@ -225,4 +227,26 @@ it('keeps default native preflight at its existing slot projection', () => {
   expect(docxOfficeFontFallbackRequests(doc, { fontDemand: true }))
     .toContainEqual({ family: 'Cambria', weight: 400, style: 'normal' });
   expect(docxFontPreloadNames(doc)).toContain('Cambria');
+});
+
+it('demands only families whose presence was probed, probing past the office-fallback cap', async () => {
+  // 33 authored families; the capped office-fallback probe checked the first
+  // 32, and "Face 33" is installed on the host.
+  const doc = docWith('body');
+  doc.majorFont = undefined;
+  doc.minorFont = undefined;
+  const names = Array.from({ length: 33 }, (_, index) => `Face ${index + 1}`);
+  (doc.body[0] as { runs: object[] }).runs = names.map((family) => ({ type: 'text', text: 'x', fontFamily: family }));
+  const capped: DocxOfficeFontPresence = { routes: {}, presenceChecked: names.slice(0, 32).map((family) => family.toLowerCase()) };
+  // Unproven: never demanded, so no source face can shadow it.
+  expect(docxFontFamilyPlan(doc, GOOGLE, undefined, capped).families).toEqual(names.slice(0, 32));
+  const probed: string[][] = [];
+  const completed = await completeDocxFontPresence(doc, GOOGLE, undefined, capped, async (families) => {
+    probed.push([...families]);
+    return { installed: new Set(['face 33']), checked: new Set(families.map((family) => family.toLowerCase())) };
+  });
+  expect(probed).toEqual([['Face 33']]);
+  const plan = docxFontFamilyPlan(doc, GOOGLE, undefined, completed);
+  expect(plan.families).toEqual(names.slice(0, 32));
+  expect(completed.installed).toEqual(['face 33']);
 });

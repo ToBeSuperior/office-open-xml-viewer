@@ -51,7 +51,7 @@ describe('complete conservative PPTX paint demand', () => {
     expect(collectSlideFontDemand(vertical, new Set(), 10000)).toBe('all');
   });
 
-  it('keeps bidi mirroring unmodelled and preserves Google-off facts', () => {
+  it('keeps bidi mirroring unmodelled and preserves the no-source preflight', () => {
     const rtl = slide('(');
     (rtl.elements[0] as { textBody: { paragraphs: Array<{ rtl?: boolean }> } }).textBody.paragraphs[0].rtl = true;
     expect(collectSlideFontDemand(rtl, new Set(), 10000)).toBe('all');
@@ -99,7 +99,9 @@ describe('complete conservative PPTX paint demand', () => {
 it('evicts optional precision under metadata pressure without rejecting or retaining a rollback copy', () => {
   const firstSlide = slide('A');
   const secondSlide = { ...slide('B'), index: 1, notes: 'n'.repeat(200) };
-  const ordinary = new PresentationPreflightBuilder(bootstrap);
+  // Mandatory font-source facts are charged whenever demand is collected; a
+  // collector that always declines to 'all' retains no optional precision.
+  const ordinary = new PresentationPreflightBuilder(bootstrap, { collectFontDemand: () => 'all' });
   ordinary.addSlide(firstSlide);
   const required = ordinary.prepareSlide(secondSlide);
   const limit = required.projectedBytes;
@@ -119,7 +121,7 @@ it('evicts optional precision under metadata pressure without rejecting or retai
 
 
 it('does not repair a saturated mandatory projection by subtracting optional cache bytes', () => {
-  const ordinary = new PresentationPreflightBuilder(bootstrap);
+  const ordinary = new PresentationPreflightBuilder(bootstrap, { collectFontDemand: () => 'all' });
   ordinary.addSlide(slide('A'));
   const second = { ...slide('B'), index: 1, notes: 'n'.repeat(100) };
   const probe = ordinary.prepareSlide(second);

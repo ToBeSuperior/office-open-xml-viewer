@@ -9,7 +9,9 @@ import {
 } from '@silurus/ooxml-core';
 import {
   fontFamilyKey,
+  probeFontFamilyPresence,
   substitutionsFor,
+  type FontFamilyPresence,
   type FontDemand,
   type FontSource,
   type FontSubstitution,
@@ -165,22 +167,34 @@ export function docxFontFamilyPlan(
   doc: DocxDocumentModel,
   sources: readonly FontSource[],
   cjkFallback: CjkLang | undefined,
-  officeFonts: Readonly<{ routes: Readonly<Record<string, unknown>>; installed?: readonly string[] }>,
+  officeFonts: DocxOfficeFontPresence,
 ): DocxFontFamilyPlan {
   const substitutes = declaredFontSubstitutions(sources);
   const candidates = docxFontDemandCandidates(doc, substitutes, cjkFallback);
   const probed = new Set(officeFonts.installed ?? []);
+  const checked = officeFonts.presenceChecked === undefined ? undefined : new Set(officeFonts.presenceChecked);
   // Any proven face of the family counts, whichever styles produced it.
   const routedFamilies = new Set(Object.keys(officeFonts.routes).map((key) => key.split(':')[0]));
   const installed = (family: string) => {
     const key = family.trim().toLowerCase();
     return routedFamilies.has(key) || probed.has(key);
   };
-  const families = candidates.authored.filter((family) => !installed(family));
+  // Only a family proven missing is demanded: one whose presence probe did
+  // not complete (past the probe's source cap or deadline) keeps its host
+  // face, so a source face never shadows an installed font it was not
+  // checked against. Without presence facts every family counts as checked.
+  const families = candidates.authored.filter((family) => !installed(family)
+    && (checked === undefined || checked.has(family.trim().toLowerCase())));
   // A family with an admissible substitute: unscoped, or scoped to a script
   // its text proves. Only such a substitute could have displaced it.
-  const substituted = (family: string) => substitutionsFor(substitutes, family,
-    candidates.substituteScripts[fontFamilyKey(family)] ?? []).length > 0;
+  // Own-property read: keys are document font names (e.g. `constructor`).
+  const scriptsOf = (family: string): readonly FontSubstituteScript[] => {
+    const key = fontFamilyKey(family);
+    return Object.prototype.hasOwnProperty.call(candidates.substituteScripts, key)
+      ? candidates.substituteScripts[key]
+      : [];
+  };
+  const substituted = (family: string) => substitutionsFor(substitutes, family, scriptsOf(family)).length > 0;
   const installedSubstituteFamilies = [...new Set(candidates.authored
     .filter((family) => installed(family) && substituted(family))
     .map((family) => family.trim().toLowerCase()))].sort();
@@ -202,6 +216,50 @@ export function docxFontFamilyPlan(
     installedSubstituteFamilies: Object.freeze(installedSubstituteFamilies),
     substituteScripts: candidates.substituteScripts,
   });
+}
+
+/** The installed-face facts {@link docxFontFamilyPlan} reads: exact local
+ * routes, families the presence probe found installed, and every family whose
+ * presence probe completed. */
+export type DocxOfficeFontPresence = Readonly<{
+  routes: Readonly<Record<string, unknown>>;
+  installed?: readonly string[];
+  presenceChecked?: readonly string[];
+}>;
+
+/**
+ * Complete the presence facts of `officeFonts` for font-source demand: the
+ * office-fallback load probes at most one capped batch of families, so every
+ * authored candidate it did not prove installed or check is probed now in
+ * batches ({@link probeFontFamilyPresence}), and the results are merged. Only
+ * called with font sources configured; the default path keeps its single
+ * capped probe.
+ */
+export async function completeDocxFontPresence<T extends DocxOfficeFontPresence>(
+  doc: DocxDocumentModel,
+  sources: readonly FontSource[],
+  cjkFallback: CjkLang | undefined,
+  officeFonts: T,
+  probe: (families: readonly string[]) => Promise<FontFamilyPresence> = (families) => probeFontFamilyPresence(families),
+): Promise<T> {
+  const routed = new Set(Object.keys(officeFonts.routes).map((key) => key.split(':')[0]));
+  const installed = new Set(officeFonts.installed ?? []);
+  const checked = new Set(officeFonts.presenceChecked ?? []);
+  const unproven = docxFontDemandCandidates(doc, declaredFontSubstitutions(sources), cjkFallback).authored
+    .filter((family) => {
+      const key = family.trim().toLowerCase();
+      return !routed.has(key) && !installed.has(key) && !checked.has(key);
+    });
+  if (unproven.length > 0) {
+    const presence = await probe(unproven);
+    for (const family of presence.installed) installed.add(family);
+    for (const family of presence.checked) checked.add(family);
+  }
+  return {
+    ...officeFonts,
+    ...(installed.size > 0 ? { installed: [...installed].sort() } : {}),
+    presenceChecked: [...checked].sort(),
+  };
 }
 
 /** Probe exact local style tuples used by rendered text. The shared loader

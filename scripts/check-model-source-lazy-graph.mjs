@@ -209,12 +209,23 @@ function inlineWorkers(code) {
   return outputs;
 }
 
+/** Bytes two independently minified builds may differ by when the real
+ *  difference is zero. */
+const MINIFIER_NOISE_BYTES = 64;
+
 export function assertDispatchCost(enabledEntry, disabledEntry, budget, label, enabledGraph) {
   const enabled = enabledGraph ?? bundleGraph(enabledEntry);
   const disabled = bundleGraph(disabledEntry);
   assertNoSourceRuntime(disabled.joined, `${label} feature-disabled graph`);
-  const bytes = enabled.bytes - disabled.bytes;
-  if (bytes < 0 || bytes > budget) {
+  const delta = enabled.bytes - disabled.bytes;
+  // A dispatch cost near zero can come out a few bytes negative: the two
+  // builds minify identifiers and name chunks independently. A larger
+  // negative still means the comparison is broken.
+  if (delta < -MINIFIER_NOISE_BYTES) {
+    throw new Error(`${label} model-source dispatch cost exceeds ${budget}-byte budget: ${delta}`);
+  }
+  const bytes = Math.max(0, delta);
+  if (bytes > budget) {
     throw new Error(`${label} model-source dispatch cost exceeds ${budget}-byte budget: ${bytes}`);
   }
   console.log(`${label} dispatch cost: ${bytes}/${budget} bytes (${enabled.files} vs ${disabled.files} static chunks)`);

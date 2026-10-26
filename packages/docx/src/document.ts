@@ -49,7 +49,7 @@ import { createLayoutServices, nativeRouteLineRequests } from './layout-runtime.
 import { mainThreadFallbackWarning } from './main-thread-fallback.js';
 import { admitDocxNativeRouteLines, measureDocxNativeRouteLines } from './native-route-line-metrics.js';
 import { buildBookmarkPageMap } from './bookmark-nav';
-import { declaredFontSubstitutions, docxFontFamilyPlan, docxOfficeFontFallbackRequests } from './font-plan.js';
+import { completeDocxFontPresence, declaredFontSubstitutions, docxFontFamilyPlan, docxOfficeFontFallbackRequests, type DocxOfficeFontPresence } from './font-plan.js';
 import { normalizeFontOptions, type FontSource } from '@silurus/ooxml-core/internal/font-sources';
 import { loadEmbeddedFonts } from './embedded-fonts';
 import {
@@ -963,7 +963,7 @@ export class DocxDocument {
   private async _loadFontSources(
     fonts: readonly FontSource[] | undefined,
     cjkFallback: CjkLang | undefined,
-    officeFonts: Readonly<{ routes: Readonly<Record<string, unknown>>; installed?: readonly string[] }>,
+    officeFonts: DocxOfficeFontPresence,
     signal: AbortSignal | undefined,
   ): Promise<{
     installedSubstituteFamilies: readonly string[];
@@ -971,8 +971,11 @@ export class DocxDocument {
   }> {
     if (this._mode !== 'main' || !fonts?.length || !this._document) return { installedSubstituteFamilies: [] };
     // An installed authored face is never displaced by a source face
-    // (docxFontFamilyPlan).
-    const plan = docxFontFamilyPlan(this._document, fonts, cjkFallback, officeFonts);
+    // (docxFontFamilyPlan): every authored family is probed first, past the
+    // office-fallback probe's cap (completeDocxFontPresence).
+    const presence = await completeDocxFontPresence(this._document, fonts, cjkFallback, officeFonts);
+    if (signal?.aborted || !this._document) throw new PaginationAbortError();
+    const plan = docxFontFamilyPlan(this._document, fonts, cjkFallback, presence);
     const { loadDocxFontSources } = await import('./font-source-load.js');
     if (signal?.aborted) throw new PaginationAbortError();
     const controller = new AbortController();

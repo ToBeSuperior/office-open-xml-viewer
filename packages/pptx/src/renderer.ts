@@ -9,7 +9,9 @@ import {
 } from '@silurus/ooxml-core/internal/font-stack';
 import { FONT_TRACKING_SENTINEL, FONT_BASELINE_SENTINEL, FONT_SPACE_SENTINEL } from '@silurus/ooxml-core/internal/font-measurement-sentinels';
 import { preparedPowerPointText } from './font-display-text.js';
-import { pptxSlideCjkFallback } from './google-fonts.js';
+import { pptxSlideCjkFallback } from './font-requests.js';
+import { formatAutoNum } from './autonum-label.js';
+import { fontFamilyKey } from '@silurus/ooxml-core/internal/font-sources';
 import type { CjkLang } from '@silurus/ooxml-core';
 import { normalizeLocalFontMetricFamily } from '@silurus/ooxml-core';
 import { containsHanScript } from '@silurus/ooxml-core/internal/script-preload-accumulator';
@@ -94,7 +96,6 @@ import {
   MAX_CANVAS_AREA,
   classifyCjkFont,
   classifyFontGeneric,
-  googleCjkFontAlias,
   cjkFallbackChain,
   NON_CJK_SANS_FALLBACKS,
   NON_CJK_SERIF_FALLBACKS,
@@ -154,8 +155,8 @@ import {
   fillDoubleBorder,
   isOptionalImageCodecUnavailableError,
   paintOptionalImagePlaceholder,
-  GOOGLE_FONT_SUBSTITUTES,
   substituteEntryCoversText,
+  type FontSubstituteScript,
 } from '@silurus/ooxml-core';
 import type {
   DecodedBitmapCacheOwner,
@@ -221,8 +222,9 @@ export interface RenderContext {
   officeFontRoutes?: Readonly<Record<string, import('@silurus/ooxml-core').OfficeFontFallbackRoute>>;
   /** Normalized authored families with any installed face (presence probes). */
   officeInstalledFamilies?: readonly string[];
-  /** Presentation load explicitly enabled Google Fonts substitutions. */
-  googleSubstitutes?: boolean;
+  /** Substitutions whose served face this presentation's font sources
+   *  (`LoadOptions.fonts`) actually loaded. Absent without sources. */
+  fontSubstitutions?: LoadedFontSubstitutions;
   themeMajorFont: string | null;
   themeMinorFont: string | null;
   /** Lower-cased authored family → this presentation's isolated FontFace alias. */
@@ -1149,9 +1151,13 @@ function isArabicScriptFace(family: string): boolean {
   return /arabic|naskh|kufi|nastaliq|amiri|scheherazade|lateef|aldhabi|urdu|farsi|العرب|[؀-ۿ]/.test(l);
 }
 
+/** Lower-cased authored family → the family a font source served for it
+ *  (`LoadedFontSources.substitutions`: only substitutions with a loaded face). */
+export type LoadedFontSubstitutions = ReadonlyMap<string, { readonly family: string; readonly script?: FontSubstituteScript }>;
+
 /**
  * Build the CSS font-family LIST for a (already-normalized, non-generic) face:
- * named face + optional web alias + script Noto fallbacks +
+ * named face + loaded substitute + script Noto fallbacks +
  * inferred generic. The script fallbacks are:
  *
  * - Arabic runs: matching-class Arabic Notos enter only that run's stack.
@@ -1167,22 +1173,20 @@ export function cssFontStack(
   authoredFamily = normalized,
   fallback?: CjkLang,
   text = '',
-  googleSubstitutes = false,
+  substitutions?: LoadedFontSubstitutions,
 ): string {
   const generic = genericFallback(authoredFamily);
   const arabicText = containsArabicFallbackText(text);
-  // Optional published web aliases for authored Office faces enter the stack
-  // only with `useGoogleFonts`; the authored family stays first.
-  const alias = googleSubstitutes ? officeFaceWebAlias(authoredFamily) : undefined;
-  // Script-scoped visual substitutes (core substitute-script.ts) join only a
-  // run that contains their script. A CSS stack cannot split a run, but the
-  // authored family stays first, so an installed authored face still wins.
-  const sub = alias && substituteEntryCoversText(
-    ownValue(GOOGLE_FONT_SUBSTITUTES, authoredFamily.toLowerCase()), text, 'any',
-  ) ? alias : undefined;
+  // A family a font source served for the authored family (Calibri → Carlito,
+  // a native Noto CJK name → its distribution name, …) enters the stack only
+  // when its face actually loaded (design §3.6: data from loaded faces, no
+  // vendor table); the authored family stays first, so an installed authored
+  // face still wins. Script-scoped visual substitutes (core
+  // substitute-script.ts) join only a run that contains their script: a CSS
+  // stack cannot split a run.
+  const loaded = substitutions?.get(fontFamilyKey(authoredFamily));
+  const sub = loaded && substituteEntryCoversText(loaded, text, 'any') ? loaded.family : undefined;
   const subPart = sub ? `${quoteCssFontFamily(sub)}, ` : '';
-  const googleAlias = googleCjkFontAlias(authoredFamily);
-  const aliasPart = googleAlias ? `${quoteCssFontFamily(googleAlias)}, ` : '';
   // Arabic faces lead with script fallbacks only for Arabic runs.
   const arabicFamilies = arabicFallbackFamilies(generic === 'serif');
   const arabicPart = arabicText ? `${quoteAll(arabicFamilies)}, ` : '';
@@ -1194,14 +1198,30 @@ export function cssFontStack(
   const authoredCjk = classifyCjkFont(authoredFamily);
   const cjk = authoredCjk ?? fallback;
   const cjkFamilies = cjk
-    ? cjkFallbackChain(cjk, variant).filter((name) => name !== googleAlias)
+    ? cjkFallbackChain(cjk, variant).filter((name) => name !== sub)
     : [];
   const cjkPart = cjkFamilies.length > 0 ? `${quoteAll(cjkFamilies)}, ` : '';
   const nonCjk = variant === 'serif' ? NON_CJK_SERIF_FALLBACKS : NON_CJK_SANS_FALLBACKS;
   const nonCjkPart = `${quoteAll(nonCjk)}, `;
   return authoredCjk
-    ? `${quoteCssFontFamily(normalized)}, ${subPart}${aliasPart}${cjkPart}${nonCjkPart}${arabicPart}${generic}`
-    : `${quoteCssFontFamily(normalized)}, ${subPart}${aliasPart}${nonCjkPart}${cjkPart}${arabicPart}${generic}`;
+    ? `${quoteCssFontFamily(normalized)}, ${subPart}${cjkPart}${nonCjkPart}${arabicPart}${generic}`
+    : `${quoteCssFontFamily(normalized)}, ${subPart}${nonCjkPart}${cjkPart}${arabicPart}${generic}`;
+}
+
+/** The chart model a slide paints: with the unscoped substitutions this
+ *  presentation's font sources loaded (`ChartModel.fontSubstitutions`), so
+ *  chart text paints through the same substitution map as shape text. Chart
+ *  labels are not split by script, so script-scoped substitutes are left out.
+ *  Without one the parsed model is painted unchanged. */
+function chartWithFontSubstitutions(
+  chart: ChartElement['chart'],
+  substitutions: LoadedFontSubstitutions | undefined,
+): ChartElement['chart'] {
+  if (!substitutions?.size) return chart;
+  // Null prototype: keys are document font names (e.g. `__proto__`).
+  const unscoped: Record<string, string> = Object.create(null) as Record<string, string>;
+  for (const [family, substitution] of substitutions) if (!substitution.script) unscoped[family] = substitution.family;
+  return Object.keys(unscoped).length ? { ...chart, fontSubstitutions: Object.freeze(unscoped) } : chart;
 }
 
 /**
@@ -1390,7 +1410,7 @@ export function buildFont(
   }
   const stack = cssFontStack(
     officeRoute?.family ?? normalized, authoredFamily, fallback, text,
-    rc.googleSubstitutes === true,
+    rc.fontSubstitutions,
   );
   // Application-default faces follow the primary face in their fallback
   // order (issue #1627), ahead of the generic web fallbacks.
@@ -4630,69 +4650,6 @@ function renderShape(ctx: CanvasRenderingContext2D, el: ShapeElement, scale: num
  * Tracks pen position so arcTo can compute the ellipse centre correctly.
  */
 const buildCustomPath = buildCustomPathCore;
-
-/**
- * Format an autoNum bullet label from a counter value and OOXML numType.
- * Spec: ECMA-376 §20.1.10.61 (ST_TextAutonumberScheme).
- *
- * Supports the symmetric Plain / Period / ParenR / ParenBoth variants for
- * the four core scripts (arabic, alphaLc/Uc, romanLc/Uc) plus arabicDb
- * (full-width Arabic digits). CJK / Thai / Hebrew / Arabic-Abjad schemes
- * are intentionally not handled here — they fall through to the default
- * `arabicPeriod` rendering rather than emitting a wrong-looking glyph.
- */
-function formatAutoNum(counter: number, numType: string): string {
-  const arabic = `${counter}`;
-  const alphaLc = counter >= 1 && counter <= 26
-    ? String.fromCharCode(96 + counter)
-    : arabic;
-  const alphaUc = counter >= 1 && counter <= 26
-    ? String.fromCharCode(64 + counter)
-    : arabic;
-  const romanLc = toRoman(counter).toLowerCase();
-  const romanUc = toRoman(counter);
-  // ECMA-376 §20.1.10.61 lists `arabicDb*` as full-width Arabic digits
-  // (U+FF10–U+FF19), used in East Asian numbered lists.
-  const arabicDb = arabic.replace(/[0-9]/g, (d) =>
-    String.fromCharCode(0xff10 + (d.charCodeAt(0) - 0x30)),
-  );
-
-  switch (numType) {
-    case 'arabicPlain':       return arabic;
-    case 'arabicPeriod':      return `${arabic}.`;
-    case 'arabicParenR':      return `${arabic})`;
-    case 'arabicParenBoth':   return `(${arabic})`;
-    case 'arabicDbPlain':     return arabicDb;
-    case 'arabicDbPeriod':    return `${arabicDb}.`;
-    case 'alphaLcPlain':      return alphaLc;
-    case 'alphaLcPeriod':     return `${alphaLc}.`;
-    case 'alphaLcParenR':     return `${alphaLc})`;
-    case 'alphaLcParenBoth':  return `(${alphaLc})`;
-    case 'alphaUcPlain':      return alphaUc;
-    case 'alphaUcPeriod':     return `${alphaUc}.`;
-    case 'alphaUcParenR':     return `${alphaUc})`;
-    case 'alphaUcParenBoth':  return `(${alphaUc})`;
-    case 'romanLcPlain':      return romanLc;
-    case 'romanLcPeriod':     return `${romanLc}.`;
-    case 'romanLcParenR':     return `${romanLc})`;
-    case 'romanLcParenBoth':  return `(${romanLc})`;
-    case 'romanUcPlain':      return romanUc;
-    case 'romanUcPeriod':     return `${romanUc}.`;
-    case 'romanUcParenR':     return `${romanUc})`;
-    case 'romanUcParenBoth':  return `(${romanUc})`;
-    default:                  return `${arabic}.`;
-  }
-}
-
-function toRoman(n: number): string {
-  const vals = [1000,900,500,400,100,90,50,40,10,9,5,4,1];
-  const syms = ['M','CM','D','CD','C','XC','L','XL','X','IX','V','IV','I'];
-  let result = '';
-  for (let i = 0; i < vals.length; i++) {
-    while (n >= vals[i]) { result += syms[i]; n -= vals[i]; }
-  }
-  return result;
-}
 
 /**
  * True when a paragraph has renderable content — at least one non-empty text
@@ -8180,7 +8137,8 @@ type InternalSlideRenderOptions = SlideRenderOptions & {
   officeFontRoutes?: Readonly<Record<string, import('@silurus/ooxml-core').OfficeFontFallbackRoute>>;
   /** Normalized authored families with any installed face (presence probes). */
   officeInstalledFamilies?: readonly string[];
-  googleSubstitutes?: boolean;
+  /** See {@link RenderContext.fontSubstitutions}. */
+  fontSubstitutions?: LoadedFontSubstitutions;
   embeddedFontAliases?: ReadonlyMap<string, string>;
   embeddedFontAuthoredFamilies?: ReadonlyMap<string, string>;
   embeddedFontTuples?: ReadonlySet<string>;
@@ -8490,7 +8448,7 @@ async function renderSlideLeased(
     embeddedFontTuples: opts.embeddedFontTuples,
     officeFontRoutes: opts.officeFontRoutes,
     officeInstalledFamilies: opts.officeInstalledFamilies,
-    googleSubstitutes: opts.googleSubstitutes,
+    fontSubstitutions: opts.fontSubstitutions,
     // The backing store may have been clamped below `canvasSize × dpr`; downstream
     // crisp-offset math must use the SAME effective dpr the ctx was scaled by.
     dpr: effectiveDpr,
@@ -9036,7 +8994,7 @@ async function renderSlideLeased(
         applyFrameTransform(ctx, el, scale);
         renderChart(
           ctx,
-          el.chart,
+          chartWithFontSubstitutions(el.chart, rc.fontSubstitutions),
           {
             x: emuToPx(el.x, scale),
             y: emuToPx(el.y, scale),

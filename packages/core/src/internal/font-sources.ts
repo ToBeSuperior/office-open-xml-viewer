@@ -60,3 +60,5 @@ export {
   resetFontDeprecationWarningsForTests,
   type FontLoadOptions,
 } from '../fonts/deprecations.js';
+export { FONT_SUBSTITUTE_SCRIPTS } from '../fonts/substitute-script.js';
+export { probeFontFamilyPresence, type FontFamilyPresence } from '../fonts/office-fallback.js';
