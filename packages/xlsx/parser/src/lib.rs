@@ -5081,6 +5081,25 @@ mod tab_color_tests {
             r#"<worksheet><sheetPr/><sheetData><c><is><t>tabColor rgb="00FF00"</t></is></c>"#;
         assert_eq!(extract_tab_color_from_head(head, &theme()), None);
     }
+
+    #[test]
+    fn tab_color_that_is_not_a_color_is_dropped() {
+        // #1957: the tab color is painted into CSS, so text after the hex
+        // (here a second declaration loading a URL) must never survive.
+        let head = r#"<worksheet><sheetPr><tabColor rgb="FF0000;background-image:url(http://tabcolor-beacon.invalid/pixel)"/></sheetPr><sheetData/></worksheet>"#;
+        assert_eq!(extract_tab_color_from_head(head, &theme()), None);
+        // The same text arriving through a theme slot.
+        let theme = super::XlsxThemeData::parse(
+            r#"<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:themeElements><a:clrScheme name="x">
+              <a:dk1><a:srgbClr val="000000"/></a:dk1><a:lt1><a:srgbClr val="FFFFFF"/></a:lt1>
+              <a:dk2><a:srgbClr val="44546A"/></a:dk2><a:lt2><a:srgbClr val="E7E6E6"/></a:lt2>
+              <a:accent1><a:srgbClr val="4472C4;background-image:url(http://x.invalid/p)"/></a:accent1>
+            </a:clrScheme></a:themeElements></a:theme>"#,
+        )
+        .colors;
+        let head = r#"<worksheet><sheetPr><tabColor theme="4"/></sheetPr><sheetData/></worksheet>"#;
+        assert_eq!(extract_tab_color_from_head(head, &theme), None);
+    }
 }
 
 #[cfg(test)]
@@ -5184,12 +5203,9 @@ mod color_tint_tests {
             resolve_color_attrs(Some("FF808080"), None, Some(" 0.5 "), None, &[]).as_deref(),
             Some("#C0C0C0")
         );
-        // Malformed non-ASCII RGB must not reach byte-indexed HLS conversion.
+        // Malformed non-hex RGB is not a color (#1957), whatever its length.
         assert!(resolve_color_attrs(Some("あ12345"), None, Some("0.5"), None, &[]).is_none());
-        assert_eq!(
-            resolve_color_attrs(Some("あ123"), None, Some("0.5"), None, &[]).as_deref(),
-            Some("#あ123")
-        );
+        assert!(resolve_color_attrs(Some("あ123"), None, Some("0.5"), None, &[]).is_none());
     }
 }
 
