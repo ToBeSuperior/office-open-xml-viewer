@@ -10319,12 +10319,14 @@ fn parse_anchor_group_wire(
 /// bounding rectangle with its origin at the top-left corner.
 ///
 /// Neither schema bounds the vertex count, and retained layout compiles tight
-/// and through polygons exactly in time quadratic in their vertices (about
-/// 0.7s for 4096). Library resource governance, not an Office rule: a larger
-/// polygon wraps around its own bounding rectangle, so the object still paints
-/// and excludes text from the authored extent. An invalid polygon keeps only
-/// its invalid count, which already rejects it.
-const MAX_WRAP_POLYGON_POINTS: usize = 4096;
+/// and through polygons exactly; a self-intersecting polygon has up to
+/// V(V-3)/2 crossings, so time and memory grow quadratically (measured worst
+/// case for random 256-vertex contours: about 0.1s and 14MB). Library resource
+/// governance, not an Office rule: a polygon above the budget wraps around its
+/// own bounding rectangle, so the object still paints and excludes text from
+/// the authored extent. An invalid polygon keeps only its invalid count, which
+/// already rejects it.
+const MAX_WRAP_POLYGON_POINTS: usize = 256;
 
 fn anchor_wrap_polygon(edited: bool, mut points: Vec<AnchorPointWire>) -> AnchorPolygonWire {
     let invalid_point_count = points
@@ -13024,10 +13026,19 @@ fn parse_vml_shape(
         && stroke_image.is_none();
     let malformed_text_rects =
         vml_geometry::path_attr(shape, shape_type, "textboxrect").is_some() && text_rects.is_none();
+    let anchor = vml_css_str(style, "position")
+        .is_some_and(|value| value.eq_ignore_ascii_case("absolute"))
+        && vml_word_has_complete_anchor_reference(shape, style);
+    // Only anchor acquisition consumes `wrapcoords`; a shape without complete
+    // relative frames keeps its legacy placement, which applies no wrapping.
+    let unacquired_wrap_polygon = !anchor
+        && (shape.attribute("wrapcoords").is_some()
+            || shape_type.is_some_and(|node| node.attribute("wrapcoords").is_some()));
     if geometry_unavailable
         || missing_pen
         || missing_edge_pen
         || malformed_text_rects
+        || unacquired_wrap_polygon
         || resolved_fill.incomplete
         || vml_geometry::incomplete_leaf(shape, shape_type)
     {
@@ -13082,9 +13093,6 @@ fn parse_vml_shape(
             .map(|value| vec![Some(value * 100000.0 / 21600.0)])
             .unwrap_or_default()
     };
-    let anchor = vml_css_str(style, "position")
-        .is_some_and(|value| value.eq_ignore_ascii_case("absolute"))
-        && vml_word_has_complete_anchor_reference(shape, style);
     let anchor_acquisition =
         anchor.then(|| vml_word_anchor_acquisition(shape, shape_type, style, width_pt, height_pt));
     let [text_inset_l, text_inset_t, text_inset_r, text_inset_b] =

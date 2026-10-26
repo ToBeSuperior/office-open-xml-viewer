@@ -150,6 +150,29 @@ it('paints tight-wrapped VML shapes and groups with their wrapcoords', async () 
   }
 });
 
+it('wraps around the bounding rectangle of a self-intersecting polygon beyond the vertex budget', async () => {
+  // Crossing count, and with it exact compilation work, is quadratic in
+  // vertices. 300 pseudo-random vertices plus the frame corners exceed the
+  // budget and must wrap exactly like the full-frame polygon.
+  let seed = 12345;
+  const next = () => (seed = (Math.imul(1664525, seed) + 1013904223) >>> 0) % 21601;
+  const scribble = ['0 0', '21600 21600', ...Array.from({ length: 300 }, () => `${next()} ${next()}`)].join(' ');
+  const frame = await render(picture('<w10:wrap type="tight"/>', '0 0 0 21600 21600 21600 21600 0'));
+  const actual = await render(picture('<w10:wrap type="tight"/>', scribble));
+  expect(actual.diagnostics).toEqual([]);
+  expect(Buffer.compare(Buffer.from(actual.pixels), Buffer.from(frame.pixels))).toBe(0);
+});
+
+it('discloses wrapcoords on a shape that keeps legacy placement without wrapping', async () => {
+  // Without complete relative frames a VML shape keeps its legacy placement,
+  // which applies no wrapping; its polygon must not vanish without a marker.
+  const shape = (coords: string) => `<v:rect style="position:absolute;margin-left:0;margin-top:0;width:144pt;height:144pt"${coords} filled="f" strokecolor="blue" strokeweight="4pt"><w10:wrap type="tight"/></v:rect>`;
+  expect((await render(shape(''))).diagnostics).toEqual([]);
+  const legacy = await render(shape(` wrapcoords="${LEFT_HALF}"`));
+  expect(legacy.blue).toBeGreaterThan(4 * 144);
+  expect(legacy.diagnostics).not.toEqual([]);
+});
+
 it('wraps around the bounding rectangle of a polygon beyond the vertex budget', async () => {
   // 150,000 vertices along the left half's outline: their bounding rectangle
   // is the left half, so the result equals the four-point polygon.
