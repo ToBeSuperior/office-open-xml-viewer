@@ -13925,14 +13925,10 @@ fn vml_word_wrap_polygon(wrapcoords: Option<&str>) -> AnchorPolygonWire {
             return None;
         }
         tokens
-            .chunks_exact(2)
-            .map(|pair| {
-                Some(point(
-                    pair[0].parse().ok()?,
-                    pair[1].parse().ok()?,
-                    Some((pair[0], pair[1])),
-                ))
-            })
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|&[x, y]| Some(point(x.parse().ok()?, y.parse().ok()?, Some((x, y)))))
             .collect::<Option<Vec<_>>>()
     });
     let points = authored.unwrap_or_else(|| {
