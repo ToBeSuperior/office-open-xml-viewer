@@ -3002,11 +3002,6 @@ fn load_sheet_comments(
     merge_sheet_comments(threaded_comments, classic_comments)
 }
 
-/// Reconcile modern threads with the legacy placeholders required by MS-XLSX
-/// §2.3.7.3/.3.1, while retaining unrelated ECMA-376 §18.7 notes. A recognized
-/// placeholder is metadata for a thread, not a second user-visible note. `None`
-/// means the worksheet has no threaded-comment relationship; `Some(empty)`
-/// preserves the fact that a declared part yielded no valid thread records.
 /// §18.3.1.55 lists the merged ranges and does not define a repeated
 /// `<mergeCell>`; a repeat of an identical (corner-normalized) range names no
 /// new cells, so it is dropped (#1958: thousands of repeats of one large
@@ -3028,6 +3023,11 @@ fn without_repeated_merge_ranges(merge_cells: Vec<MergeCell>) -> Vec<MergeCell> 
     kept
 }
 
+/// Reconcile modern threads with the legacy placeholders required by MS-XLSX
+/// §2.3.7.3/.3.1, while retaining unrelated ECMA-376 §18.7 notes. A recognized
+/// placeholder is metadata for a thread, not a second user-visible note. `None`
+/// means the worksheet has no threaded-comment relationship; `Some(empty)`
+/// preserves the fact that a declared part yielded no valid thread records.
 fn merge_sheet_comments(
     threaded_part: Option<Vec<XlsxComment>>,
     classic: Vec<XlsxComment>,

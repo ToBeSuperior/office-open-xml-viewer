@@ -25,14 +25,16 @@ export interface MergeCoverageIndex {
  * - a cell is a continuation cell exactly when some merge covers it without
  *   having it as its top-left — i.e. more merges cover it than start at it;
  * - identical ranges therefore mean the same as one range, and a range
- *   whose top-left lies inside another merge contributes coverage only.
+ *   whose top-left lies inside another merge is not painted from that
+ *   top-left by the main grid pass (its cells still count as covered).
  *
  * Work is independent of how often cells are re-covered. Each range is
  * validated arithmetically, then a row sweep keeps the covered columns in a
  * segment tree over the compressed column boundaries. Between two event
  * rows the covered set is constant, so its runs are enumerated once per
- * band (O(log merges) tree nodes per run) and each covered cell of the band
- * is visited exactly once. Every visited cell is a new continuation entry
+ * band — the enumeration visits O(log merges) tree nodes per covered
+ * elementary column segment — and each covered cell of the band is visited
+ * exactly once. Every visited cell is a new continuation entry
  * (charged against `continuationIdentity`) or one of the at most
  * `merges.length` top-left cells, and every enumerated run holds at least
  * one visited cell per band row, so the total is
