@@ -16,8 +16,9 @@ import { createAbortError } from '../internal/abort.js';
 import { nullRecord } from '../internal/own-key.js';
 import { claimFromIndex, indexFontDeclarations } from './files-source.js';
 import {
+  concludeFamilies,
+  decidedFamilyOutcome,
   fontResolverFailureKey,
-  recordFontResolverFailures,
   type FontResolverFailures,
 } from './resolver-failures.js';
 import { admitFontResolverResult, isBridgedFontSourceLimitError } from './resolver-admission.js';
@@ -127,12 +128,12 @@ export async function resolveFamiliesThroughCache(options: {
   readonly failures?: FontResolverFailures;
 }): Promise<Map<string, FamilyResolution>> {
   const { source, cache, runner, tuples, scalars, signal, holder, sourceIndex, remainingMs, failures } = options;
-  const failureKey = (name: string, scripts: FontSubstituteScripts) => fontResolverFailureKey(cache.id, name, scripts);
   const settled = new Map<string, FamilyResolution>();
+  // A family the document already decided keeps that outcome.
   const families = options.families.filter(({ name, scripts }) => {
-    const reason = failures?.get(failureKey(name, scripts));
-    if (reason === undefined) return true;
-    settled.set(fontFamilyKey(name), { kind: 'failed', reason });
+    const decided = decidedFamilyOutcome(failures, cache, name, scripts, holder);
+    if (!decided) return true;
+    settled.set(fontFamilyKey(name), decided);
     return false;
   });
   const needed = families.filter(({ name, scripts }) => !cache.families.has(scopedFamilyKey(name, scripts)));
@@ -155,34 +156,23 @@ export async function resolveFamiliesThroughCache(options: {
   }
   const entries = await Promise.all(families.map(async ({ name, scripts }) => {
     const key = fontFamilyKey(name);
-    let answer: FamilyResolution;
-    try {
-      answer = await cache.families.join(scopedFamilyKey(name, scripts), async (taskSignal) => {
-        if (!call) return { kind: 'absent' } satisfies FamilyResolution;
-        const batch = await call.join(taskSignal);
-        const own = batch.get(key) ?? { kind: 'absent' };
-        batch.delete(key);
-        return own;
-      }, signal, holder);
-    } catch (error) {
-      // A ceiling breach is terminal for the document too. (An abort is
-      // recorded by the requester that knows why it aborted: a timeout is,
-      // a release is not.)
-      if (isFontSourceLimitError(error)) recordFontResolverFailures(failures, cache.id, [{ name, scripts }], error.message);
-      throw error;
-    }
-    // Another requester of this document reached a terminal failure while
-    // this answer was in flight (its ceiling expired first): one outcome.
-    const recorded = failures?.get(failureKey(name, scripts));
-    if (recorded !== undefined) return [key, { kind: 'failed', reason: recorded } satisfies FamilyResolution] as const;
-    if (answer.kind === 'failed') recordFontResolverFailures(failures, cache.id, [{ name, scripts }], answer.reason);
-    return [key, answer] as const;
+    const answer = await cache.families.join(scopedFamilyKey(name, scripts), async (taskSignal) => {
+      if (!call) return { kind: 'absent' } satisfies FamilyResolution;
+      const batch = await call.join(taskSignal);
+      const own = batch.get(key) ?? { kind: 'absent' };
+      batch.delete(key);
+      return own;
+    }, signal, holder);
+    // A rejection (abort, timeout, ceiling breach) concludes the whole batch
+    // at the requester, which knows why (`concludeFamilies`, per family).
+    // A failed answer, or a failure another requester of this document
+    // recorded while this answer was in flight, concludes this family.
+    const reason = answer.kind === 'failed' ? answer.reason : failures?.get(fontResolverFailureKey(cache.id, name, scripts));
+    if (reason === undefined) return [key, answer] as const;
+    return [key, concludeFamilies(failures, cache, [{ name, scripts }], reason, holder).get(key) ?? answer] as const;
   }));
   return new Map([...settled, ...entries]);
 }
-
-const isFontSourceLimitError = (error: unknown): error is Error =>
-  error instanceof Error && (error as { code?: unknown }).code === 'font-source-limit';
 
 /**
  * Run one shared resolver call. Module-level and given its runner explicitly:

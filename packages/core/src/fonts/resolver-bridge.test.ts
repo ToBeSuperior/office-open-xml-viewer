@@ -579,6 +579,58 @@ describe('fontResolver bridge: review findings', () => {
     });
   }
 
+  // Round 7: a batch ends per family; decided families keep their outcome.
+  const recordedFamilies = (failures: Map<string, string>) =>
+    [...failures.keys()].map((key) => key.split('\u0000')[1]).sort();
+  it('keeps a family the worker already resolved when the viewer\'s batch times out', async () => {
+    vi.useFakeTimers();
+    let calls = 0;
+    const source = fontResolver((request) => {
+      calls++;
+      if (request.families.includes('Slow')) return new Promise(() => undefined);
+      return request.families.map((family) => FACE(8, family));
+    });
+    const failures = new Map<string, string>();
+    const worker = bridge([source], { failures }).session();
+    expect((await worker.session.ensure(demand(['Fast']))).faces).toHaveLength(1);
+    const viewer = mainSession([source], failures);
+    const pending = viewer.session.ensure(demand(['Fast', 'Slow']));
+    await vi.advanceTimersByTimeAsync(15_000);
+    const loaded = await pending;
+    expect(loaded.faces.map(({ family }) => family)).toEqual(['Fast']);
+    // Only the undecided family is recorded.
+    expect(recordedFamilies(failures)).toEqual(['slow']);
+    expect(calls).toBe(2);
+  });
+
+  for (const failing of ['viewer', 'worker'] as const) {
+    it(`concludes a ${failing} batch that breaches a ceiling per family`, async () => {
+      let calls = 0;
+      const source = fontResolver((request) => {
+        calls++;
+        if (request.families.includes('Big')) return Array.from({ length: HARD_MAX_FONT_SOURCE_DECLARATIONS + 1 }, () => FACE(1, 'Big'));
+        return request.families.map((family) => FACE(8, family));
+      });
+      const failures = new Map<string, string>();
+      const link = bridge([source], { failures });
+      const viewer = mainSession([source], failures);
+      const worker = link.session();
+      // The other realm decides Fast first.
+      const decider = failing === 'viewer' ? worker : viewer;
+      expect((await decider.session.ensure(demand(['Fast']))).faces).toHaveLength(1);
+      const breaching = failing === 'viewer' ? viewer : worker;
+      const error = await breaching.session.ensure(demand(['Fast', 'Big'])).catch((caught: unknown) => caught);
+      expect((error as OoxmlError).violation).toMatchObject({ quota: 'declarations' });
+      expect(recordedFamilies(failures)).toEqual(['big']);
+      // The decided realm keeps Fast; a later requester of the document gets
+      // Big's recorded failure with no further call.
+      const later = mainSession([source], failures);
+      const laterLoaded = await later.session.ensure(demand(['Fast', 'Big']));
+      expect(laterLoaded.faces.map(({ family }) => family)).toEqual(['Fast']);
+      expect(calls).toBe(2);
+    });
+  }
+
   // Finding 4: a worker reset abandons its calls on main too.
   it('cancels every pending call on reset, so a late answer is never posted or detached', async () => {
     let signal: AbortSignal | undefined;

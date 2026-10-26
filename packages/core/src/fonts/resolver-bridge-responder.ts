@@ -319,7 +319,12 @@ export class FontResolverResponder {
       };
     } catch (error) {
       if (expired()) return fail('timed out');
-      if (isFontSourceLimit(error)) return { status: 'limit', violation: error.violation };
+      if (isFontSourceLimit(error)) {
+        // Concluded per family like any other batch end; the breach itself
+        // still rejects the worker's load.
+        fail(error.message);
+        return { status: 'limit', violation: error.violation };
+      }
       return fail(error instanceof Error ? error.message : String(error));
     }
   }

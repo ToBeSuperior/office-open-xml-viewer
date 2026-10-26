@@ -19,7 +19,7 @@
  * every terminal outcome of the worker's resolver calls and records it here.
  */
 import type { BridgedFamilyAnswer, FontResolveOutcome } from './resolver-bridge.js';
-import type { SourceCache } from './source-cache.js';
+import type { FamilyResolution, SourceCache } from './source-cache.js';
 import type { FontResolverSource, FontSource } from './source.js';
 import type { FontSubstituteScript } from './substitute-script.js';
 import { fontFamilyKey, scopedFamilyKey, type FontSubstituteScripts } from './substitutions.js';
@@ -32,9 +32,9 @@ export function fontResolverFailureKey(sourceId: string, name: string, scripts: 
   return `${sourceId}\u0000${scopedFamilyKey(name, scripts)}`;
 }
 
-/** Record `reason` for `families` of the source `sourceId`; a family keeps
- * the first terminal outcome recorded for it. */
-export function recordFontResolverFailures(
+/** Record `reason` for `families` of `sourceId`. Private: every write goes
+ * through {@link concludeFamilies}, which writes only undecided families. */
+function recordFontResolverFailures(
   failures: FontResolverFailures | undefined,
   sourceId: string,
   families: readonly { readonly name: string; readonly scripts: FontSubstituteScripts }[],
@@ -45,6 +45,50 @@ export function recordFontResolverFailures(
     const key = fontResolverFailureKey(sourceId, name, scripts);
     if (!failures.has(key)) failures.set(key, reason);
   }
+}
+
+/**
+ * The outcome this document already reached for one scoped family of
+ * `cache`'s source: a recorded failure, or a resolution (claimed or absent)
+ * the realm cache keeps, which `holder` then holds (see
+ * `SharedTaskMap.holdKept`). Undefined while undecided.
+ */
+export function decidedFamilyOutcome(
+  failures: FontResolverFailures | undefined,
+  cache: SourceCache,
+  name: string,
+  scripts: FontSubstituteScripts,
+  holder: object,
+): FamilyResolution | undefined {
+  const reason = failures?.get(fontResolverFailureKey(cache.id, name, scripts));
+  if (reason !== undefined) return { kind: 'failed', reason };
+  return cache.families.holdKept(scopedFamilyKey(name, scripts), holder);
+}
+
+/**
+ * The single writer of a document's resolver outcomes: conclude `families`
+ * of `cache`'s source that reached no resolution of their own (a timeout, a
+ * ceiling breach, an error, a failed answer, a bridge that cannot answer).
+ * A family the document already decided keeps that outcome (held for
+ * `holder` when it comes from the cache); only an undecided family fails
+ * with `reason`, which is recorded for every requester of the document.
+ * Returns lower-cased family → outcome.
+ */
+export function concludeFamilies(
+  failures: FontResolverFailures | undefined,
+  cache: SourceCache,
+  families: readonly { readonly name: string; readonly scripts: FontSubstituteScripts }[],
+  reason: string,
+  holder: object,
+): Map<string, FamilyResolution> {
+  const outcomes = new Map<string, FamilyResolution>();
+  for (const { name, scripts } of families) {
+    const decided = decidedFamilyOutcome(failures, cache, name, scripts, holder);
+    if (decided) { outcomes.set(fontFamilyKey(name), decided); continue; }
+    recordFontResolverFailures(failures, cache.id, [{ name, scripts }], reason);
+    outcomes.set(fontFamilyKey(name), { kind: 'failed', reason });
+  }
+  return outcomes;
 }
 
 /**
@@ -82,7 +126,15 @@ export interface SettledBridgedRequest {
   readonly settled: readonly BridgedFamilyAnswer[];
   /** Families no requester has decided yet. */
   readonly unsettled: readonly { readonly name: string; readonly scripts: FontSubstituteScripts }[];
-  readonly sourceId: string;
+  /** The document's handle on the source's cache (holder of `settled`). */
+  readonly cache: SourceCache;
+}
+
+/** One family's outcome as the bridge sends it. */
+export function bridgedAnswer(family: string, outcome: FamilyResolution): BridgedFamilyAnswer {
+  return outcome.kind === 'claimed' ? { family, kind: 'claimed', declarations: outcome.declarations }
+    : outcome.kind === 'failed' ? { family, kind: 'failed', reason: outcome.reason }
+      : { family, kind: 'absent' };
 }
 
 /** The requesting document's handle on one resolver source's realm cache
@@ -115,15 +167,11 @@ export function settledBridgedRequest(
   const settled: BridgedFamilyAnswer[] = [];
   const unsettled: { name: string; scripts: FontSubstituteScripts }[] = [];
   for (const { name, scripts } of bridgedRequestFamilies(request.demand)) {
-    const family = fontFamilyKey(name);
-    const reason = failures.get(fontResolverFailureKey(cache.id, name, scripts));
-    if (reason !== undefined) { settled.push({ family, kind: 'failed', reason }); continue; }
-    const kept = cache.families.holdKept(scopedFamilyKey(name, scripts), cache);
-    if (kept?.kind === 'claimed') settled.push({ family, kind: 'claimed', declarations: kept.declarations });
-    else if (kept?.kind === 'absent') settled.push({ family, kind: 'absent' });
+    const decided = decidedFamilyOutcome(failures, cache, name, scripts, cache);
+    if (decided) settled.push(bridgedAnswer(fontFamilyKey(name), decided));
     else unsettled.push({ name, scripts });
   }
-  return { settled, unsettled, sourceId: cache.id };
+  return { settled, unsettled, cache };
 }
 
 /**
@@ -141,14 +189,11 @@ export function concludeBridgedRequest(
   reason: string,
   cacheFor: DocumentSourceCache,
 ): FontResolveOutcome {
-  const split = settledBridgedRequest(failures, sources, request, cacheFor);
-  if (!split) return { status: 'failed', reason };
-  recordFontResolverFailures(failures, split.sourceId, split.unsettled, reason);
-  return {
-    status: 'families',
-    families: [
-      ...split.settled,
-      ...split.unsettled.map(({ name }): BridgedFamilyAnswer => ({ family: fontFamilyKey(name), kind: 'failed', reason })),
-    ],
-  };
+  const { sourceIndex, resolverId } = request;
+  if (typeof sourceIndex !== 'number' || !Number.isSafeInteger(sourceIndex) || sourceIndex < 0) return { status: 'failed', reason };
+  const source = sources[sourceIndex];
+  if (source?.kind !== 'font-resolver' || source.id !== resolverId) return { status: 'failed', reason };
+  const cache = cacheFor(sourceIndex, source);
+  const outcomes = concludeFamilies(failures, cache, bridgedRequestFamilies(request.demand), reason, cache);
+  return { status: 'families', families: [...outcomes].map(([family, outcome]) => bridgedAnswer(family, outcome)) };
 }

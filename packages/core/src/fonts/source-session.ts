@@ -49,7 +49,7 @@ import {
 } from '../worker/resource-policy.generated.js';
 import { parseUnicodeRange, resolveCssSource } from './css-source.js';
 import { resolveFontFiles } from './files-source.js';
-import { recordFontResolverFailures } from './resolver-failures.js';
+import { concludeFamilies } from './resolver-failures.js';
 import {
   resolveFamiliesThroughCache,
   runResolverInRealm,
@@ -503,14 +503,24 @@ export class FontSourceSession {
         try {
           answers = await this.resolveWithSource(sourceIndex, pending, tuples, sourceSignal, ceiling.remaining);
         } catch (error) {
-          if (!isAbortError(error) || !ceiling.expired() || sourceSignal !== ceiling.signal) throw error;
-          // The timeout is this document's outcome for these families.
-          if (source.kind === 'font-resolver') {
-            recordFontResolverFailures(this.resolverFailures, this.caches[sourceIndex].id, pending, 'timed out');
+          const timedOut = isAbortError(error) && ceiling.expired() && sourceSignal === ceiling.signal;
+          if (source.kind !== 'font-resolver') {
+            if (!timedOut) throw error;
+            for (const { name } of pending) result.set(fontFamilyKey(name), { kind: 'failed', name, reason: 'timed out' });
+            pending = [];
+            break;
           }
-          for (const { name } of pending) result.set(fontFamilyKey(name), { kind: 'failed', name, reason: 'timed out' });
-          pending = [];
-          break;
+          // A release is no outcome. A timeout or any other error concludes
+          // the batch per family (resolver-failures.ts `concludeFamilies`):
+          // a family this document already decided (another requester's
+          // resolution held in the cache, or a recorded failure) keeps it;
+          // only undecided families fail, recorded for the whole document.
+          if (isAbortError(error) && !timedOut) throw error;
+          const cache = this.caches[sourceIndex];
+          answers = concludeFamilies(this.resolverFailures, cache, pending,
+            timedOut ? 'timed out' : error instanceof Error ? error.message : String(error), cache);
+          // A ceiling breach still rejects the ensure.
+          if (!timedOut) throw error;
         }
         const next: typeof pending[number][] = [];
         for (const entry of pending) {
