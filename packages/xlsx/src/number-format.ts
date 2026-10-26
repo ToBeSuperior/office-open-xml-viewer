@@ -2,6 +2,7 @@ import {
   excelDateTimeSectionNameTexts,
   formatExcelDateTime,
   formatLocalizedExcelShortDate,
+  localizedExcelShortDateTexts,
   isDateFormatSection,
   isExcelDisplayDateSerial,
   roundDecimalHalfUp,
@@ -320,9 +321,10 @@ function applyFormat(num: number, numFmtId: number, formatCode: string | null, d
  *   weekday names, AM/PM, Japanese weekdays and eras:
  *   `excelDateTimeSectionNameTexts`);
  * - for built-in 14 without a code, the host locale's numeric short date
- *   (`formatLocalizedExcelShortDate`), sampled over every day of one month
- *   and the fifteenth of every month so each digit, separator and mark the
- *   locale's pattern can paint appears.
+ *   (`localizedExcelShortDateTexts`): its complete output set when the
+ *   locale formats Gregorian dates with ASCII digits, otherwise `'all'`
+ *   (another calendar or numbering system can paint era names and digits
+ *   no sample proves).
  *
  * Codes come from the style numFmts and the differential formats a
  * conditional format may apply (§18.8.15); built-in ids are resolved as
@@ -330,7 +332,7 @@ function applyFormat(num: number, numFmtId: number, formatCode: string | null, d
  * classified: the result over-approximates the painted scalars and never
  * misses one.
  */
-export function numberFormatPaintTexts(styles: Pick<Styles, 'numFmts' | 'cellXfs' | 'dxfs'>): string[] {
+export function numberFormatPaintTexts(styles: Pick<Styles, 'numFmts' | 'cellXfs' | 'dxfs'>): string[] | 'all' {
   const texts: string[] = [];
   const codeOf = new Map<number, string>();
   for (const format of styles.numFmts ?? []) {
@@ -353,8 +355,9 @@ export function numberFormatPaintTexts(styles: Pick<Styles, 'numFmts' | 'cellXfs
   }
   for (const id of builtinIds) {
     if (id === 14) {
-      for (let day = 1; day <= 31; day++) texts.push(formatLocalizedExcelShortDate(36_525 + day));
-      for (let month = 0; month < 12; month++) texts.push(formatLocalizedExcelShortDate(36_540 + month * 30.5));
+      const shortDate = localizedExcelShortDateTexts();
+      if (shortDate === 'all') return 'all';
+      texts.push(...shortDate);
       continue;
     }
     const code = BUILTIN_DATE_FMT[id] ?? BUILTIN_NUMERIC_FMT[id];

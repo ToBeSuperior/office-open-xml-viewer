@@ -66,7 +66,7 @@ afterEach(() => {
 interface FakeFace { family: string }
 /** Faces load when `gate` resolves. With `missingLocal`, `local()` probes miss
  * (the host has no authored face), so a font source is consulted. */
-function installFontFaceSet(gate: Promise<void> = Promise.resolve(), missingLocal = false): { added: FakeFace[] } {
+function installFontFaceSet(gate: Promise<void> = Promise.resolve(), missingLocal: boolean | ((source: string) => boolean) = false): { added: FakeFace[] } {
   const added: FakeFace[] = [];
   class FakeFontFace {
     status: FontFaceLoadStatus = 'unloaded';
@@ -74,7 +74,8 @@ function installFontFaceSet(gate: Promise<void> = Promise.resolve(), missingLoca
     style = 'normal';
     constructor(public family: string, public source: string, public descriptors?: object) {}
     async load(): Promise<FakeFontFace> {
-      if (missingLocal && typeof this.source === 'string' && this.source.startsWith('local(')) {
+      if (typeof this.source === 'string' && this.source.startsWith('local(')
+        && (typeof missingLocal === 'function' ? missingLocal(this.source) : missingLocal)) {
         this.status = 'error';
         throw new Error('not installed');
       }
@@ -270,6 +271,30 @@ describe('XlsxWorkbook.destroy() — rejects in-flight worker requests', () => {
 
     expect(added).toHaveLength(1);
     second.destroy();
+    expect(added).toHaveLength(0);
+  });
+
+  it('releases the Office faces it loaded when the parallel font-source load rejects', async () => {
+    // Local Calibri is installed; 257 other authored families are not, which
+    // breaches the 256-family font-source ceiling.
+    const { added } = installFontFaceSet(Promise.resolve(), (source) => !/calibri/i.test(source));
+    const { wb } = makeWorkbook();
+    const workbook = wb as unknown as XlsxWorkbook;
+    const parsed = {
+      ...FONT_WORKBOOK,
+      styles: { ...FONT_WORKBOOK.styles, fonts: [
+        { name: 'Calibri', bold: false, italic: false },
+        ...Array.from({ length: 257 }, (_, index) => ({ name: `Absent ${index}`, bold: false, italic: false })),
+      ] },
+    } as unknown as ParsedWorkbook;
+    const internals = workbook as unknown as FontSourceInternals & {
+      officeFontRequests: unknown[];
+      retainFontsInSet(set: FontFaceSet): Promise<() => void>;
+    };
+    internals.officeFontRequests = [{ family: 'Calibri', weight: 400, style: 'normal' }];
+    await internals.prepareFontSources(parsed, FONTS);
+    await expect(internals.retainFontsInSet((G.document as Document).fonts)).rejects.toMatchObject({ code: 'font-source-limit' });
+    wb.destroy();
     expect(added).toHaveLength(0);
   });
 

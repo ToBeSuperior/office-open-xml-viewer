@@ -36,10 +36,13 @@ export const SOURCE_DISPATCH = new Map([
   ]),
 ]);
 
-// A feature budget, not a historical whole-entry baseline. It includes every
-// eagerly retained byte that disappears when selected-source dispatch is
-// compiled out, even if preparation was moved into another static module.
-const DISPATCH_COST_BUDGET = Object.freeze({ docx: 2_500, xlsx: 3_000, pptx: 2_500, node: 4_500 });
+// A feature budget, not a historical whole-entry baseline. It counts every
+// eagerly retained rendered byte that disappears when selected-source dispatch
+// is compiled out, per module, even if preparation was moved into another
+// static module (assertDispatchCost). Measured at introduction: docx 685,
+// xlsx 149, pptx 182, node 1068; each budget leaves room for a small dispatch
+// change, not for another copy of shared geometry or layout.
+const DISPATCH_COST_BUDGET = Object.freeze({ docx: 1_500, xlsx: 1_000, pptx: 1_000, node: 2_000 });
 
 // Independent sidecar compression plus registration/owner bindings adds a
 // small overhead to the reading code moved out of the eager worker. This
@@ -209,47 +212,71 @@ function inlineWorkers(code) {
   return outputs;
 }
 
-/** Bytes two independently minified builds may differ by when the real
- *  difference is zero. The bundler partitions shared modules into chunks per
- *  build, and the minifier's identifier lengths and the inter-chunk import /
- *  export lists follow that partition: moving a few shared font modules
- *  between chunks shifted PPTX by -186 bytes (and XLSX by a similar amount
- *  once linkage lists alone were discounted) with no dispatch code added. */
-const MINIFIER_NOISE_BYTES = 256;
+/** Static module closure of an entry chunk in a build's module stats
+ * (scripts/module-stats-plugin.mjs): module id → rendered length. */
+export function staticModuleSizes(stats, entryFile) {
+  const sizes = new Map();
+  const visited = new Set();
+  const pending = [entryFile];
+  while (pending.length) {
+    const file = pending.pop();
+    if (visited.has(file)) continue;
+    visited.add(file);
+    const chunk = stats.chunks[file];
+    if (!chunk) throw new Error(`Module stats lack chunk ${file}`);
+    for (const [id, length] of Object.entries(chunk.modules)) sizes.set(id, (sizes.get(id) ?? 0) + length);
+    // External specifiers (node: built-ins, skia-canvas) are not chunks.
+    pending.push(...chunk.imports.filter((imported) => stats.chunks[imported]));
+  }
+  return sizes;
+}
 
-export function assertDispatchCost(enabledEntry, disabledEntry, budget, label, enabledGraph) {
-  const enabled = enabledGraph ?? bundleGraph(enabledEntry);
-  const disabled = bundleGraph(disabledEntry);
-  assertNoSourceRuntime(disabled.joined, `${label} feature-disabled graph`);
-  const delta = enabled.bytes - disabled.bytes;
-  // A dispatch cost near zero can come out a few bytes negative: the two
-  // builds minify identifiers and name chunks independently. A larger
-  // negative still means the comparison is broken.
-  if (delta < -MINIFIER_NOISE_BYTES) {
-    throw new Error(`${label} model-source dispatch cost exceeds ${budget}-byte budget: ${delta}`);
+/**
+ * Dispatch cost: the rendered bytes the selected-source dispatch adds to an
+ * entry's eager static graph, summed per module over the modules whose
+ * retained code differs between the enabled and disabled builds (a module
+ * only the enabled build retains counts whole). Per-module accounting does
+ * not depend on how the bundler partitions shared modules into chunks or on
+ * the inter-chunk import/export lists, so no noise allowance is needed; a
+ * module that shrinks never offsets one that grows.
+ */
+export function assertDispatchCost(enabledStats, disabledStats, entryFile, budget, label) {
+  const enabled = staticModuleSizes(enabledStats, entryFile);
+  const disabled = staticModuleSizes(disabledStats, entryFile);
+  let bytes = 0;
+  const grown = [];
+  for (const [id, length] of enabled) {
+    const delta = length - (disabled.get(id) ?? 0);
+    if (delta > 0) { bytes += delta; grown.push(`${id} +${delta}`); }
   }
-  const bytes = Math.max(0, delta);
   if (bytes > budget) {
-    throw new Error(`${label} model-source dispatch cost exceeds ${budget}-byte budget: ${bytes}`);
+    throw new Error(`${label} model-source dispatch cost exceeds ${budget}-byte budget: ${bytes} (${grown.join(', ')})`);
   }
-  console.log(`${label} dispatch cost: ${bytes}/${budget} bytes (${enabled.files} vs ${disabled.files} static chunks)`);
+  console.log(`${label} dispatch cost: ${bytes}/${budget} rendered bytes (${grown.join(", ") || "no module"})`);
   return bytes;
 }
 
-function withDisabledBuild(check) {
-  const disabledDist = mkdtempSync(join(process.platform === 'darwin' ? '/private/tmp' : tmpdir(), 'ooxml-source-off-'));
+function withComparisonBuilds(check) {
+  const root = mkdtempSync(join(process.platform === 'darwin' ? '/private/tmp' : tmpdir(), 'ooxml-source-cost-'));
   const started = performance.now();
   try {
-    execFileSync(process.execPath, [
-      'node_modules/vite/bin/vite.js', 'build', '--mode', 'model-sources-off',
-      '--outDir', disabledDist, '--emptyOutDir',
-    ], { encoding: 'utf8', timeout: 180_000, maxBuffer: 10 * 1024 * 1024 });
-    console.log(`model-source-disabled build: ${((performance.now() - started) / 1000).toFixed(2)}s`);
-    check(disabledDist);
+    // Both comparison builds run here with module stats, so the accounting
+    // never mixes a published build with a differently configured one.
+    const stats = {};
+    for (const [label, mode] of [['enabled', 'production'], ['disabled', 'model-sources-off']]) {
+      const statsPath = join(root, `${label}.json`);
+      execFileSync(process.execPath, [
+        'node_modules/vite/bin/vite.js', 'build', '--mode', mode,
+        '--outDir', join(root, label), '--emptyOutDir',
+      ], { encoding: 'utf8', timeout: 300_000, maxBuffer: 10 * 1024 * 1024, env: { ...process.env, OOXML_MODULE_STATS: statsPath } });
+      stats[label] = JSON.parse(readFileSync(statsPath, 'utf8'));
+    }
+    console.log(`model-source comparison builds: ${((performance.now() - started) / 1000).toFixed(2)}s`);
+    check(join(root, 'disabled'), stats);
   } finally {
     // This unique directory is created by this invocation and contains only
-    // its generated comparison build. rmSync does not follow symlink targets.
-    rmSync(disabledDist, { recursive: true, force: true });
+    // its generated comparison builds. rmSync does not follow symlink targets.
+    rmSync(root, { recursive: true, force: true });
   }
 }
 
@@ -259,11 +286,9 @@ export function assertNoSourceRuntime(code, name) {
   }
 }
 
-export function checkBuiltBundles(dist = 'dist', { packages = false, disabledDist } = {}) {
-  const entryGraphs = new Map();
+export function checkBuiltBundles(dist = 'dist', { packages = false, disabledDist, stats } = {}) {
   for (const format of ['docx', 'xlsx', 'pptx', 'node']) {
     const graph = bundleGraph(join(dist, `${format}.mjs`));
-    entryGraphs.set(format, graph);
     assertNoSourceRuntime(graph.joined, `${format} static entry graph`);
     console.log(`${format} static JS: ${graph.bytes} bytes across ${graph.files} files`);
     if (format !== 'node') {
@@ -305,9 +330,13 @@ export function checkBuiltBundles(dist = 'dist', { packages = false, disabledDis
     throw new Error(`Expected 3 ordinary render workers, found ${ordinaryWorkers}`);
   }
   if (disabledDist) {
+    for (const format of Object.keys(DISPATCH_COST_BUDGET)) {
+      assertNoSourceRuntime(bundleGraph(join(disabledDist, `${format}.mjs`)).joined, `${format} feature-disabled graph`);
+    }
+  }
+  if (stats) {
     for (const [format, budget] of Object.entries(DISPATCH_COST_BUDGET)) {
-      assertDispatchCost(join(dist, `${format}.mjs`), join(disabledDist, `${format}.mjs`),
-        budget, format, entryGraphs.get(format));
+      assertDispatchCost(stats.enabled, stats.disabled, `${format}.mjs`, budget, format);
     }
   }
 }
@@ -353,8 +382,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     'packages/node/src/index.ts',
   ], forbidden);
   if (existsSync('dist/docx.mjs')) {
-    withDisabledBuild((disabledDist) => checkBuiltBundles('dist', {
-      packages: process.argv.includes('--packages'), disabledDist,
+    withComparisonBuilds((disabledDist, stats) => checkBuiltBundles('dist', {
+      packages: process.argv.includes('--packages'), disabledDist, stats,
     }));
   }
   console.log('OOXML entries and workers keep model-source runtime behind dynamic loads.');

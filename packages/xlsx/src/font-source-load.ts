@@ -119,7 +119,14 @@ export class XlsxFontDemand {
       }
       for (const phonetic of shared.phoneticRuns ?? []) this.addText(phonetic.text);
     }
-    for (const text of numberFormatPaintTexts(workbook.styles)) this.collector.add(text);
+    // Number-format output is painted text like any cell text: its scalars
+    // and its script evidence (a CJK date literal demands the CJK fallback).
+    // Its painting family is the cell's, unknown here, so it proves no scoped
+    // substitute. A locale/calendar the formatter's output set cannot be
+    // enumerated for demands 'all'.
+    const formatTexts = numberFormatPaintTexts(workbook.styles);
+    if (formatTexts === 'all') this.collector.decline();
+    else for (const text of formatTexts) this.addText(text);
   }
 
   private newCollector(): FontDemandScalarCollector {
@@ -268,9 +275,16 @@ export class XlsxFontDemand {
         // OMML equations paint their own operator and layout glyphs.
         if (run.type === 'math') { this.collector.decline(); continue; }
         if (run.type !== 'text') continue;
+        // Every slot the shape painter can select: the Latin face, and the
+        // East Asian face that stacked (WordArt-vertical) text paints CJK
+        // characters with (renderer drawShapeStackedText). The complex-script
+        // slot is not painted by the XLSX shape renderer.
         const family = run.fontFace?.trim() || 'Calibri';
+        const eastAsian = run.fontFaceEa?.trim();
         this.addFamily(family, run.bold, run.italic);
+        if (eastAsian) this.addFamily(eastAsian, run.bold, run.italic);
         this.addText(run.text, family);
+        if (eastAsian) this.prove(eastAsian, run.text);
       }
     }
   }

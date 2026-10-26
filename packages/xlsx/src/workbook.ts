@@ -718,10 +718,18 @@ export class XlsxWorkbook {
       } as Omit<RetainedFontSet, 'loading'> as RetainedFontSet;
       // Replay every delta so far, in order, into this set.
       const sourcesReady = Promise.all(this.fontDeltas.map((delta) => this.enqueueFontDelta(record, delta)));
-      const loading = Promise.all([
+      // Settle both loads: a rejected source delta (font-source-limit) must
+      // not drop the parallel Office-face result, whose faces would then never
+      // be released. On any failure every face this set took is returned.
+      const loading = Promise.allSettled([
         sourcesReady,
         loadOfficeFontFallbacks(this.officeFontRequests, fontSet),
-      ]).then(([, office]) => ({ office }));
+      ]).then(([sources, office]) => {
+        if (sources.status === 'fulfilled' && office.status === 'fulfilled') return { office: office.value };
+        if (office.status === 'fulfilled') unloadOfficeFontFallbacks(office.value.faces);
+        record.session?.release();
+        throw sources.status === 'rejected' ? sources.reason : (office as PromiseRejectedResult).reason;
+      });
       retained = Object.assign(record, { loading });
       this.retainedFontSets.set(fontSet, retained);
       loading.then((loaded) => {

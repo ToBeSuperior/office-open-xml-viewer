@@ -7,6 +7,7 @@ import { readFile } from 'fs/promises';
 import { rolldown } from 'rolldown';
 import { docxCompatibilityMetadata } from './scripts/docx-compatibility-build.mjs';
 import { optionalRendererMarkers } from './scripts/optional-renderer-markers.mjs';
+import { moduleStatsPlugin } from './scripts/module-stats-plugin.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -200,6 +201,7 @@ export default defineConfig(({ command, mode }) => ({
     wasmAssetUrl(),
     wasm(),
     legacyBundleBoundary(),
+    moduleStatsPlugin(__dirname),
     // Storybook loads the root Vite config in serve mode. The declaration
     // plugins are build-only: their Rolldown buildStart hooks expect library
     // inputs and fail against Storybook's dev-server graph.

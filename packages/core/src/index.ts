@@ -219,7 +219,7 @@ export {
   type SymbolTextSegment,
 } from './fonts/symbol-font';
 export { renderChart, collectChartFillRenderedSizes, assertChartFillRenderedSizeCount } from './chart/renderer';
-export { formatLocalizedExcelShortDate } from './chart/chart-number-format';
+export { formatLocalizedExcelShortDate, localizedExcelShortDateTexts } from './chart/chart-number-format';
 export { autoResize, type AutoResizeOptions } from './autoResize';
 export {
   buildCustomPath,

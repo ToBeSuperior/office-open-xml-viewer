@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import test from 'node:test';
 import { build } from 'vite';
+import { moduleStatsPlugin } from './module-stats-plugin.mjs';
 import { assertDispatchCost, assertLazySourceOwner, assertNoTopLevelModelImport, assertEagerSourceEntries, assertNoSourceRuntime, checkSourceDispatchImports } from './check-model-source-lazy-graph.mjs';
 
 const tempRoot = process.platform === 'darwin' ? '/private/tmp' : tmpdir();
@@ -89,13 +90,46 @@ export async function load(options = {}) {
 }
 `);
     writeFileSync(join(root, 'model-source.js'), 'export const source = true;\n');
+    const stats = {};
     for (const [flag, outDir] of [['true', enabledDir], ['false', disabledDir]]) {
+      process.env.OOXML_MODULE_STATS = `${outDir}.json`;
       await build({ configFile: false, logLevel: 'silent', define: { __OOXML_MODEL_SOURCES__: flag },
+        plugins: [moduleStatsPlugin(root)],
         build: { outDir, lib: { entry, formats: ['es'], fileName: () => 'entry.mjs' } } });
+      stats[flag] = JSON.parse(readFileSync(`${outDir}.json`, 'utf8'));
     }
-    assert.throws(() => assertDispatchCost(join(enabledDir, 'entry.mjs'),
-      join(disabledDir, 'entry.mjs'), 3_000, 'fixture'), /dispatch cost exceeds/);
+    delete process.env.OOXML_MODULE_STATS;
+    assert.throws(() => assertDispatchCost(stats.true, stats.false, 'entry.mjs', 3_000, 'fixture'),
+      /dispatch cost exceeds/);
+    assert.ok(assertDispatchCost(stats.true, stats.false, 'entry.mjs', 100_000, 'fixture') > 3_000);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('dispatch cost is per module: repartitioning is free and a shrink never offsets growth', () => {
+  const stats = (chunks) => ({ chunks });
+  const disabled = stats({
+    'entry.mjs': { imports: ['a.js', 'node:path'], modules: { 'src/entry.ts': 100 } },
+    'a.js': { imports: [], modules: { 'src/shared.ts': 400, 'src/other.ts': 300 } },
+  });
+  // The same modules split across different chunks cost nothing.
+  const repartitioned = stats({
+    'entry.mjs': { imports: ['b.js', 'c.js'], modules: { 'src/entry.ts': 100 } },
+    'b.js': { imports: [], modules: { 'src/shared.ts': 400 } },
+    'c.js': { imports: [], modules: { 'src/other.ts': 300 } },
+  });
+  assert.equal(assertDispatchCost(repartitioned, disabled, 'entry.mjs', 0, 'fixture'), 0);
+  // 250 dispatch bytes added in one module are not hidden by 250 removed elsewhere.
+  const grownAndShrunk = stats({
+    'entry.mjs': { imports: ['a.js'], modules: { 'src/entry.ts': 350 } },
+    'a.js': { imports: [], modules: { 'src/shared.ts': 150, 'src/other.ts': 300 } },
+  });
+  assert.throws(() => assertDispatchCost(grownAndShrunk, disabled, 'entry.mjs', 200, 'fixture'), /dispatch cost exceeds 200-byte budget: 250/);
+  // A module only the enabled graph retains counts whole.
+  const added = stats({
+    'entry.mjs': { imports: ['a.js'], modules: { 'src/entry.ts': 100, 'src/dispatch.ts': 90 } },
+    'a.js': { imports: [], modules: { 'src/shared.ts': 400, 'src/other.ts': 300 } },
+  });
+  assert.equal(assertDispatchCost(added, disabled, 'entry.mjs', 100, 'fixture'), 90);
 });

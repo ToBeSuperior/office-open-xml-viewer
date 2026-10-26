@@ -418,6 +418,14 @@ const DEFAULT_MONO_FONT_FAMILY = `"Courier New", "Liberation Mono", monospace`;
  * leads so shared Han glyphs take the document language's shapes; see
  * core/fonts/scripts.ts. Exported for unit testing.
  */
+/** `"Substitute", ` when a font source loaded a substitute for `family`
+ * that covers `text` (script-scoped ones only for text of their script),
+ * else `''`: the one substitution rule every XLSX stack builder uses. */
+function loadedSubstitutePart(substitutions: LoadedSubstitutions | undefined, family: string, text: string): string {
+  const loaded = substitutions?.get(fontFamilyKey(family));
+  return loaded && substituteEntryCoversText(loaded, text, 'any') ? `${quoteCssFontFamily(loaded.family)}, ` : '';
+}
+
 export function cssTailFor(
   name: string | null | undefined,
   fallback?: CjkLang,
@@ -5794,7 +5802,7 @@ export function drawSlicerFrame(
     ctx.fillRect(x + 1, y + 1, w - 2, headerH);
   }
   ctx.fillStyle = style?.header?.fontColor ?? SLICER_HEADER_FG;
-  ctx.font = slicerFont(style?.header, SLICER_HEADER_FONT, cs);
+  ctx.font = slicerFont(style?.header, SLICER_HEADER_FONT, cs, contextSubstitutions(ctx), caption);
   ctx.textBaseline = 'middle';
   ctx.textAlign = 'left';
   const headerPad = 6 * cs;
@@ -5851,7 +5859,7 @@ export function drawSlicerFrame(
         ctx.strokeRect(listX + 0.5, iy + 0.5, listW - 1, itemH - 1);
       }
     }
-    ctx.font = slicerFont(itemStyle, SLICER_ITEM_FONT, cs);
+    ctx.font = slicerFont(itemStyle, SLICER_ITEM_FONT, cs, contextSubstitutions(ctx), item.name);
     ctx.fillStyle = itemStyle?.fontColor ??
       (selected ? SLICER_ITEM_SEL_FG : SLICER_ITEM_OFF_FG);
     drawClippedText(ctx, item.name, listX + itemPad, iy + itemH / 2 + 1, listW - 2 * itemPad);
@@ -5884,12 +5892,16 @@ function slicerFont(
   style: SlicerElementStyle | undefined,
   fallback: string,
   cs: number,
+  substitutions: LoadedSubstitutions | undefined,
+  text: string,
 ): string {
   if (!style) return scaleFont(fallback, cs);
   const size = Math.round((style.fontSize ?? 11) * cs);
   const weight = style.fontBold ? 'bold ' : '';
+  // An authored slicer face takes the substitute a font source loaded for
+  // it, exactly as cell and shape text do (script-gated by the painted text).
   const family = style.fontFamily
-    ? `"${style.fontFamily}", "Segoe UI", sans-serif`
+    ? `${quoteCssFontFamily(style.fontFamily)}, ${loadedSubstitutePart(substitutions, style.fontFamily, text)}"Segoe UI", sans-serif`
     : '"Meiryo UI", "Segoe UI", sans-serif';
   return `${weight}${size}px ${family}`;
 }

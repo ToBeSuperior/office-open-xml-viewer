@@ -35,6 +35,35 @@ export function formatLocalizedExcelShortDate(
   return formatter.format(excelSerialToUtcDate(serial, date1904));
 }
 
+/**
+ * Every text {@link formatLocalizedExcelShortDate} can paint for `locale`, or
+ * `'all'` when its output set cannot be enumerated: font-source scalar demand
+ * (library policy). A Gregorian calendar with Latin (ASCII) digits paints, for
+ * Excel's date range (years 1900–9999), only ASCII digits and the pattern's
+ * literal separators, which do not depend on the date; every literal part of
+ * the pattern is collected from one sample. Any other calendar (e.g. `roc`,
+ * `japanese`, `buddhist`) or numbering system can paint era names, signs and
+ * digits a sample does not show, so the answer is `'all'`.
+ */
+export function localizedExcelShortDateTexts(
+  locale = typeof navigator === 'undefined' ? undefined : navigator.language,
+): string[] | 'all' {
+  const formatter = new Intl.DateTimeFormat(locale, {
+    year: 'numeric', month: 'numeric', day: 'numeric', timeZone: 'UTC',
+  });
+  const resolved = formatter.resolvedOptions();
+  if (resolved.calendar !== 'gregory' || resolved.numberingSystem !== 'latn') return 'all';
+  const texts = ['0123456789'];
+  for (const sample of [Date.UTC(1900, 0, 1), Date.UTC(2000, 11, 31), Date.UTC(9999, 11, 31)]) {
+    for (const part of formatter.formatToParts(sample)) {
+      if (part.type === 'literal') texts.push(part.value);
+      else if (part.type !== 'year' && part.type !== 'month' && part.type !== 'day') return 'all';
+      else if (!/^[0-9]+$/.test(part.value)) return 'all';
+    }
+  }
+  return texts;
+}
+
 /** Excel's default `formatCode="General"` for charts: raw numbers with no
  *  "k"/"M" abbreviation, trailing decimal zeros trimmed. */
 export function formatChartVal(v: number): string {

@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { formatLocalizedExcelShortDate } from '@silurus/ooxml-core';
 import { OFFICE_FONT_SUBSTITUTIONS } from '@silurus/ooxml-core/internal/font-sources';
 import { XlsxFontDemand } from './font-source-load.js';
 import type { CellFont, ParsedWorkbook, Row, Worksheet } from './types.js';
@@ -133,5 +134,41 @@ describe('XLSX font-source demand', () => {
     demand.take();
     demand.worksheetParts(sheet([], { charts: [{ chart: { title: { fontFace: '+mj-lt' }, themeMajorFontLatin: 'Aptos Display' } }] } as never));
     expect(demand.take()?.families).toEqual(['Aptos Display']);
+  });
+
+  it('demands the East Asian face stacked WordArt text paints CJK characters with', () => {
+    const demand = new XlsxFontDemand(workbook(), 'jp', []);
+    demand.take();
+    demand.worksheetParts(sheet([], { shapeGroups: [{ shapes: [{ geom: { type: 'preset', name: 'rect' }, text: {
+      vert: 'wordArtVert',
+      paragraphs: [{ runs: [{ type: 'text', text: '縦書き', fontFace: 'Latin Face', fontFaceEa: 'EA Face', bold: false, italic: false, size: 11 }] }],
+    } }] }] as never }));
+    expect(demand.take()?.families).toEqual(['Latin Face', 'EA Face']);
+  });
+
+  it('feeds number-format output into script evidence as well as scalars', () => {
+    // Built-in 31 paints yyyy"年"m"月"d"日" in a numeric-only workbook.
+    const demand = new XlsxFontDemand(workbook({ cellXfs: [{ numFmtId: 31, fontId: 0 }] }), 'jp', []).take();
+    expect(demand?.fallbackFamilies).toEqual(['Noto Sans JP', 'Noto Serif JP']);
+  });
+
+  describe('built-in 14 under the host locale', () => {
+    afterEach(() => vi.unstubAllGlobals());
+
+    it("demands 'all' for a calendar whose output the formatter cannot enumerate", () => {
+      vi.stubGlobal('navigator', { language: 'zh-TW-u-ca-roc' });
+      // Serial 1 paints a Republic-of-China era prefix (民國前…).
+      expect(formatLocalizedExcelShortDate(1)).toContain('前');
+      const demand = new XlsxFontDemand(workbook({ cellXfs: [{ numFmtId: 14, fontId: 0 }] }), 'jp', []).take();
+      expect(demand?.scalars).toBe('all');
+    });
+
+    it('stays finite for a Gregorian, ASCII-digit locale and covers its separators', () => {
+      vi.stubGlobal('navigator', { language: 'de-DE' });
+      const demand = new XlsxFontDemand(workbook({ cellXfs: [{ numFmtId: 14, fontId: 0 }] }), 'jp', []).take();
+      expect(demand?.scalars).not.toBe('all');
+      const scalars = new Set(demand?.scalars as number[]);
+      for (const ch of formatLocalizedExcelShortDate(45_000)) expect(scalars.has(ch.codePointAt(0) as number), ch).toBe(true);
+    });
   });
 });
