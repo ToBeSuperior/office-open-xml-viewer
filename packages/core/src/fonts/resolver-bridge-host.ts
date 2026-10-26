@@ -8,6 +8,7 @@
  */
 import { isWorkerFontResolveMessage, type MainFontResolveReply, type WorkerFontResolveMessage } from './resolver-bridge.js';
 import type { FontResolverResponder } from './resolver-bridge-responder.js';
+import type { FontResolverFailures } from './resolver-resolution.js';
 import type { FontSource } from './source.js';
 
 type Post = (message: unknown, transfer?: Transferable[]) => void;
@@ -16,8 +17,9 @@ export interface FontResolverBridgeHostOptions {
   readonly post: Post;
   /** The document's validated `fonts` option. */
   readonly sources: readonly FontSource[] | undefined;
-  /** Whether this realm also registers the faces (XLSX viewer realm). */
-  readonly copyData: boolean;
+  /** The document's resolver failure record, when its viewer-realm sessions
+   * share it (XLSX); see `resolver-resolution.ts`. */
+  readonly resolverFailures?: FontResolverFailures;
 }
 
 export class FontResolverBridgeHost {
@@ -38,7 +40,11 @@ export class FontResolverBridgeHost {
     if (this.disposed || !options?.sources) return true;
     this.responder ??= import('./resolver-bridge-responder.js').then(({ FontResolverResponder: Responder }) => {
       if (this.disposed || !this.options?.sources) return null;
-      return new Responder({ post: options.post, sources: options.sources ?? [], copyData: options.copyData });
+      return new Responder({
+        post: options.post,
+        sources: options.sources ?? [],
+        ...(options.resolverFailures ? { resolverFailures: options.resolverFailures } : {}),
+      });
     }, (error: unknown) => {
       console.warn(`[ooxml] font resolver bridge failed to load: ${error instanceof Error ? error.message : String(error)}`);
       return null;

@@ -7,9 +7,10 @@
  * network clients never reach the worker (design §3.4). When the render worker
  * paints, its {@link FontSourceSession} runs every resolver call through
  * {@link WorkerFontResolverClient.run}: the call is posted to main
- * (`ooxmlResolveFonts`), main runs the function with an `AbortSignal` and
- * replies (`ooxmlFontsResolved`) with every `data` buffer in the transfer list
- * (`resolver-bridge-responder.ts`). Main resolves through its own realm
+ * (`ooxmlResolveFonts`, naming the source by its index in the document's
+ * `fonts`), main runs the function with an `AbortSignal` and replies
+ * (`ooxmlFontsResolved`) with a copy of every `data` buffer in the transfer
+ * list (`resolver-bridge-responder.ts`). Main resolves through its own realm
  * resolution cache, so the function runs once per family however many
  * realms ask (`resolver-resolution.ts`), and answers per family. The worker
  * session then admits and claims each family's declarations exactly as it
@@ -19,15 +20,17 @@
  * Correlation follows the host-font measurement requests of the DOCX render
  * worker: each request carries the client's generation and a request id. A
  * worker that starts a new document calls {@link WorkerFontResolverClient.reset},
- * which abandons every pending call; a reply for an abandoned call, an older
- * generation or an unknown id is dropped and its bytes become unreachable.
- * When the worker session abandons a call (its 15 s ceiling, release, every
- * waiter gone) the client posts `ooxmlCancelResolveFonts`, which aborts the
- * application function's signal on main.
+ * which abandons every pending call and posts a cancellation for each; main
+ * also abandons the calls of a generation once a newer one asks. A reply for
+ * an abandoned call, an older generation or an unknown id is dropped. When the
+ * worker session abandons a call (its 15 s ceiling, release, every waiter
+ * gone) the client likewise posts `ooxmlCancelResolveFonts`, which aborts the
+ * application function's signal on main; main never posts for it.
  *
- * Replies are validated fail-closed: anything but a declaration array within
- * `HARD_MAX_FONT_SOURCE_DECLARATIONS`, a failure reason or a well-formed
- * limit violation fails the call's families (host fallback), and the
+ * Replies are validated fail-closed: anything but per-family answers within
+ * `HARD_MAX_FONT_SOURCE_FAMILIES` (claimed declarations within
+ * `HARD_MAX_FONT_SOURCE_DECLARATIONS`, a failure reason, absence), a failure
+ * reason or a well-formed limit violation fails the call's families (host fallback), and the
  * declarations themselves are validated again by the session.
  */
 import { createAbortError } from '../internal/abort.js';
@@ -41,11 +44,13 @@ import { bridgedFontSourceLimitError } from './resolver-admission.js';
 import { BridgedFamilyResolutions } from './resolver-resolution.js';
 import type { FontDemand, FontFaceDeclaration, FontResolveContext, FontResolverSource } from './source.js';
 
-/** Worker → main: run the resolver `resolverId` for `demand`. */
+/** Worker → main: run the document's `fonts[sourceIndex]` (a resolver whose
+ * id is `resolverId`) for `demand`. */
 export interface WorkerFontResolveRequest {
   readonly kind: 'ooxmlResolveFonts';
   readonly generation: number;
   readonly requestId: number;
+  readonly sourceIndex: number;
   readonly resolverId: string;
   readonly demand: FontDemand;
 }
@@ -106,6 +111,7 @@ interface PendingCall {
   readonly resolve: (answers: BridgedFamilyResolutions) => void;
   readonly reject: (error: unknown) => void;
   readonly detach: () => void;
+  readonly generation: number;
 }
 
 /**
@@ -124,6 +130,7 @@ export class WorkerFontResolverClient {
     source: FontResolverSource,
     demand: FontDemand,
     context: FontResolveContext,
+    sourceIndex: number,
   ): Promise<BridgedFamilyResolutions> => {
     const { signal } = context;
     if (signal.aborted) return Promise.reject(createAbortError('Font resolver abandoned'));
@@ -137,11 +144,11 @@ export class WorkerFontResolverClient {
       };
       signal.addEventListener('abort', onAbort, { once: true });
       this.pending.set(requestId, {
-        resolve, reject, detach: () => signal.removeEventListener('abort', onAbort),
+        resolve, reject, generation, detach: () => signal.removeEventListener('abort', onAbort),
       });
       try {
         this.post({
-          kind: 'ooxmlResolveFonts', generation, requestId, resolverId: source.id, demand,
+          kind: 'ooxmlResolveFonts', generation, requestId, sourceIndex, resolverId: source.id, demand,
         } satisfies WorkerFontResolveRequest);
       } catch (error) {
         this.settle(requestId);
@@ -168,14 +175,17 @@ export class WorkerFontResolverClient {
   }
 
   /** A new document starts (or the worker's document is gone): abandon every
-   * pending call and ignore replies of the previous generation. */
+   * pending call, cancel it on main, and ignore replies of the previous
+   * generation. */
   reset(): void {
     this.generation++;
-    const calls = [...this.pending.values()];
+    const calls = [...this.pending];
     this.pending.clear();
-    for (const call of calls) {
+    for (const [requestId, call] of calls) {
       call.detach();
       call.reject(createAbortError('Font resolver abandoned'));
+      // Main aborts the application call and posts nothing for it.
+      this.postQuietly({ kind: 'ooxmlCancelResolveFonts', generation: call.generation, requestId });
     }
   }
 

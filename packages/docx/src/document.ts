@@ -558,12 +558,11 @@ export class DocxDocument {
       doc._metrics = metrics;
       doc._cjkFallback = cjkFallback;
       if (mode === 'worker') {
-        // The worker is the only realm that registers the faces, so resolver
-        // bytes are transferred to it (design §4.3).
+        // Resolves through this realm's resolution cache, held until destroy
+        // (core resolver-bridge-responder.ts).
         doc._fontResolverBridge = new FontResolverBridgeHost({
           post: (message, transfer) => (worker.postMessage as (value: unknown, transfer?: Transferable[]) => void)(message, transfer),
           sources: opts.fonts,
-          copyData: false,
         });
       }
       // Library default: continuation unless the caller passes exactly false

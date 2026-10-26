@@ -10,47 +10,63 @@ import {
   type FontFaceDeclaration,
   type FontResolveContext,
   type FontResolveFn,
+  type FontResolverOptions,
   type FontSource,
 } from './source.js';
 
-// The main realm is a second instance of the module graph, so the two realms
-// keep separate caches, registries and byte totals exactly as a window and its
-// render worker do. The statically imported modules above are the worker realm.
-interface MainRealm {
-  readonly fontResolver: typeof import('./source.js').fontResolver;
+// The worker bridge of `fontResolver` (design §3.4, §4.3–§4.5). Each realm is
+// its own instance of the module graph, with its own caches, registries and
+// byte totals, as a window and its render workers are: the statically
+// imported modules above are worker realm 1, `worker2` a second worker (a
+// second worker-mode document), `main` the window. Messages cross a real
+// structuredClone with the sender's transfer list (a transferred ArrayBuffer
+// is detached on the sending side) and are delivered asynchronously.
+
+interface WorkerRealm {
   readonly FontSourceSession: typeof FontSourceSession;
+  readonly WorkerFontResolverClient: typeof WorkerFontResolverClient;
+  readonly assertFontSourceDescriptors: typeof assertFontSourceDescriptors;
+  readonly retainedFontSourceBytes: () => number;
+  readonly liveSourceCacheCount: () => number;
+}
+interface MainRealm extends WorkerRealm {
+  readonly fontResolver: typeof import('./source.js').fontResolver;
   readonly FontResolverBridgeHost: typeof import('./resolver-bridge-host.js').FontResolverBridgeHost;
   readonly FontResolverResponder: typeof import('./resolver-bridge-responder.js').FontResolverResponder;
   readonly copyBridgedFontDemand: typeof import('./resolver-bridge-responder.js').copyBridgedFontDemand;
-  readonly retainedFontSourceBytes: () => number;
-  readonly liveSourceCacheCount: () => number;
   readonly sourceCacheEntryCount: () => number;
 }
+const worker1: WorkerRealm = {
+  FontSourceSession, WorkerFontResolverClient, assertFontSourceDescriptors, retainedFontSourceBytes, liveSourceCacheCount,
+};
+let worker2: WorkerRealm;
 let main: MainRealm;
-beforeAll(async () => {
+
+async function loadRealm() {
   vi.resetModules();
-  const [source, session, host, responder, cache] = await Promise.all([
-    import('./source.js'), import('./source-session.js'), import('./resolver-bridge-host.js'),
-    import('./resolver-bridge-responder.js'), import('./source-cache.js'),
+  const [source, session, bridge, host, responder, cache] = await Promise.all([
+    import('./source.js'), import('./source-session.js'), import('./resolver-bridge.js'),
+    import('./resolver-bridge-host.js'), import('./resolver-bridge-responder.js'), import('./source-cache.js'),
   ]);
-  main = {
-    fontResolver: source.fontResolver,
+  return {
     FontSourceSession: session.FontSourceSession,
+    WorkerFontResolverClient: bridge.WorkerFontResolverClient,
+    assertFontSourceDescriptors: source.assertFontSourceDescriptors,
+    retainedFontSourceBytes: session.retainedFontSourceBytes,
+    liveSourceCacheCount: cache.liveSourceCacheCount,
+    fontResolver: source.fontResolver,
     FontResolverBridgeHost: host.FontResolverBridgeHost,
     FontResolverResponder: responder.FontResolverResponder,
     copyBridgedFontDemand: responder.copyBridgedFontDemand,
-    retainedFontSourceBytes: session.retainedFontSourceBytes,
-    liveSourceCacheCount: cache.liveSourceCacheCount,
     sourceCacheEntryCount: cache.sourceCacheEntryCount,
   };
+}
+beforeAll(async () => {
+  worker2 = await loadRealm();
+  // Main last: the host's lazy responder import resolves in this graph.
+  main = await loadRealm();
 });
-const fontResolver = (resolve: FontResolveFn) => main.fontResolver(resolve);
-
-// The worker bridge of `fontResolver` (design §3.4, §4.3, §4.5): a worker
-// session runs the resolver through the client, main answers through the
-// responder, and messages cross a structured clone with real transfer lists
-// (a transferred ArrayBuffer is detached on the sending side), delivered
-// asynchronously like postMessage.
+const fontResolver = (resolve: FontResolveFn, options?: FontResolverOptions) => main.fontResolver(resolve, options);
 
 const G = globalThis as Record<string, unknown>;
 const ORIGINAL_FONT_FACE = G.FontFace;
@@ -80,12 +96,17 @@ function fakeSet() {
 const asSet = (set: ReturnType<typeof fakeSet>) => set as unknown as FontFaceSet;
 
 const demand = (families: string[], scalars: FontDemand['scalars'] = [0x41]): FontDemand =>
-  ({ families, fallbackFamilies: [], tuples: [], scalars, substituteScripts: { [families[0]?.toLowerCase() ?? '']: [] } });
+  ({ families, fallbackFamilies: [], tuples: [], scalars, substituteScripts: Object.fromEntries(families.map((family) => [family.toLowerCase(), []])) });
 
 type Post = (message: unknown, transfer?: Transferable[]) => void;
 
-/** Two realms joined by structured clone; `toMain` / `toWorker` record traffic. */
-function bridge(sources: readonly FontSource[], copyData = false) {
+const sessions: { release(): void }[] = [];
+const hosts: { dispose(): void }[] = [];
+
+/** One worker-mode document: its main-side host and its worker realm,
+ * joined by structured clone. `toMain` / `toWorker` record the traffic. */
+function bridge(sources: readonly FontSource[], options: { realm?: WorkerRealm; failures?: Map<string, string> } = {}) {
+  const realm = options.realm ?? worker1;
   const toMain: unknown[] = [];
   const toWorker: unknown[] = [];
   let hold = false;
@@ -100,39 +121,40 @@ function bridge(sources: readonly FontSource[], copyData = false) {
     toWorker.push(copy);
     deliver(() => client.accept(copy), true);
   };
-  const host = new main.FontResolverBridgeHost({ post: mainPost, sources, copyData });
+  const host = new main.FontResolverBridgeHost({
+    post: mainPost, sources, ...(options.failures ? { resolverFailures: options.failures } : {}),
+  });
   hosts.push(host);
   const workerPost: Post = (message, transfer) => {
     const copy = structuredClone(message, { transfer: transfer as Transferable[] });
     toMain.push(copy);
     deliver(() => host.accept(copy), false);
   };
-  client = new WorkerFontResolverClient(workerPost);
+  client = new realm.WorkerFontResolverClient(workerPost);
   // The worker receives the descriptors as a structured clone and validates them.
-  const workerSources = assertFontSourceDescriptors(structuredClone(sources));
+  const workerSources = realm.assertFontSourceDescriptors(structuredClone(sources));
   return {
-    client, host, toMain, toWorker, workerSources,
-    /** Stop delivering main → worker replies until `release()` (a slow realm). */
+    client, host, toMain, toWorker,
+    /** Hold main → worker replies until `resume()` (a busy worker). */
     pause() { hold = true; },
     resume() { hold = false; for (const fn of held.splice(0)) void Promise.resolve().then(fn); },
     session(set = fakeSet()) {
-      const session = new FontSourceSession({ sources: workerSources, fontSet: asSet(set), runResolver: client.run });
+      const session = new realm.FontSourceSession({ sources: workerSources, fontSet: asSet(set), runResolver: client.run });
       sessions.push(session);
       return { session, set };
     },
   };
 }
 
-const FACE = (bytes = 64, family = 'Private Face'): FontFaceDeclaration => ({ family, data: new Uint8Array(bytes).fill(7).buffer });
-
-const sessions: { release(): void }[] = [];
-const hosts: { dispose(): void }[] = [];
 /** A main-realm (viewer or main-mode) session. */
-function mainSession(sources: readonly FontSource[], set = fakeSet()) {
-  const session = new main.FontSourceSession({ sources, fontSet: asSet(set) });
+function mainSession(sources: readonly FontSource[], failures?: Map<string, string>, set = fakeSet()) {
+  const session = new main.FontSourceSession({ sources, fontSet: asSet(set), ...(failures ? { resolverFailures: failures } : {}) });
   sessions.push(session);
   return { session, set };
 }
+
+const FACE = (bytes = 64, family = 'Private Face'): FontFaceDeclaration => ({ family, data: new Uint8Array(bytes).fill(7).buffer });
+
 let warn: ReturnType<typeof vi.spyOn>;
 beforeEach(() => {
   G.FontFace = FakeFontFace;
@@ -145,17 +167,16 @@ afterEach(async () => {
   // A host disposes its (lazily loaded) responder asynchronously.
   await new Promise((resolve) => setTimeout(resolve, 0));
   // Every realm returns everything it took.
-  expect(liveSourceCacheCount()).toBe(0);
-  expect(retainedFontSourceBytes()).toBe(0);
-  expect(main.liveSourceCacheCount()).toBe(0);
-  expect(main.retainedFontSourceBytes()).toBe(0);
+  for (const realm of [worker1, worker2, main]) {
+    expect(realm.liveSourceCacheCount()).toBe(0);
+    expect(realm.retainedFontSourceBytes()).toBe(0);
+  }
   G.FontFace = ORIGINAL_FONT_FACE;
   vi.restoreAllMocks();
-  vi.useRealTimers();
 });
 
 describe('fontResolver bridge: main and worker sessions resolve alike', () => {
-  it('registers and charges the same faces as a direct session, moving the bytes once', async () => {
+  it('registers and charges the same faces as a direct session; main keeps the original', async () => {
     const answered: ArrayBuffer[] = [];
     const seen: FontDemand[] = [];
     const resolve: FontResolveFn = (request) => {
@@ -165,7 +186,6 @@ describe('fontResolver bridge: main and worker sessions resolve alike', () => {
       return request.families.map(() => face);
     };
     const source = fontResolver(resolve);
-
     const { session: direct } = mainSession([source]);
     const directLoaded = await direct.ensure(demand(['Private Face']));
     const directBytes = main.retainedFontSourceBytes();
@@ -177,69 +197,57 @@ describe('fontResolver bridge: main and worker sessions resolve alike', () => {
     const loaded = await session.ensure(demand(['Private Face']));
     expect(loaded.faces.map(({ family }) => family)).toEqual(directLoaded.faces.map(({ family }) => family));
     expect(set.faces.map((face) => face.bytes)).toEqual([64]);
-    // Charged once, by the realm that keeps the bytes; main kept nothing
-    // (the bridge held main's cache entry only for its request).
+    // Each realm charges what it keeps, once: the worker as a direct session
+    // does (its cached copy and its registration), main only the cached
+    // original it shares with later documents (it registers nothing).
     expect(retainedFontSourceBytes()).toBe(directBytes);
-    expect(main.retainedFontSourceBytes()).toBe(0);
-    expect(main.sourceCacheEntryCount()).toBe(0);
-    // The worker was the only painting realm: the original was transferred.
-    expect(answered[1]?.byteLength).toBe(0);
+    expect(main.retainedFontSourceBytes()).toBe(64);
+    expect(answered[1]?.byteLength).toBe(64);
     // The application saw the same demand in both modes, scalars included,
     // with a prototype-free family record.
     expect(seen[1]).toEqual(seen[0]);
     for (const request of seen) expect(Object.getPrototypeOf(request.substituteScripts)).toBeNull();
     session.release();
-    expect(retainedFontSourceBytes()).toBe(0);
+    link.host.dispose();
+    await vi.waitFor(() => expect(main.retainedFontSourceBytes()).toBe(0));
   });
 
-  it('keeps the original and sends one copy per buffer when main also paints', async () => {
+  it('sends one copy per distinct buffer', async () => {
     const face = FACE(32);
     const source = fontResolver(() => [face, { ...face, weight: '700' }]);
-    const link = bridge([source], true);
+    const link = bridge([source]);
     const { set, session } = link.session();
     await session.ensure(demand(['Private Face']));
     expect((face.data as ArrayBuffer).byteLength).toBe(32);
     expect(set.faces.map((entry) => entry.bytes)).toEqual([32, 32]);
     const reply = link.toWorker[0] as { outcome: { families: { declarations: FontFaceDeclaration[] }[] } };
     const [first, second] = reply.outcome.families[0]?.declarations ?? [];
-    // One copy shared by both declarations, not one per declaration.
     expect(first?.data).toBe(second?.data);
   });
 
   for (const order of ['worker first', 'viewer first', 'concurrently'] as const) {
     it(`runs the resolver once per family when the viewer realm also paints (${order})`, async () => {
       let calls = 0;
-      const resolve: FontResolveFn = (request) => {
-        calls++;
-        return request.families.map((family) => FACE(16, family));
-      };
-      const source = fontResolver(resolve);
-      const link = bridge([source], true);
-      const viewer = mainSession([source]);
+      const source = fontResolver((request) => { calls++; return request.families.map((family) => FACE(16, family)); });
+      const failures = new Map<string, string>();
+      const link = bridge([source], { failures });
+      const viewer = mainSession([source], failures);
       const worker = link.session();
       const ensureViewer = () => viewer.session.ensure(demand(['Private Face']));
       const ensureWorker = () => worker.session.ensure(demand(['Private Face']));
       if (order === 'worker first') { await ensureWorker(); await ensureViewer(); }
       else if (order === 'viewer first') { await ensureViewer(); await ensureWorker(); }
       else await Promise.all([ensureWorker(), ensureViewer()]);
-      // As in main mode: one call for the family, shared by both realms.
       expect(calls).toBe(1);
       expect(viewer.set.faces.map((face) => face.bytes)).toEqual([16]);
       expect(worker.set.faces.map((face) => face.bytes)).toEqual([16]);
-      // A later family of the same workbook is again one call.
-      await Promise.all([
-        worker.session.ensure(demand(['Second Face'])),
-        viewer.session.ensure(demand(['Second Face'])),
-      ]);
+      await Promise.all([worker.session.ensure(demand(['Second Face'])), viewer.session.ensure(demand(['Second Face']))]);
       expect(calls).toBe(2);
-      // Main's cache keeps one charged copy for the workbook while either
-      // the viewer session or the bridge holds it.
-      expect(main.retainedFontSourceBytes()).toBeGreaterThan(0);
+      // Main keeps the entries while either the viewer or the bridge holds them.
       viewer.session.release();
       expect(main.liveSourceCacheCount()).toBe(1);
       link.host.dispose();
       await vi.waitFor(() => expect(main.liveSourceCacheCount()).toBe(0));
-      expect(main.retainedFontSourceBytes()).toBe(0);
     });
   }
 
@@ -247,20 +255,137 @@ describe('fontResolver bridge: main and worker sessions resolve alike', () => {
     let calls = 0;
     const face = FACE(16);
     const source = fontResolver(() => { calls++; return [face]; });
-    // A main-mode document of the same application holds the answer.
     await mainSession([source]).session.ensure(demand(['Private Face']));
-    // A worker-mode document (the worker is its only painting realm) joins it.
     const link = bridge([source]);
     const { set, session } = link.session();
     await session.ensure(demand(['Private Face']));
     expect(calls).toBe(1);
     expect(set.faces.map((entry) => entry.bytes)).toEqual([16]);
-    // Without the guard the transfer would have detached it (byteLength 0).
     expect((face.data as ArrayBuffer).byteLength).toBe(16);
   });
 });
 
-describe('fontResolver bridge: abort, staleness and malformed replies', () => {
+describe('fontResolver bridge: review findings', () => {
+  // Finding 1: two worker-mode documents on one family and one fresh buffer.
+  for (const timing of ['concurrently', 'sequentially while both are live'] as const) {
+    it(`shares one resolution between two worker documents (${timing}) without detaching it`, async () => {
+      let calls = 0;
+      const face = FACE(24);
+      const source = fontResolver(() => { calls++; return [face]; });
+      const first = bridge([source]);
+      const second = bridge([source], { realm: worker2 });
+      const a = first.session();
+      const b = second.session();
+      if (timing === 'concurrently') {
+        await Promise.all([a.session.ensure(demand(['Private Face'])), b.session.ensure(demand(['Private Face']))]);
+      } else {
+        await a.session.ensure(demand(['Private Face']));
+        await b.session.ensure(demand(['Private Face']));
+      }
+      expect(calls).toBe(1);
+      expect(a.set.faces.map((entry) => entry.bytes)).toEqual([24]);
+      expect(b.set.faces.map((entry) => entry.bytes)).toEqual([24]);
+      expect((face.data as ArrayBuffer).byteLength).toBe(24);
+      expect(warn).not.toHaveBeenCalled();
+    });
+  }
+
+  // Finding 2: two configurations of one function.
+  it('names the exact source, so a substitute configuration of the same function is honoured', async () => {
+    const resolve: FontResolveFn = () => [FACE(8, 'Served')];
+    const fonts = [fontResolver(resolve), fontResolver(resolve, { substitutes: [{ for: 'Missing', use: 'Served' }] })];
+    const { session: direct } = mainSession(fonts);
+    const mainLoaded = await direct.ensure(demand(['Missing']));
+    direct.release();
+    const link = bridge(fonts);
+    const workerLoaded = await link.session().session.ensure(demand(['Missing']));
+    expect(mainLoaded.substitutions.get('missing')).toEqual({ family: 'Served' });
+    expect(workerLoaded.substitutions.get('missing')).toEqual(mainLoaded.substitutions.get('missing'));
+    expect(workerLoaded.faces.map(({ family, sourceIndex }) => [family, sourceIndex]))
+      .toEqual(mainLoaded.faces.map(({ family, sourceIndex }) => [family, sourceIndex]));
+    const request = link.toMain[1] as { sourceIndex: number };
+    expect(request.sourceIndex).toBe(1);
+  });
+
+  // Finding 3: a resolver that fails once, then succeeds.
+  for (const order of ['viewer first', 'worker first'] as const) {
+    it(`gives a workbook's viewer and worker one outcome when the resolver fails once (${order})`, async () => {
+      let calls = 0;
+      const source = fontResolver(() => {
+        calls++;
+        if (calls === 1) throw new Error('flaky backend');
+        return [FACE(8)];
+      });
+      const failures = new Map<string, string>();
+      const link = bridge([source], { failures });
+      const viewer = mainSession([source], failures);
+      const worker = link.session();
+      const ensureViewer = () => viewer.session.ensure(demand(['Private Face']));
+      const ensureWorker = () => worker.session.ensure(demand(['Private Face']));
+      const [firstLoaded, secondLoaded] = order === 'viewer first'
+        ? [await ensureViewer(), await ensureWorker()]
+        : [await ensureWorker(), await ensureViewer()];
+      expect(firstLoaded.faces).toEqual([]);
+      expect(secondLoaded.faces).toEqual([]);
+      expect(calls).toBe(1);
+      // Another document is not bound by this one's failure: it retries.
+      const other = mainSession([source]);
+      expect((await other.session.ensure(demand(['Private Face']))).faces).toHaveLength(1);
+      expect(calls).toBe(2);
+    });
+  }
+
+  // Finding 4: a worker reset abandons its calls on main too.
+  it('cancels every pending call on reset, so a late answer is never posted or detached', async () => {
+    let signal: AbortSignal | undefined;
+    let finish!: (faces: readonly FontFaceDeclaration[]) => void;
+    const source = fontResolver((_demand, context: FontResolveContext) => {
+      signal = context.signal;
+      return new Promise((resolve) => { finish = resolve; });
+    });
+    const link = bridge([source]);
+    const { session, set } = link.session();
+    const pending = session.ensure(demand(['Private Face']));
+    await vi.waitFor(() => expect(signal).toBeDefined());
+    // The worker starts another document.
+    link.client.reset();
+    await vi.waitFor(() => expect(signal?.aborted).toBe(true));
+    expect(link.toMain.map((message) => (message as { kind: string }).kind))
+      .toEqual(['ooxmlResolveFonts', 'ooxmlCancelResolveFonts']);
+    const late = FACE(8);
+    finish([late]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(link.toWorker).toEqual([]);
+    expect((late.data as ArrayBuffer).byteLength).toBe(8);
+    expect((await pending).faces).toEqual([]);
+    expect(set.faces).toHaveLength(0);
+    expect(link.client.pendingCount).toBe(0);
+  });
+
+  it('abandons calls of an older generation when a newer request arrives', async () => {
+    const signals: AbortSignal[] = [];
+    const source = fontResolver((_demand, context) => { signals.push(context.signal); return new Promise(() => undefined); });
+    const posts: unknown[] = [];
+    const responder = new main.FontResolverResponder({ post: (message) => posts.push(message), sources: [source] });
+    const request = (generation: number, requestId: number, family: string) => ({
+      kind: 'ooxmlResolveFonts', generation, requestId, sourceIndex: 0, resolverId: source.id, demand: demand([family]),
+    } as never);
+    responder.accept(request(0, 1, 'A'));
+    await vi.waitFor(() => expect(signals).toHaveLength(1));
+    responder.accept(request(1, 1, 'B'));
+    await vi.waitFor(() => expect(signals).toHaveLength(2));
+    expect(signals[0]?.aborted).toBe(true);
+    expect(signals[1]?.aborted).toBe(false);
+    // A request of the abandoned generation is not started.
+    responder.accept(request(0, 2, 'C'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(signals).toHaveLength(2);
+    expect(posts).toEqual([]);
+    responder.dispose();
+  });
+});
+
+describe('fontResolver bridge: abort and malformed replies', () => {
   it('aborts the application call when the worker abandons it and posts no late answer', async () => {
     let signal: AbortSignal | undefined;
     let finish!: (faces: readonly FontFaceDeclaration[]) => void;
@@ -274,16 +399,11 @@ describe('fontResolver bridge: abort, staleness and malformed replies', () => {
     await vi.waitFor(() => expect(signal).toBeDefined());
     session.release();
     await vi.waitFor(() => expect(signal?.aborted).toBe(true));
-    expect(link.toMain.map((message) => (message as { kind: string }).kind))
-      .toEqual(['ooxmlResolveFonts', 'ooxmlCancelResolveFonts']);
-    const late = FACE(8);
-    finish([late]);
+    finish([FACE(8)]);
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(link.toWorker).toEqual([]);
-    expect((late.data as ArrayBuffer).byteLength).toBe(8);
     expect((await pending).faces).toEqual([]);
     expect(set.faces).toHaveLength(0);
-    expect(link.client.pendingCount).toBe(0);
   });
 
   it('aborts every in-flight call when the document is destroyed', async () => {
@@ -301,27 +421,9 @@ describe('fontResolver bridge: abort, staleness and malformed replies', () => {
     expect(link.toWorker).toEqual([]);
   });
 
-  it('drops a reply of an earlier generation and never registers it', async () => {
-    const source = fontResolver(() => [FACE(8)]);
-    const link = bridge([source]);
-    link.pause();
-    const { session, set } = link.session();
-    const pending = session.ensure(demand(['Private Face']));
-    await vi.waitFor(() => expect(link.toWorker).toHaveLength(1));
-    // The worker starts another document before the reply arrives.
-    link.client.reset();
-    link.resume();
-    const loaded = await pending;
-    expect(loaded.faces).toEqual([]);
-    expect(set.faces).toHaveLength(0);
-    expect(link.client.pendingCount).toBe(0);
-    session.release();
-  });
-
   it('fails closed on a malformed reply: host fallback, nothing registered', async () => {
     const source = fontResolver(() => [FACE(8)]);
-    const sources = [source];
-    const workerSources = assertFontSourceDescriptors(structuredClone(sources));
+    const workerSources = assertFontSourceDescriptors(structuredClone([source]));
     for (const outcome of [
       undefined,
       { status: 'families', families: 'nope' },
@@ -333,7 +435,8 @@ describe('fontResolver bridge: abort, staleness and malformed replies', () => {
       { status: 'unknown' },
     ]) {
       const client: WorkerFontResolverClient = new WorkerFontResolverClient((message) => {
-        const { generation, requestId } = message as { generation: number; requestId: number };
+        const { kind, generation, requestId } = message as { kind: string; generation: number; requestId: number };
+        if (kind !== 'ooxmlResolveFonts') return;
         void Promise.resolve().then(() => client.accept({ kind: 'ooxmlFontsResolved', generation, requestId, outcome }));
       });
       const set = fakeSet();
@@ -347,8 +450,7 @@ describe('fontResolver bridge: abort, staleness and malformed replies', () => {
 
   it('rejects the load for a ceiling breach found by the main-side admission', async () => {
     const source = fontResolver(() => Array.from({ length: HARD_MAX_FONT_SOURCE_DECLARATIONS + 1 }, () => FACE(1)));
-    const link = bridge([source]);
-    const { session } = link.session();
+    const { session } = bridge([source]).session();
     const error = await session.ensure(demand(['Private Face'])).catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(OoxmlError);
     expect((error as OoxmlError).violation).toMatchObject({ quota: 'declarations', observed: HARD_MAX_FONT_SOURCE_DECLARATIONS + 1 });
@@ -356,8 +458,7 @@ describe('fontResolver bridge: abort, staleness and malformed replies', () => {
 
   it('keeps an application error a family failure, with the same reason as main mode', async () => {
     const source = fontResolver(() => { throw new Error('token expired'); });
-    const link = bridge([source]);
-    const { session } = link.session();
+    const { session } = bridge([source]).session();
     expect((await session.ensure(demand(['Private Face']))).faces).toEqual([]);
     expect(String(warn.mock.calls.at(-1)?.[0])).toContain('Private Face (token expired)');
   });
@@ -384,8 +485,8 @@ describe('fontResolver bridge: abort, staleness and malformed replies', () => {
       return new Promise(() => undefined);
     });
     const posts: unknown[] = [];
-    const responder = new main.FontResolverResponder({ post: (message) => posts.push(message), sources: [source], copyData: false });
-    responder.accept({ kind: 'ooxmlResolveFonts', generation: 0, requestId: 1, resolverId: source.id, demand: demand(['A']) } as never);
+    const responder = new main.FontResolverResponder({ post: (message) => posts.push(message), sources: [source] });
+    responder.accept({ kind: 'ooxmlResolveFonts', generation: 0, requestId: 1, sourceIndex: 0, resolverId: source.id, demand: demand(['A']) } as never);
     await vi.advanceTimersByTimeAsync(15_000);
     expect(signal?.aborted).toBe(true);
     expect(posts).toEqual([{ kind: 'ooxmlFontsResolved', generation: 0, requestId: 1, outcome: { status: 'failed', reason: 'timed out' } }]);

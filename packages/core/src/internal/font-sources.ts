@@ -48,6 +48,7 @@ export { fontSourceLimitError } from '../errors/font-source-limit.js';
 export {
   FontSourceSession,
   normalizeFontDemand,
+  type FontResolverFailures,
   type FontResolverRunner,
   type FontSourceSessionOptions,
   type LoadedFontSources,

@@ -12,6 +12,7 @@ import {
   FontResolverBridgeHost,
   normalizeFontOptions,
   type FontDemand,
+  type FontResolverFailures,
   type FontSource,
   type FontSourceSession,
   type InstalledFamilyExclusion,
@@ -230,6 +231,9 @@ export class XlsxWorkbook {
    *  worker's font-source session (core `resolver-bridge-host.ts`); disposed
    *  in {@link destroy}, which aborts every in-flight resolver call. */
   private fontResolverBridge: FontResolverBridgeHost | null = null;
+  /** Resolver failures of this workbook, shared by its viewer-realm sessions
+   * and its worker bridge (core `resolver-resolution.ts`). */
+  private fontResolverFailures: FontResolverFailures = new Map();
   private fontsDestroyed = false;
   private _mode: 'main' | 'worker' = 'main';
   private generation = 0;
@@ -664,13 +668,15 @@ export class XlsxWorkbook {
    * document about to be parsed (core `resolver-bridge-host.ts`). */
   private attachFontResolverBridge(bridge: WorkbookBridge, fonts: readonly FontSource[] | undefined): void {
     this.fontResolverBridge?.dispose();
+    this.fontResolverFailures = new Map();
     this.fontResolverBridge = this._mode === 'worker'
       ? new FontResolverBridgeHost({
         post: (message, transfer) => bridge.post(message, transfer),
         sources: fonts,
-        // This realm registers the same faces for viewer geometry, so it
-        // keeps every original buffer and transfers a copy (design §4.3).
-        copyData: true,
+        // One outcome per family for the whole workbook: the viewer-realm
+        // sessions and the worker share this failure record (and main's
+        // resolution cache), so paint and hit geometry use the same faces.
+        resolverFailures: this.fontResolverFailures,
       })
       : null;
   }
@@ -734,7 +740,7 @@ export class XlsxWorkbook {
       retained.refs++;
     } else {
       const session = this.fonts?.length && this.fontSessionType
-        ? new this.fontSessionType({ sources: this.fonts, fontSet })
+        ? new this.fontSessionType({ sources: this.fonts, fontSet, resolverFailures: this.fontResolverFailures })
         : null;
       const record = {
         refs: 1, loaded: null, session, fontQueue: Promise.resolve() as Promise<unknown>,
@@ -1647,6 +1653,7 @@ export class XlsxWorkbook {
     this.fontsDestroyed = true;
     this.fontResolverBridge?.dispose();
     this.fontResolverBridge = null;
+    this.fontResolverFailures = new Map();
     for (const retained of this.retainedFontSets.values()) {
       // Releasing settles an in-flight ensure (it resolves empty).
       retained.session?.release();

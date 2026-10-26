@@ -18,20 +18,22 @@
  * The reply carries each family's claiming declarations, failure or absence,
  * or the breached ceiling.
  *
- * Byte ownership (design §4.3):
- * - When the worker is the only painting realm (DOCX and PPTX worker mode),
- *   the bridge holds a cache entry only for the duration of its request.
- *   Afterwards a buffer no kept entry references (and no `fontFiles`
- *   descriptor) is transferred, so main keeps nothing; one still referenced
- *   (another document of this realm holds the family) is copied.
- * - When this realm paints as well (the XLSX viewer registers the same faces
- *   in `document.fonts`), the bridge holds its entries for the document's
- *   lifetime alongside the viewer session, main keeps the originals, and one
- *   copy per distinct buffer is transferred.
- * A cached buffer is therefore never detached. Main's cache charges what main
- * keeps and the worker's session what the worker keeps, each once; entries
- * are released with the bridge (`dispose`). A reply for a request the worker
- * cancelled, or produced after the document was destroyed, is never posted.
+ * Holding and bytes (design §4.3, §4.4): the bridge holds every entry it
+ * joined through the document's cache handle until the document is destroyed,
+ * exactly as a main-mode session holds its entries, so live documents share
+ * one resolution per family whichever realm paints them (a second worker-mode
+ * document, the XLSX viewer realm). Main's cache therefore keeps the bytes the
+ * worker receives, and a buffer the cache keeps must never be detached: the
+ * reply carries one copy per distinct buffer, made while the entries are held.
+ * The cache charges what main keeps and the worker's session what the worker
+ * keeps, each once; `dispose` returns every entry. A failure is not kept by
+ * the realm cache, but it is recorded in the document's failure record
+ * (`resolverFailures`, shared with the XLSX viewer sessions), so one document
+ * sees one outcome per family. Requests are named by the source's index in the
+ * document's `fonts`, validated against that descriptor's id, so two
+ * configurations of one function stay apart. A reply for a request the worker
+ * cancelled (or abandoned with a newer generation), or produced after the
+ * document was destroyed, is never posted.
  */
 import type { OoxmlError } from '../errors/ooxml-error.js';
 import { nullRecord } from '../internal/own-key.js';
@@ -50,12 +52,12 @@ import {
   resolveFamiliesThroughCache,
   runResolverInRealm,
   substituteScriptsOf,
+  type FontResolverFailures,
   type ResolverDemandedName,
 } from './resolver-resolution.js';
-import { acquireSourceCache, isFontBufferCached, type SourceCache } from './source-cache.js';
+import { acquireSourceCache, type SourceCache } from './source-cache.js';
 import {
   fontResolverFunction,
-  isFontBufferHeld,
   type FontDemand,
   type FontFaceDeclaration,
   type FontResolverSource,
@@ -70,9 +72,9 @@ export interface FontResolverResponderOptions {
   readonly post: Post;
   /** The document's validated `fonts` option (main-realm descriptors). */
   readonly sources: readonly FontSource[];
-  /** Keep every original buffer and transfer copies: this realm also
-   * registers the faces (XLSX viewer realm). */
-  readonly copyData: boolean;
+  /** The document's resolver failure record, shared with its viewer-realm
+   * sessions (XLSX); a private one otherwise. */
+  readonly resolverFailures?: FontResolverFailures;
 }
 
 const KNOWN_SCRIPTS: ReadonlySet<string> = new Set<string>(FONT_SUBSTITUTE_SCRIPTS);
@@ -139,25 +141,25 @@ export function copyBridgedFontDemand(value: unknown): FontDemand | undefined {
   });
 }
 
-/** Ownership of the answered buffers: originals moved, or one copy each. */
-function transferable(
+/** The reply's answers with one copy per distinct buffer: the originals are
+ * kept by main's cache (and possibly the application), so none is detached. */
+function copiedForTransfer(
   answers: readonly BridgedFamilyAnswer[],
-  copyData: boolean,
 ): { answers: readonly BridgedFamilyAnswer[]; transfer: ArrayBuffer[] } {
-  const sent = new Map<ArrayBuffer, ArrayBuffer>();
+  const copies = new Map<ArrayBuffer, ArrayBuffer>();
   const wire = (declaration: FontFaceDeclaration): FontFaceDeclaration => {
     const { data } = declaration;
     if (!data) return declaration;
-    let out = sent.get(data);
-    if (!out) {
-      out = copyData || isFontBufferHeld(data) || isFontBufferCached(data) ? data.slice(0) : data;
-      sent.set(data, out);
+    let copy = copies.get(data);
+    if (!copy) {
+      copy = data.slice(0);
+      copies.set(data, copy);
     }
-    return out === data ? declaration : { ...declaration, data: out };
+    return { ...declaration, data: copy };
   };
   const out = answers.map((answer) => (answer.kind === 'claimed'
     ? { ...answer, declarations: answer.declarations.map(wire) } : answer));
-  return { answers: out, transfer: [...sent.values()] };
+  return { answers: out, transfer: [...copies.values()] };
 }
 
 function isFontSourceLimit(error: unknown): error is OoxmlError & { violation: NonNullable<OoxmlError['violation']> } {
@@ -169,17 +171,20 @@ function isFontSourceLimit(error: unknown): error is OoxmlError & { violation: N
 export class FontResolverResponder {
   private readonly post: Post;
   private sources: readonly FontSource[];
-  private readonly copyData: boolean;
+  private readonly failures: FontResolverFailures;
   private disposed = false;
+  /** Newest worker generation seen; older calls are abandoned. */
+  private generation = -1;
   /** In-flight calls by `${generation}:${requestId}` (library-generated keys). */
-  private readonly calls = new Map<string, AbortController>();
-  /** This document's hold on each resolver's realm cache, by resolver id. */
-  private readonly caches = new Map<string, SourceCache>();
+  private readonly calls = new Map<string, { readonly controller: AbortController; readonly generation: number }>();
+  /** This document's hold on each resolver source's realm cache, by its
+   * index in the document's `fonts`; every joined entry is held by it. */
+  private readonly caches = new Map<number, SourceCache>();
 
   constructor(options: FontResolverResponderOptions) {
     this.post = options.post;
     this.sources = options.sources;
-    this.copyData = options.copyData;
+    this.failures = options.resolverFailures ?? new Map();
   }
 
   /** Handle one worker → main bridge message (already type-guarded). */
@@ -189,12 +194,23 @@ export class FontResolverResponder {
     if (!isNonNegativeSafeInteger(fields.generation) || !isNonNegativeSafeInteger(fields.requestId)) return;
     const key = `${fields.generation}:${fields.requestId}`;
     if (message.kind === 'ooxmlCancelResolveFonts') {
-      this.calls.get(key)?.abort();
+      this.calls.get(key)?.controller.abort();
       this.calls.delete(key);
       return;
     }
     if (message.kind !== 'ooxmlResolveFonts' || this.calls.has(key)) return;
-    void this.respond(key, fields.generation, fields.requestId, fields.resolverId, fields.demand);
+    if (fields.generation < this.generation) return;
+    if (fields.generation > this.generation) {
+      // The worker moved to a new document: whatever it asked before is
+      // abandoned (its own reset also cancels each call).
+      this.generation = fields.generation;
+      for (const [callKey, call] of [...this.calls]) {
+        if (call.generation >= fields.generation) continue;
+        call.controller.abort();
+        this.calls.delete(callKey);
+      }
+    }
+    void this.respond(key, fields.generation, fields.requestId, fields.sourceIndex, fields.resolverId, fields.demand);
   }
 
   /** The document is destroyed: abort every call and return every cache
@@ -204,38 +220,44 @@ export class FontResolverResponder {
     this.disposed = true;
     const calls = [...this.calls.values()];
     this.calls.clear();
-    for (const controller of calls) controller.abort();
+    for (const { controller } of calls) controller.abort();
     for (const cache of this.caches.values()) cache.release();
     this.caches.clear();
     // The descriptors may hold application font bytes.
     this.sources = [];
+    this.failures.clear();
   }
 
   /** In-flight calls (tests and leak checks). */
   get pendingCount(): number { return this.calls.size; }
 
-  private async respond(key: string, generation: number, requestId: number, resolverId: unknown, rawDemand: unknown): Promise<void> {
+  private async respond(
+    key: string, generation: number, requestId: number,
+    sourceIndex: unknown, resolverId: unknown, rawDemand: unknown,
+  ): Promise<void> {
     const controller = new AbortController();
-    this.calls.set(key, controller);
+    const call = { controller, generation };
+    this.calls.set(key, call);
     let expired = false;
     const timer = setTimeout(() => { expired = true; controller.abort(); }, FONT_LOAD_CEILING_MS);
     let outcome: FontResolveOutcome;
     try {
-      outcome = await this.resolve(resolverId, rawDemand, controller.signal);
+      outcome = await this.resolve(sourceIndex, resolverId, rawDemand, controller.signal);
     } finally {
       clearTimeout(timer);
     }
     // Cancelled by the worker or the document destroyed: the worker no longer
     // waits, so the answer is dropped here (cached entries stay with their
     // holders and are released with them).
-    const live = this.calls.get(key) === controller;
+    const live = this.calls.get(key) === call;
     this.calls.delete(key);
     if (this.disposed || !live || (controller.signal.aborted && !expired)) return;
     if (expired) outcome = { status: 'failed', reason: 'timed out' };
     let reply = outcome;
     let transfer: ArrayBuffer[] = [];
     if (outcome.status === 'families') {
-      const sent = transferable(outcome.families, this.copyData);
+      // Copied while this document's hold keeps the originals cached.
+      const sent = copiedForTransfer(outcome.families);
       reply = { status: 'families', families: sent.answers };
       transfer = sent.transfer;
     }
@@ -253,23 +275,24 @@ export class FontResolverResponder {
     }
   }
 
-  private cacheOf(source: FontResolverSource): SourceCache {
-    let cache = this.caches.get(source.id);
+  private cacheOf(sourceIndex: number, source: FontResolverSource): SourceCache {
+    let cache = this.caches.get(sourceIndex);
     if (!cache) {
       cache = acquireSourceCache(source);
-      this.caches.set(source.id, cache);
+      this.caches.set(sourceIndex, cache);
     }
     return cache;
   }
 
-  private async resolve(resolverId: unknown, rawDemand: unknown, signal: AbortSignal): Promise<FontResolveOutcome> {
+  private async resolve(sourceIndex: unknown, resolverId: unknown, rawDemand: unknown, signal: AbortSignal): Promise<FontResolveOutcome> {
     const demand = copyBridgedFontDemand(rawDemand);
-    if (!demand || typeof resolverId !== 'string') return { status: 'failed', reason: 'malformed font resolver request' };
-    // Only this document's own resolvers: the id names the function, and the
-    // same function always yields the same id (`fontResolver`).
-    const source = this.sources.find((entry): entry is FontResolverSource =>
-      entry.kind === 'font-resolver' && entry.id === resolverId);
-    if (!source || !fontResolverFunction(source)) {
+    if (!demand || typeof resolverId !== 'string' || !isNonNegativeSafeInteger(sourceIndex)) {
+      return { status: 'failed', reason: 'malformed font resolver request' };
+    }
+    // Exactly the document's own `fonts[sourceIndex]`: the id names the
+    // function, the index the configuration (its substitutes).
+    const source = this.sources[sourceIndex];
+    if (source?.kind !== 'font-resolver' || source.id !== resolverId || !fontResolverFunction(source)) {
       return { status: 'failed', reason: 'font resolver function is not available in this realm' };
     }
     const scriptsOf = substituteScriptsOf(demand.substituteScripts);
@@ -277,14 +300,13 @@ export class FontResolverResponder {
       ...demand.families.map((name) => ({ name, fallback: false, scripts: scriptsOf(name) })),
       ...demand.fallbackFamilies.map((name) => ({ name, fallback: true, scripts: scriptsOf(name) })),
     ];
-    const cache = this.cacheOf(source);
-    // XLSX: held with the viewer realm's session for the document's lifetime
-    // (by the cache handle). DOCX/PPTX: held for this request only.
-    const holder: object = this.copyData ? cache : {};
+    const cache = this.cacheOf(sourceIndex, source);
     try {
       const answers = await resolveFamiliesThroughCache({
         source, cache, runner: runResolverInRealm, families,
-        tuples: demand.tuples, scalars: demand.scalars, signal, holder,
+        tuples: demand.tuples, scalars: demand.scalars, signal,
+        // Held until dispose, like a main-mode session's entries.
+        holder: cache, sourceIndex, failures: this.failures,
       });
       return {
         status: 'families',
@@ -296,8 +318,6 @@ export class FontResolverResponder {
     } catch (error) {
       if (isFontSourceLimit(error)) return { status: 'limit', violation: error.violation };
       return { status: 'failed', reason: error instanceof Error ? error.message : String(error) };
-    } finally {
-      if (!this.copyData) cache.families.release(holder);
     }
   }
 }

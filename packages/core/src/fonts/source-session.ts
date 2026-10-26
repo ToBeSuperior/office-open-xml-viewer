@@ -53,6 +53,7 @@ import {
   resolveFamiliesThroughCache,
   runResolverInRealm,
   substituteScriptsOf,
+  type FontResolverFailures,
   type FontResolverRunner,
 } from './resolver-resolution.js';
 import { activeFontSet, FONT_LOAD_CEILING_MS, releaseFaces, retainFace } from './font-registry.js';
@@ -105,7 +106,7 @@ export interface LoadedFontSources {
   readonly regularAliases: ReadonlyMap<string, string>;
 }
 
-export type { FontResolverRunner };
+export type { FontResolverFailures, FontResolverRunner };
 
 export interface FontSourceSessionOptions {
   /** The `fonts` option value; validated here. */
@@ -115,6 +116,9 @@ export interface FontSourceSessionOptions {
   /** Aborting releases the session and rejects pending and later ensures. */
   readonly signal?: AbortSignal;
   readonly runResolver?: FontResolverRunner;
+  /** Resolver failures shared by every requester of one document (XLSX: the
+   * viewer-realm sessions and the worker bridge); see `resolver-resolution.ts`. */
+  readonly resolverFailures?: FontResolverFailures;
 }
 
 const EMPTY_SNAPSHOT: LoadedFontSources = Object.freeze({
@@ -322,6 +326,7 @@ export class FontSourceSession {
   private caches: readonly SourceCache[];
   private fontSet: FontFaceSet | null;
   private runResolver: FontResolverRunner;
+  private resolverFailures: FontResolverFailures | undefined;
   private readonly controller = new AbortController();
   private detachSignal: () => void = () => undefined;
   private closed = false;
@@ -339,6 +344,7 @@ export class FontSourceSession {
     this.sources = assertFontSourceDescriptors(options.sources);
     this.fontSet = options.fontSet === undefined ? activeFontSet() : options.fontSet;
     this.runResolver = options.runResolver ?? runResolverInRealm;
+    this.resolverFailures = options.resolverFailures;
     this.caches = this.sources.map(acquireSourceCache);
     const signal = options.signal;
     if (signal) {
@@ -393,6 +399,7 @@ export class FontSourceSession {
     this.sources = [];
     this.fontSet = null;
     this.runResolver = releasedRunner;
+    this.resolverFailures = undefined;
     this.warned.clear();
     this.snapshot = EMPTY_SNAPSHOT;
   }
@@ -524,7 +531,7 @@ export class FontSourceSession {
       case 'font-files':
         return resolveFontFiles(source, cache, names, scriptsOf);
       case 'font-resolver':
-        return this.resolveWithResolver(source, cache, families, tuples, signal);
+        return this.resolveWithResolver(source, sourceIndex, cache, families, tuples, signal);
     }
   }
 
@@ -532,6 +539,7 @@ export class FontSourceSession {
    * call per family across every requester; `resolver-resolution.ts`). */
   private resolveWithResolver(
     source: FontResolverSource,
+    sourceIndex: number,
     cache: SourceCache,
     families: NormalizedDemand['names'],
     tuples: FontDemand['tuples'],
@@ -540,7 +548,8 @@ export class FontSourceSession {
     return resolveFamiliesThroughCache({
       source, cache, runner: this.runResolver, families, tuples,
       scalars: this.all ? 'all' : [...this.points].sort((a, b) => a - b),
-      signal, holder: cache,
+      signal, holder: cache, sourceIndex,
+      ...(this.resolverFailures ? { failures: this.resolverFailures } : {}),
     });
   }
 

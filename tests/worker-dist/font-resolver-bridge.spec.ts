@@ -7,9 +7,8 @@ import { deck, para, textBox } from '../../packages/pptx/src/test-support/synthe
 // `fontResolver` and `fontFiles` data: URLs through the published dist in
 // main and worker mode, for every format (font-provider design §3.4, §4.3,
 // §12.1). In worker mode the application function stays on main: the worker's
-// session asks main to run it and receives the declared bytes (transferred to
-// the worker when it is the only painting realm, copied when the XLSX viewer
-// realm paints too). Main and worker mode must paint the same pixels, and the
+// session asks main, which resolves through its realm resolution cache and
+// sends a copy of the declared bytes. Main and worker mode must paint the same pixels, and the
 // fixture face must actually paint (it differs visibly from host fallback).
 // The font is the committed synthetic fixture from
 // scripts/generate-fixture-font.py (no third-party copyright).
@@ -193,12 +192,11 @@ for (const format of ['docx', 'pptx', 'xlsx'] as const) {
       }
       expect(main.calls).toBe(1);
       expect(main.answeredBytes).toEqual([FONT.byteLength]);
-      // Once per family in both modes. In XLSX worker mode the viewer realm
-      // and the worker share main's resolution: the worker receives a copy,
-      // so main's answer stays attached; otherwise the worker is the only
-      // painting realm and the bytes were transferred.
+      // Once per family in both modes: the worker's request resolves through
+      // main's resolution cache (shared with the XLSX viewer realm), which
+      // keeps the original; the worker receives a copy, nothing is detached.
       expect(worker.calls).toBe(1);
-      expect(worker.answeredBytes).toEqual(format === 'xlsx' ? [FONT.byteLength] : [0]);
+      expect(worker.answeredBytes).toEqual([FONT.byteLength]);
     }
   });
 }
