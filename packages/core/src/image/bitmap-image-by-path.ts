@@ -57,7 +57,7 @@ import {
 } from './adaptive-image-budget.js';
 import type { TiffRenderer } from './tiff-contract.js';
 import { wmfRasterTarget } from './wmf.js';
-import type { SvgBlobDecoder } from './svg-raster.js';
+import { assertSvgRasterCoverage, type SvgBlobDecoder } from './svg-raster.js';
 
 type FetchImage = (path: string, mime: string) => Promise<Blob>;
 export type DecodedBitmapCacheOwner = object;
@@ -992,7 +992,17 @@ export function getCachedBitmapByPath(
         // The host decoder has the ordinary image ceiling; effect callers can
         // require a smaller base because several pixel surfaces coexist. Check
         // before transferring ownership to the cache or allocating effects.
+        // Targets are aspect-preserving coverage minimums for SVG (see
+        // svg-raster.ts), so the admitted grid is the coverage grid of the
+        // SVG's own aspect, not the target box: a square SVG for a 96x87 box is
+        // 96x96 in every realm. Only a surface beyond that grid is rejected.
         try {
+          if (bitmap) {
+            assertSvgRasterCoverage(bitmap.width, bitmap.height, {
+              targetWidthPx,
+              targetHeightPx,
+            });
+          }
           enforceCachedRetainedBudget(bitmap, normalized);
         } catch (error) {
           closeBitmapOnce(bitmap);
