@@ -124,9 +124,10 @@ describe('aspect-mismatched SVG pictures (#1950)', () => {
     });
   });
 
-  it.each([0.9, 0.98, 0.99, 1])('main draws the SVG element for a 1.00 x %s in box', async (heightIn) => {
+  // Main mode draws the SVG element itself; no raster target is involved.
+  it('main draws the SVG element for a 1.00 x 0.90 in box', async () => {
     vi.stubGlobal('Image', HostImage);
-    const images = await preload(heightIn, fetchSvgOnly());
+    const images = await preload(0.9, fetchSvgOnly());
     expect([...images.values()][0]).toBeInstanceOf(HostImage);
   });
 

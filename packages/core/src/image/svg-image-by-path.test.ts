@@ -256,5 +256,20 @@ describe('getCachedSvgImageByPath', () => {
       });
       expect(close).toHaveBeenCalledTimes(1);
     });
+
+    it('keeps non-finite worker raster dimensions a terminal quota failure', async () => {
+      stubWorkerRealm();
+      const close = vi.fn();
+      const workerDecoder = vi.fn(async () => (
+        { width: Infinity, height: Infinity, close } as unknown as ImageBitmap
+      ));
+      const fetchImage = vi.fn(async () => new Blob(['<svg/>'], { type: 'image/svg+xml' }));
+      await expect(getCachedSvgImageByPath('non-finite.svg', fetchImage, {
+        targetWidthPx: 96,
+        targetHeightPx: 87,
+        workerDecoder,
+      })).rejects.toMatchObject({ code: 'ooxml-decoded-image-limit', metric: 'image-dimension' });
+      expect(close).toHaveBeenCalledTimes(1);
+    });
   });
 });
