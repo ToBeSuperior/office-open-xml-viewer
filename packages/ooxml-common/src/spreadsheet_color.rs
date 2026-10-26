@@ -290,9 +290,21 @@ mod tests {
             resolve_color_attrs(Some("ff00aa"), None, None, None, &[]).as_deref(),
             Some("#FF00AA")
         );
-        let theme = ["#000000", "#FFFFFF", "#111111", "#EEEEEE", "#ff0000;x:url(y)"]
-            .map(str::to_owned);
-        assert_eq!(resolve_color_attrs(None, Some("4"), None, None, &theme), None);
-        assert_eq!(resolve_color(SpreadsheetColor::Theme(4), Some(0.2), &theme), None);
+        let theme = [
+            "#000000",
+            "#FFFFFF",
+            "#111111",
+            "#EEEEEE",
+            "#ff0000;x:url(y)",
+        ]
+        .map(str::to_owned);
+        assert_eq!(
+            resolve_color_attrs(None, Some("4"), None, None, &theme),
+            None
+        );
+        assert_eq!(
+            resolve_color(SpreadsheetColor::Theme(4), Some(0.2), &theme),
+            None
+        );
     }
 }
