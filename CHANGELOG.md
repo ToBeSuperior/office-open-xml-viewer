@@ -19,10 +19,12 @@ is removed in 0.91.0. See the [0.89 to 0.90 migration guide](docs/migration-0.90
   exported from `@silurus/ooxml` and from each format entry, along with
   `officeFontSubstitutions`. DOCX, XLSX and PPTX behave the same in main and
   worker mode. Nothing is requested without a source (#1497).
-- **Custom Google Fonts origin:** `googleFonts({ cssOrigin })` sends every
-  request to a regional mirror or an internal proxy and never to
-  `fonts.googleapis.com`. A failing origin keeps the host fonts and is never
-  replaced by another source (#1497).
+- **Custom Google Fonts origin:** `googleFonts({ cssOrigin })` sends the
+  stylesheet requests to a regional mirror or an internal proxy instead of
+  `fonts.googleapis.com`. Redirects are followed and the font file URLs in the
+  returned CSS are used as given, so the mirror controls where those go. A
+  failing origin keeps the host fonts and is never replaced by another source
+  (#1497).
 - **Fewer font downloads:** DOCX and XLSX now load only the `unicode-range`
   subsets that the document's text paints, as PPTX already did.
 - **Resource safety:** font sources have fixed limits and fail closed with the

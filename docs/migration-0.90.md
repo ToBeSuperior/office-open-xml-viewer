@@ -62,10 +62,20 @@ fonts: [googleFonts({ cssOrigin: 'https://fonts.internal.example:8443' })]
 trailing slash is accepted. A path, query or user name throws a `TypeError`
 when `googleFonts()` is called, before any load. The requests keep the Google
 CSS2 path and query (`/css2?family=…&display=swap`), so the origin must serve
-that API. No request goes to `fonts.googleapis.com`.
+that API. The library sends no stylesheet request to `fonts.googleapis.com`.
 
-Font file URLs come from the returned CSS. Relative URLs are resolved against
-the stylesheet's final URL, after redirects. Two documents that use different
+`cssOrigin` sets only where the stylesheet requests start:
+
+- Redirects are followed. The stylesheet is read from the final URL, which can
+  be on another origin.
+- Font file URLs come from the returned CSS and are used as given. Relative
+  URLs are resolved against the stylesheet's final URL. Absolute URLs can
+  point anywhere, for example at `fonts.gstatic.com` if the mirror passes
+  Google's CSS through unchanged.
+
+For network isolation, the mirror must control its redirects and rewrite the
+font URLs it returns to hosts you allow. Your CSP (`connect-src` and
+`font-src`) is the enforcement point. Two documents that use different
 origins share no stylesheet, cache entry or registered face.
 
 ### Another CSS API: `cssApi()`
@@ -205,9 +215,11 @@ Sources are consulted per family, in option order:
 Each failure keeps the family on the fonts installed on the viewer's machine.
 Each font load step prints one `console.warn` listing the families that newly
 failed. There is no strict mode
-and no callback. A failing mirror therefore never falls through to the public
-Google origin: that origin is contacted only when `googleFonts()` without
-`cssOrigin` is in the list. Failures are not cached, so a document opened later
+and no callback. The library therefore never retries a failing mirror against
+the public Google origin: it requests Google's stylesheets only when
+`googleFonts()` without `cssOrigin` is in the list. Where a working mirror's
+redirects and font URLs lead is up to the mirror (see
+[the mirror section](#a-google-compatible-mirror-or-proxy-googlefonts-cssorigin-)). Failures are not cached, so a document opened later
 retries the same source.
 
 Within one document a family is decided once. A family that a source claimed

@@ -250,7 +250,7 @@ describe('FontSourceSession: isolation and sharing', () => {
   // `css-source.test.ts`), a failing origin keeping host fallback with no
   // request elsewhere (the first test of this block) and failed families never
   // retrying a later source ('claim-once chaining' below).
-  it('sends every request of a custom-origin preset to that origin only (#1497)', async () => {
+  it('sends every stylesheet request of a custom-origin preset to that origin only (#1497)', async () => {
     const CN = 'https://fonts.googleapis.cn';
     const { calls } = installFetch({
       [carlitoAt(CN)]: { css: rule('Carlito', 'https://fonts.gstatic.cn/s/carlito/latin.woff2', LATIN) },
