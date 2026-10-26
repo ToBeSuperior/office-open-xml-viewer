@@ -104,6 +104,21 @@ it.each(['tight', 'through'])('wraps %s text around the wrapcoords polygon, not 
   }
 });
 
+it('inherits wrapcoords from an earlier pict beside a group', async () => {
+  // A pict holding a group acquires its sibling leaves separately; the
+  // shapetype written in an earlier pict of the story must still apply.
+  // Unfilled and unstroked, the leaf shows the text its polygon admits.
+  const leaf = (coords: string | null) => picture('<w10:wrap type="tight"/>', coords)
+    .replace('type="#_x0000_t75"', 'type="#half" filled="f" stroked="f"')
+    + '<v:group style="position:absolute;width:1pt;height:1pt" coordsize="1,1"/>';
+  const own = await render(`<v:shapetype id="half"/></w:pict><w:pict>${leaf(LEFT_HALF)}`);
+  expectLeftHalfPainted(own.blue);
+  expect(own.inkOverRightHalf).toBeGreaterThan(100);
+  const inherited = await render(`<v:shapetype id="half" wrapcoords="${LEFT_HALF}"/></w:pict><w:pict>${leaf(null)}`);
+  expect(inherited.diagnostics).toEqual([]);
+  expect(Buffer.compare(Buffer.from(inherited.pixels), Buffer.from(own.pixels))).toBe(0);
+});
+
 it.each(['tight', 'through'])('wraps %s text around the frame when wrapcoords is absent or unusable', async type => {
   const frame = await render(picture(`<w10:wrap type="${type}"/>`, '0 0 0 21600 21600 21600 21600 0 0 0'));
   expectLeftHalfPainted(frame.blue);
@@ -116,15 +131,33 @@ it.each(['tight', 'through'])('wraps %s text around the frame when wrapcoords is
 });
 
 it('paints tight-wrapped VML shapes and groups with their wrapcoords', async () => {
-  const rect = (style: string, coords = ` wrapcoords="${LEFT_HALF}"`) =>
+  const rect = (style: string, coords: string) =>
     `<v:rect style="position:absolute;${style}"${coords} filled="f" strokecolor="blue" strokeweight="4pt"><w10:wrap type="tight"/></v:rect>`;
+  const frame = '0 0 0 21600 21600 21600 21600 0';
   for (const content of [
-    rect(`margin-left:0;margin-top:0;width:144pt;height:144pt${RELATIVE}`),
-    `<v:group style="position:absolute;margin-left:0;margin-top:0;width:144pt;height:144pt${RELATIVE}" coordsize="144,144" wrapcoords="${LEFT_HALF}">${rect('left:0;top:0;width:144;height:144', '')}<w10:wrap type="tight"/></v:group>`,
+    (coords: string) => rect(`margin-left:0;margin-top:0;width:144pt;height:144pt${RELATIVE}`, ` wrapcoords="${coords}"`),
+    (coords: string) => `<v:group style="position:absolute;margin-left:0;margin-top:0;width:144pt;height:144pt${RELATIVE}" coordsize="144,144" wrapcoords="${coords}">${rect('left:0;top:0;width:144;height:144', '')}<w10:wrap type="tight"/></v:group>`,
   ]) {
-    const actual = await render(content);
-    expect(actual.diagnostics).toEqual([]);
-    expect(actual.blue).toBeGreaterThan(4 * 144);
-    expect(actual.inkOverRightHalf).toBeGreaterThan(100);
+    // The unfilled outline leaves text visible, so the full-frame control
+    // proves the exclusion is applied and the half polygon proves its shape.
+    for (const [coords, ink] of [[frame, 0], [LEFT_HALF, 100]] as const) {
+      const actual = await render(content(coords));
+      expect(actual.diagnostics).toEqual([]);
+      expect(actual.blue).toBeGreaterThan(4 * 144);
+      if (ink === 0) expect(actual.inkOverRightHalf).toBe(0);
+      else expect(actual.inkOverRightHalf).toBeGreaterThan(ink);
+    }
   }
+});
+
+it('wraps around the bounding rectangle of a polygon beyond the vertex budget', async () => {
+  // 150,000 vertices along the left half's outline: their bounding rectangle
+  // is the left half, so the result equals the four-point polygon.
+  const edge = Array.from({ length: 50_000 }, (_, i) => `${Math.round(i * 10800 / 50_000)} 21600`);
+  const outline = ['0 0', '0 21600', ...edge, ...edge.map((_, i) => `10800 ${21600 - Math.round(i * 21600 / 50_000)}`),
+    ...edge.map((_, i) => `${10800 - Math.round(i * 10800 / 50_000)} 0`)].join(' ');
+  const reference = await render(picture('<w10:wrap type="tight"/>', LEFT_HALF));
+  const actual = await render(picture('<w10:wrap type="tight"/>', outline));
+  expect(actual.diagnostics).toEqual([]);
+  expect(Buffer.compare(Buffer.from(actual.pixels), Buffer.from(reference.pixels))).toBe(0);
 });
