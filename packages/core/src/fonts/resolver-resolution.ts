@@ -191,6 +191,14 @@ async function callResolver(
   const names = [...demand.families, ...demand.fallbackFamilies];
   const failAll = (reason: string) => new Map(
     names.map((name) => [fontFamilyKey(name), { kind: 'failed', reason } satisfies FamilyResolution]));
+  // The requester's deadline by wall clock as well as by timer: a resolver
+  // that blocks the thread synchronously keeps every timer from firing, so
+  // an answer that settles after the deadline is a timeout, never a success
+  // (and, being a failure, is not cached). The realm that runs the function
+  // judges this; a bridged answer (or failure) is main's verdict and is taken
+  // as it is.
+  const deadline = Date.now() + info.remainingMs;
+  const late = () => runResolver === runResolverInRealm && Date.now() > deadline;
   let raw: readonly unknown[] | BridgedFamilyResolutions;
   try {
     raw = await runResolver(source, demand, Object.freeze({ signal }), info);
@@ -198,9 +206,11 @@ async function callResolver(
     // A bridged call reports the main-side admission's ceiling breach, which
     // rejects the load exactly as this realm's own admission would.
     if (signal.aborted || isBridgedFontSourceLimitError(error)) throw error;
+    if (late()) return failAll('timed out');
     return failAll(error instanceof Error ? error.message : String(error));
   }
   if (signal.aborted) throw createAbortError('Font resolver abandoned');
+  if (late()) return failAll('timed out');
   const scriptsOf = substituteScriptsOf(demand.substituteScripts);
   const restricted = demand.substituteScripts !== undefined;
   const claim = (declarations: ReturnType<typeof indexFontDeclarations>, name: string) =>

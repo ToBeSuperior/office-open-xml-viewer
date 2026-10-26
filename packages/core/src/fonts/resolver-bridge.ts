@@ -40,7 +40,6 @@ import {
   HARD_MAX_FONT_SOURCE_DECLARATIONS,
   HARD_MAX_FONT_SOURCE_FAMILIES,
 } from '../worker/resource-policy.generated.js';
-import { FONT_LOAD_CEILING_MS } from './font-registry.js';
 import { bridgedFontSourceLimitError } from './resolver-admission.js';
 import { BridgedFamilyResolutions, type ResolverCallInfo } from './resolver-resolution.js';
 import type { FontDemand, FontFaceDeclaration, FontResolveContext, FontResolverSource } from './source.js';
@@ -177,13 +176,14 @@ export class WorkerFontResolverClient {
       };
       const onAbort = () => abandon(createAbortError('Font resolver abandoned'));
       signal.addEventListener('abort', onAbort, { once: true });
-      // Main answers every request within its own font ceiling; this backstop
-      // only guards a main realm that never answers (no bridge host), and is
-      // longer than main's deadline plus the request's transit.
-      const backstop = setTimeout(() => abandon(new Error('timed out')), 2 * FONT_LOAD_CEILING_MS);
+      // Main is the single authority on the call's outcome (it enforces the
+      // deadline and records the outcome for the whole document), so the
+      // worker never decides one itself: it waits for main's reply while its
+      // document lives. Every main-side path ends in a reply, or in the
+      // document's destruction, which resets or terminates this worker.
       this.pending.set(requestId, {
         resolve, reject, generation,
-        detach: () => { clearTimeout(backstop); signal.removeEventListener('abort', onAbort); },
+        detach: () => signal.removeEventListener('abort', onAbort),
       });
       try {
         this.post({

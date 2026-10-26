@@ -631,6 +631,75 @@ describe('fontResolver bridge: review findings', () => {
     });
   }
 
+  // Round 8: main is the single authority; lateness is judged by wall clock.
+  for (const [label, blockMs, loads] of [['blocks main for 31 s', 31_000, false], ['answers at 14 s', 14_000, true]] as const) {
+    for (const first of ['worker', 'viewer'] as const) {
+      it(`gives both realms one outcome when the resolver ${label} (${first} first)`, async () => {
+        vi.useFakeTimers();
+        let calls = 0;
+        const source = fontResolver(() => {
+          calls++;
+          // A synchronous block: the clock moves, no timer can fire.
+          vi.setSystemTime(Date.now() + blockMs);
+          return [FACE(8)];
+        });
+        const failures = new Map<string, string>();
+        const worker = bridge([source], { failures }).session();
+        const viewer = mainSession([source], failures);
+        const ensureWorker = async () => {
+          const pending = worker.session.ensure(demand(['Private Face']));
+          await vi.advanceTimersByTimeAsync(0);
+          return pending;
+        };
+        const ensureViewer = () => viewer.session.ensure(demand(['Private Face']));
+        const [a, b] = first === 'worker'
+          ? [await ensureWorker(), await ensureViewer()]
+          : [await ensureViewer(), await ensureWorker()];
+        expect(a.faces).toHaveLength(loads ? 1 : 0);
+        expect(b.faces).toHaveLength(loads ? 1 : 0);
+        expect(calls).toBe(1);
+        expect([...failures.values()]).toEqual(loads ? [] : ['timed out']);
+        // Main's timers that were overdue fire now; nothing changes.
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(worker.set.faces.filter((face) => face.status === 'loaded')).toHaveLength(loads ? 1 : 0);
+      });
+    }
+  }
+
+  it('waits for main without a deadline of its own, and still cancels on reset', async () => {
+    vi.useFakeTimers();
+    // A main realm that holds the request (it decides; the worker never does).
+    const posted: unknown[] = [];
+    const client = new WorkerFontResolverClient((message) => { posted.push(message); });
+    const workerSources = assertFontSourceDescriptors(structuredClone([fontResolver(() => [FACE(8)])]));
+    const session = new FontSourceSession({ sources: workerSources, fontSet: asSet(fakeSet()), ...client.sessionOptions });
+    sessions.push(session);
+    let settled = false;
+    const pending = session.ensure(demand(['Private Face'])).then((loaded) => { settled = true; return loaded; });
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(settled).toBe(false);
+    expect(client.pendingCount).toBe(1);
+    client.reset();
+    expect((await pending).faces).toEqual([]);
+    expect(client.pendingCount).toBe(0);
+    expect(posted.map((message) => (message as { kind: string }).kind)).toEqual(['ooxmlResolveFonts', 'ooxmlCancelResolveFonts']);
+  });
+
+  it('cancels a waiting call when the worker document is destroyed', async () => {
+    vi.useFakeTimers();
+    let signal: AbortSignal | undefined;
+    const source = fontResolver((_demand, context) => { signal = context.signal; return new Promise(() => undefined); });
+    const link = bridge([source]);
+    const { session } = link.session();
+    const pending = session.ensure(demand(['Private Face']));
+    await vi.advanceTimersByTimeAsync(1_000);
+    session.release();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(signal?.aborted).toBe(true);
+    expect((await pending).faces).toEqual([]);
+    expect(link.client.pendingCount).toBe(0);
+  });
+
   // Finding 4: a worker reset abandons its calls on main too.
   it('cancels every pending call on reset, so a late answer is never posted or detached', async () => {
     let signal: AbortSignal | undefined;

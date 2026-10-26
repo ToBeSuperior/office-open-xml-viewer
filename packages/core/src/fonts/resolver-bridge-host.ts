@@ -48,6 +48,7 @@ export interface FontResolverBridgeHostOptions {
 
 export class FontResolverBridgeHost {
   private options: FontResolverBridgeHostOptions | null;
+  private readonly postToWorker: Post;
   /** The document's outcome record, shared with the responder (and, for
    * XLSX, the viewer-realm sessions). */
   private readonly failures: FontResolverFailures;
@@ -77,6 +78,7 @@ export class FontResolverBridgeHost {
     // Only a document configured with a resolver ever answers; any other
     // bridge message is consumed and ignored.
     this.failures = options.resolverFailures ?? new Map();
+    this.postToWorker = options.post;
     this.options = Array.isArray(options.sources) && options.sources.some((source) => source.kind === 'font-resolver')
       ? options : null;
     if (this.options) void this.ensureResponder(this.options);
@@ -86,9 +88,17 @@ export class FontResolverBridgeHost {
   accept(message: unknown): boolean {
     if (!isWorkerFontResolveMessage(message)) return false;
     const options = this.options;
-    if (this.disposed || !options?.sources) return true;
+    if (this.disposed) return true;
     const bridged = message as WorkerFontResolveMessage;
     if (!isNonNegativeSafeInteger(bridged.generation) || !isNonNegativeSafeInteger(bridged.requestId)) return true;
+    if (!options?.sources) {
+      // No resolver of this document can run here: the worker still gets an
+      // answer (it never decides an outcome itself).
+      if (bridged.kind === 'ooxmlResolveFonts') {
+        this.post(bridged, { status: 'failed', reason: 'font resolver function is not available in this realm' });
+      }
+      return true;
+    }
     const key = `${bridged.generation}:${bridged.requestId}`;
     if (bridged.kind === 'ooxmlCancelResolveFonts') {
       // Not handed to the responder yet: the call ends here, unanswered.
@@ -187,10 +197,9 @@ export class FontResolverBridgeHost {
   }
 
   private post(request: WorkerFontResolveRequest, outcome: FontResolveOutcome, transfer: ArrayBuffer[] = []): void {
-    const options = this.options;
-    if (this.disposed || !options) return;
+    if (this.disposed) return;
     try {
-      options.post({
+      this.postToWorker({
         kind: 'ooxmlFontsResolved', generation: request.generation, requestId: request.requestId, outcome,
       } satisfies MainFontResolveReply, transfer);
     } catch { /* worker terminated */ }
