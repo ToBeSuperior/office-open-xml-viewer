@@ -10328,10 +10328,36 @@ fn parse_anchor_group_wire(
 /// already rejects it.
 const MAX_WRAP_POLYGON_POINTS: usize = 256;
 
+/// Longest excerpt of an unparseable coordinate kept for diagnostics. Every
+/// i64 fits in 20 bytes, so a valid coordinate never needs more.
+const MAX_INVALID_WRAP_COORDINATE_TEXT_BYTES: usize = 32;
+
+/// The retained text of one authored polygon coordinate. Rust's integer parser
+/// accepts any number of leading zeros and a `+` sign, so a token's length does
+/// not bound its value's size; a parsed coordinate keeps its canonical decimal
+/// form (byte-identical to what Word writes), and an unparseable one, including
+/// an i64 overflow, keeps a bounded leading excerpt so it stays distinguishable
+/// from an absent attribute. Retained bytes per polygon are therefore
+/// O(`MAX_WRAP_POLYGON_POINTS`) whatever the token lengths.
+fn wrap_coordinate_text(raw: Option<&str>, value: Option<i64>) -> Option<String> {
+    match (raw, value) {
+        // No authored text (absent attribute, or a generated fallback vertex).
+        (None, _) => None,
+        (Some(_), Some(value)) => Some(value.to_string()),
+        (Some(raw), None) => {
+            let mut end = raw.len().min(MAX_INVALID_WRAP_COORDINATE_TEXT_BYTES);
+            while !raw.is_char_boundary(end) {
+                end -= 1;
+            }
+            Some(raw[..end].to_string())
+        }
+    }
+}
+
 /// One-pass wrap polygon accumulator. It keeps at most
-/// `MAX_WRAP_POLYGON_POINTS` vertices and allocates their raw text only while
-/// they can still be retained, so memory stays bounded by the budget and work
-/// stays linear in the authored list however long it is.
+/// `MAX_WRAP_POLYGON_POINTS` vertices and allocates their bounded coordinate
+/// text only while they can still be retained, so memory stays bounded by the
+/// budget and work stays linear in the authored list however long it is.
 #[derive(Default)]
 struct WrapPolygonBuilder {
     points: Vec<AnchorPointWire>,
@@ -10342,12 +10368,7 @@ struct WrapPolygonBuilder {
 }
 
 impl WrapPolygonBuilder {
-    fn push(
-        &mut self,
-        x: Option<i64>,
-        y: Option<i64>,
-        raw: impl FnOnce() -> (Option<String>, Option<String>),
-    ) {
+    fn push(&mut self, x: Option<i64>, y: Option<i64>, raw_x: Option<&str>, raw_y: Option<&str>) {
         fn widen(range: &mut Option<(i64, i64)>, value: Option<i64>) {
             if let Some(value) = value {
                 *range =
@@ -10361,8 +10382,12 @@ impl WrapPolygonBuilder {
         widen(&mut self.x_range, x);
         widen(&mut self.y_range, y);
         if self.point_count <= MAX_WRAP_POLYGON_POINTS {
-            let (raw_x, raw_y) = raw();
-            self.points.push(AnchorPointWire { x, y, raw_x, raw_y });
+            self.points.push(AnchorPointWire {
+                x,
+                y,
+                raw_x: wrap_coordinate_text(raw_x, x),
+                raw_y: wrap_coordinate_text(raw_y, y),
+            });
         } else if self.point_count == MAX_WRAP_POLYGON_POINTS + 1 {
             self.points = Vec::new();
         }
@@ -10441,7 +10466,8 @@ fn parse_anchor_acquisition_wire(container: &roxmltree::Node) -> AnchorAcquisiti
                 points.push(
                     raw_x.and_then(|raw| raw.parse::<i64>().ok()),
                     raw_y.and_then(|raw| raw.parse::<i64>().ok()),
-                    || (raw_x.map(str::to_string), raw_y.map(str::to_string)),
+                    raw_x,
+                    raw_y,
                 );
             }
             points.finish(
@@ -13901,11 +13927,13 @@ fn vml_word_anchor_wrap(
     .then(|| {
         // `wrapcoords` is a CT_Shapetype core attribute too; the instance
         // overrides its template (Part 4 §§19.1.2.19-20).
-        vml_word_wrap_polygon(
-            shape
-                .attribute("wrapcoords")
-                .or_else(|| definition.and_then(|node| node.attribute("wrapcoords"))),
-        )
+        match (shape.attribute("wrapcoords"), definition) {
+            (Some(own), _) => vml_word_wrap_polygon(Some(own)),
+            (None, Some(definition)) if definition.attribute("wrapcoords").is_some() => {
+                inherited_vml_wrap_polygon(definition)
+            }
+            (None, _) => vml_word_wrap_polygon(None),
+        }
     });
     AnchorWrapWire {
         kind,
@@ -13939,16 +13967,85 @@ fn vml_word_anchor_wrap(
 /// of the same coordinate square. That keeps the object painted and its text
 /// exclusion on the frame Word positions, rather than dropping the anchor.
 fn vml_word_wrap_polygon(wrapcoords: Option<&str>) -> AnchorPolygonWire {
+    #[cfg(test)]
+    WRAPCOORDS_SCANNED_BYTES
+        .with(|scanned| scanned.set(scanned.get() + wrapcoords.map_or(0, str::len)));
     wrapcoords
         .and_then(vml_authored_wrap_polygon)
         .unwrap_or_else(|| {
             let mut frame = WrapPolygonBuilder::default();
             for (x, y) in [(0, 0), (0, 21600), (21600, 21600), (21600, 0), (0, 0)] {
-                frame.push(Some(x), Some(y), || (None, None));
+                frame.push(Some(x), Some(y), None, None);
             }
             frame
         })
         .finish(false)
+}
+
+#[cfg(test)]
+std::thread_local! {
+    /// Total `wrapcoords` bytes handed to the parser on this thread.
+    static WRAPCOORDS_SCANNED_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+std::thread_local! {
+    /// Polygons of shapetypes in the pict whose groups are being acquired,
+    /// keyed by node within that pict's document (see
+    /// `with_vml_wrap_polygon_memo`).
+    static VML_WRAP_POLYGON_MEMO: std::cell::RefCell<Option<VmlWrapPolygonMemo>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+struct VmlWrapPolygonMemo {
+    /// Identity of a document that outlives the memo, so no other document
+    /// can reuse its address while entries are live.
+    document: *const (),
+    polygons: HashMap<roxmltree::NodeId, AnchorPolygonWire>,
+}
+
+/// Run `parse` with a memo of inherited `wrapcoords` polygons for `pict`'s
+/// document installed. Any number of sibling leaves may reference one local
+/// shapetype; each then reuses one bounded parse instead of rescanning an
+/// arbitrarily long attribute per reference.
+pub(super) fn with_vml_wrap_polygon_memo<R>(pict: roxmltree::Node, parse: impl FnOnce() -> R) -> R {
+    struct Restore(Option<VmlWrapPolygonMemo>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let previous = self.0.take();
+            let _ = VML_WRAP_POLYGON_MEMO.try_with(|memo| memo.replace(previous));
+        }
+    }
+    let memo = VmlWrapPolygonMemo {
+        document: std::ptr::from_ref(pict.document()).cast(),
+        polygons: HashMap::new(),
+    };
+    let _restore = Restore(VML_WRAP_POLYGON_MEMO.with(|active| active.replace(Some(memo))));
+    parse()
+}
+
+/// The wrap polygon a shape inherits from `definition`, memoised when the
+/// definition belongs to the document of the installed memo. Definitions
+/// re-parsed from the story's recorded index live in transient documents and
+/// are bounded by `VML_SHAPE_TYPE_BYTE_LIMIT`; they are parsed directly.
+fn inherited_vml_wrap_polygon(definition: roxmltree::Node) -> AnchorPolygonWire {
+    let parse = || vml_word_wrap_polygon(definition.attribute("wrapcoords"));
+    VML_WRAP_POLYGON_MEMO.with(|active| {
+        let mut active = active.borrow_mut();
+        match active.as_mut() {
+            Some(memo)
+                if std::ptr::eq(
+                    memo.document,
+                    std::ptr::from_ref(definition.document()).cast(),
+                ) =>
+            {
+                memo.polygons
+                    .entry(definition.id())
+                    .or_insert_with(parse)
+                    .clone()
+            }
+            _ => parse(),
+        }
+    })
 }
 
 /// The authored `wrapcoords` polygon, read token by token; `None` when it is
@@ -13961,9 +14058,7 @@ fn vml_authored_wrap_polygon(raw: &str) -> Option<WrapPolygonBuilder> {
     while let Some(raw_x) = tokens.next() {
         let raw_y = tokens.next()?;
         let (x, y) = (raw_x.parse().ok()?, raw_y.parse().ok()?);
-        polygon.push(Some(x), Some(y), || {
-            (Some(raw_x.to_string()), Some(raw_y.to_string()))
-        });
+        polygon.push(Some(x), Some(y), Some(raw_x), Some(raw_y));
     }
     (polygon.point_count >= 3).then_some(polygon)
 }
@@ -19522,6 +19617,107 @@ mod anchor_acquisition_wire_tests {
     }
 
     #[test]
+    fn inherited_zero_padded_wrapcoords_stay_bounded_per_shape() {
+        use std::io::{Cursor, Write};
+        let wrapcoords = format!("{} 0 0 21600 21600 21600 21600 0", "0".repeat(1_000_000));
+        let shape = r##"<v:shape type="#t" style="position:absolute;margin-left:10pt;margin-top:10pt;width:100pt;height:100pt;mso-position-horizontal-relative:page;mso-position-vertical-relative:page"><w10:wrap type="tight"/></v:shape>""##;
+        let document = format!(
+            r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w10="urn:schemas-microsoft-com:office:word"><w:body><w:p><w:r><w:pict><v:shapetype id="t" o:spt="1" coordsize="21600,21600" wrapcoords="{wrapcoords}"/>{}<v:group/></w:pict></w:r></w:p><w:sectPr/></w:body></w:document>"#,
+            shape.repeat(100)
+        );
+        let mut bytes = Vec::new();
+        {
+            let mut archive = zip::ZipWriter::new(Cursor::new(&mut bytes));
+            crate::parser::write_test_content_types(&mut archive);
+            archive
+                .start_file(
+                    "word/document.xml",
+                    zip::write::SimpleFileOptions::default(),
+                )
+                .unwrap();
+            archive.write_all(document.as_bytes()).unwrap();
+            archive.finish().unwrap();
+        }
+        WRAPCOORDS_SCANNED_BYTES.with(|scanned| scanned.set(0));
+        let mut json = String::new();
+        let peak = crate::allocation_tests::peak(|| {
+            json = crate::parse_docx_native(&bytes).unwrap();
+        });
+        let scanned = WRAPCOORDS_SCANNED_BYTES.with(std::cell::Cell::get);
+        assert!(json.len() < 1024 * 1024, "JSON is {} bytes", json.len());
+        assert!(peak < 32 * 1024 * 1024, "parse peak {peak} bytes");
+        // One local definition is parsed once, not once per referencing shape.
+        assert_eq!(scanned, wrapcoords.len());
+        let model: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let mut polygons = Vec::new();
+        let mut pending = vec![&model];
+        while let Some(value) = pending.pop() {
+            match value {
+                serde_json::Value::Object(map) => {
+                    if let Some(polygon) = map.get("polygon").filter(|p| p.is_object()) {
+                        polygons.push(polygon.clone());
+                    }
+                    pending.extend(map.values());
+                }
+                serde_json::Value::Array(items) => pending.extend(items),
+                _ => {}
+            }
+        }
+        assert_eq!(polygons.len(), 100);
+        assert!(polygons.iter().all(|polygon| polygon["points"]
+            == serde_json::json!([
+                { "x": 0, "y": 0, "rawX": "0", "rawY": "0" },
+                { "x": 0, "y": 21600, "rawX": "0", "rawY": "21600" },
+                { "x": 21600, "y": 21600, "rawX": "21600", "rawY": "21600" },
+                { "x": 21600, "y": 0, "rawX": "21600", "rawY": "0" },
+            ])));
+    }
+
+    #[test]
+    fn coordinate_text_is_canonical_or_a_bounded_invalid_excerpt() {
+        let vml = vml_word_wrap_polygon(Some("+0 007 21600,0 0 21600"));
+        assert_eq!(
+            vml.points
+                .iter()
+                .map(|p| (p.raw_x.as_deref(), p.raw_y.as_deref()))
+                .collect::<Vec<_>>(),
+            [
+                (Some("0"), Some("7")),
+                (Some("21600"), Some("0")),
+                (Some("0"), Some("21600"))
+            ]
+        );
+        // An i64 overflow is unparseable, so VML keeps its frame fallback.
+        let overflow = vml_word_wrap_polygon(Some("0 0 99999999999999999999 0 0 1"));
+        assert_eq!(polygon_coords(&overflow), FRAME);
+        let long_invalid = format!("{}x", "9".repeat(10_000));
+        let drawing = drawing_polygon(&format!(
+            r#"<wp:start x="{}" y="{long_invalid}"/><wp:lineTo x="99999999999999999999" y="{}é{long_invalid}"/><wp:lineTo x="1" y="2"/>"#,
+            "0".repeat(10_000),
+            "9".repeat(31)
+        ));
+        assert_eq!(drawing.invalid_point_count, 2);
+        let texts: Vec<_> = drawing
+            .points
+            .iter()
+            .map(|p| (p.x, p.raw_x.as_deref(), p.y, p.raw_y.as_deref()))
+            .collect();
+        assert_eq!(
+            texts,
+            [
+                (Some(0), Some("0"), None, Some(&"9".repeat(32)[..])),
+                (
+                    None,
+                    Some("99999999999999999999"),
+                    None,
+                    Some(&"9".repeat(31)[..])
+                ),
+                (Some(1), Some("1"), Some(2), Some("2")),
+            ]
+        );
+    }
+
+    #[test]
     fn wrapcoords_budget_boundary_and_malformed_lists() {
         let coords = |count: usize| {
             (0..count)
@@ -19558,6 +19754,10 @@ mod anchor_acquisition_wire_tests {
         ] {
             let polygon = vml_word_wrap_polygon(malformed);
             assert_eq!(polygon_coords(&polygon), FRAME, "{malformed:?}");
+            assert!(polygon
+                .points
+                .iter()
+                .all(|p| p.raw_x.is_none() && p.raw_y.is_none()));
             assert_eq!(polygon.invalid_point_count, 0);
         }
     }

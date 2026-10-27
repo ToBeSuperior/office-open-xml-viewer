@@ -187,6 +187,33 @@ pub(super) fn parse_groups(
     if !pict.children().any(|n| n.has_tag_name((VML, "group"))) {
         return None;
     }
+    with_vml_wrap_polygon_memo(pict, || {
+        parse_present_groups(
+            style_map,
+            num_map,
+            pict,
+            theme,
+            media_map,
+            chart_map,
+            rel_map,
+            depth,
+            document_diagnostics,
+        )
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn parse_present_groups(
+    style_map: &StyleMap,
+    num_map: &mut NumberingMap,
+    pict: roxmltree::Node,
+    theme: &ThemeColors,
+    media_map: &HashMap<String, String>,
+    chart_map: &ChartMap,
+    rel_map: &HashMap<String, String>,
+    depth: DepthGuard,
+    document_diagnostics: &mut Vec<PendingParseDiagnostic>,
+) -> Option<Vec<DocRun>> {
     // Resolve definitions once per pict, not once per leaf in large groups.
     let shape_types: HashMap<_, _> = pict
         .descendants()
