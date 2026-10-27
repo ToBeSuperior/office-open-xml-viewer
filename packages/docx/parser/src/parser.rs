@@ -12616,13 +12616,39 @@ pub(super) fn with_recorded_vml_shape_type<R>(
     };
     let recorded = preceding_vml_shape_type(type_id, shape.range().start);
     let recorded_doc = recorded.as_deref().and_then(|xml| parse_guarded(xml).ok());
-    use_type(recorded_doc.as_ref().and_then(|doc| {
+    let definition = recorded_doc.as_ref().and_then(|doc| {
         doc.root_element().children().find(|node| {
             node.is_element()
                 && node.tag_name().name() == "shapetype"
                 && node.attribute("id") == Some(type_id)
         })
-    }))
+    });
+    let Some(definition) = definition else {
+        return use_type(None);
+    };
+    struct Restore(Option<(*const (), String)>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let previous = self.0.take();
+            let _ = RECORDED_VML_SHAPE_TYPE.try_with(|active| active.replace(previous));
+        }
+    }
+    let _restore = Restore(RECORDED_VML_SHAPE_TYPE.with(|active| {
+        active.replace(Some((
+            std::ptr::from_ref(definition.document()).cast(),
+            type_id.to_string(),
+        )))
+    }));
+    use_type(Some(definition))
+}
+
+std::thread_local! {
+    /// The transient document holding the recorded definition currently in
+    /// use, and the index id it was recorded under, so inherited data parsed
+    /// from it can be cached on the index entry (see
+    /// `inherited_vml_wrap_polygon`).
+    static RECORDED_VML_SHAPE_TYPE: std::cell::RefCell<Option<(*const (), String)>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -12694,6 +12720,10 @@ struct RecordedVmlShapeType {
     /// Byte offset in the document being parsed; `None` once that document
     /// is an earlier streamed block.
     start: Option<usize>,
+    /// The `wrapcoords` polygon shapes inherit from this definition, parsed
+    /// on first use. Every referencing shape re-parses `xml` into a transient
+    /// document, so a node-keyed memo cannot recognise the definition.
+    wrap_polygon: Option<AnchorPolygonWire>,
 }
 
 const VML_SHAPE_TYPE_ENTRY_LIMIT: usize = 256;
@@ -12784,6 +12814,7 @@ impl VmlShapeTypeIndex {
                 RecordedVmlShapeType {
                     xml,
                     start: Some(node.range().start),
+                    wrap_polygon: None,
                 },
             );
         }
@@ -14023,12 +14054,28 @@ pub(super) fn with_vml_wrap_polygon_memo<R>(pict: roxmltree::Node, parse: impl F
     parse()
 }
 
-/// The wrap polygon a shape inherits from `definition`, memoised when the
-/// definition belongs to the document of the installed memo. Definitions
-/// re-parsed from the story's recorded index live in transient documents and
-/// are bounded by `VML_SHAPE_TYPE_BYTE_LIMIT`; they are parsed directly.
+/// The wrap polygon a shape inherits from `definition`, parsed once per
+/// definition: memoised by node when the definition belongs to the document
+/// of the installed memo, and on the story's index entry when it is a
+/// recorded definition re-parsed into a transient document.
 fn inherited_vml_wrap_polygon(definition: roxmltree::Node) -> AnchorPolygonWire {
     let parse = || vml_word_wrap_polygon(definition.attribute("wrapcoords"));
+    let document: *const () = std::ptr::from_ref(definition.document()).cast();
+    let recorded_id = RECORDED_VML_SHAPE_TYPE.with(|active| {
+        active
+            .borrow()
+            .as_ref()
+            .filter(|(recorded, _)| std::ptr::eq(*recorded, document))
+            .map(|(_, id)| id.clone())
+    });
+    if let Some(id) = recorded_id {
+        let cached = ACTIVE_VML_SHAPE_TYPES.with(|active| {
+            let mut active = active.borrow_mut();
+            let recorded = active.as_mut()?.types.get_mut(&id)?;
+            Some(recorded.wrap_polygon.get_or_insert_with(parse).clone())
+        });
+        return cached.unwrap_or_else(parse);
+    }
     VML_WRAP_POLYGON_MEMO.with(|active| {
         let mut active = active.borrow_mut();
         match active.as_mut() {
@@ -19616,14 +19663,13 @@ mod anchor_acquisition_wire_tests {
         );
     }
 
-    #[test]
-    fn inherited_zero_padded_wrapcoords_stay_bounded_per_shape() {
+    /// Parse a body of `paragraphs` in which 100 tight-wrapped shapes reference
+    /// shapetype `t`, check every shape acquires its polygon, and return the
+    /// `wrapcoords` bytes scanned.
+    fn parse_inherited_wrapcoords(paragraphs: &str) -> usize {
         use std::io::{Cursor, Write};
-        let wrapcoords = format!("{} 0 0 21600 21600 21600 21600 0", "0".repeat(1_000_000));
-        let shape = r##"<v:shape type="#t" style="position:absolute;margin-left:10pt;margin-top:10pt;width:100pt;height:100pt;mso-position-horizontal-relative:page;mso-position-vertical-relative:page"><w10:wrap type="tight"/></v:shape>""##;
         let document = format!(
-            r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w10="urn:schemas-microsoft-com:office:word"><w:body><w:p><w:r><w:pict><v:shapetype id="t" o:spt="1" coordsize="21600,21600" wrapcoords="{wrapcoords}"/>{}<v:group/></w:pict></w:r></w:p><w:sectPr/></w:body></w:document>"#,
-            shape.repeat(100)
+            r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w10="urn:schemas-microsoft-com:office:word"><w:body>{paragraphs}<w:sectPr/></w:body></w:document>"#
         );
         let mut bytes = Vec::new();
         {
@@ -19646,8 +19692,6 @@ mod anchor_acquisition_wire_tests {
         let scanned = WRAPCOORDS_SCANNED_BYTES.with(std::cell::Cell::get);
         assert!(json.len() < 1024 * 1024, "JSON is {} bytes", json.len());
         assert!(peak < 32 * 1024 * 1024, "parse peak {peak} bytes");
-        // One local definition is parsed once, not once per referencing shape.
-        assert_eq!(scanned, wrapcoords.len());
         let model: serde_json::Value = serde_json::from_str(&json).unwrap();
         let mut polygons = Vec::new();
         let mut pending = vec![&model];
@@ -19671,6 +19715,47 @@ mod anchor_acquisition_wire_tests {
                 { "x": 21600, "y": 21600, "rawX": "21600", "rawY": "21600" },
                 { "x": 21600, "y": 0, "rawX": "21600", "rawY": "0" },
             ])));
+        scanned
+    }
+
+    const INHERITING_SHAPE: &str = r##"<v:shape type="#t" style="position:absolute;margin-left:10pt;margin-top:10pt;width:100pt;height:100pt;mso-position-horizontal-relative:page;mso-position-vertical-relative:page"><w10:wrap type="tight"/></v:shape>"##;
+
+    fn zero_padded_shapetype(zeros: usize) -> (String, String) {
+        let wrapcoords = format!("{} 0 0 21600 21600 21600 21600 0", "0".repeat(zeros));
+        let shapetype = format!(
+            r#"<v:shapetype id="t" o:spt="1" coordsize="21600,21600" wrapcoords="{wrapcoords}"/>"#
+        );
+        (wrapcoords, shapetype)
+    }
+
+    #[test]
+    fn inherited_zero_padded_wrapcoords_stay_bounded_per_shape() {
+        let (wrapcoords, shapetype) = zero_padded_shapetype(1_000_000);
+        let scanned = parse_inherited_wrapcoords(&format!(
+            "<w:p><w:r><w:pict>{shapetype}{}<v:group/></w:pict></w:r></w:p>",
+            INHERITING_SHAPE.repeat(100)
+        ));
+        // One local definition is parsed once, not once per referencing shape.
+        assert_eq!(scanned, wrapcoords.len());
+    }
+
+    #[test]
+    fn recorded_shapetype_wrapcoords_are_parsed_once_per_definition() {
+        // Small enough for the story's shapetype index, which re-parses the
+        // recorded definition for every referencing shape.
+        let (wrapcoords, shapetype) = zero_padded_shapetype(60_000);
+        let earlier = format!("<w:p><w:r><w:pict>{shapetype}</w:pict></w:r></w:p>");
+        // Shapes beside a group in one later pict, and one shape per pict.
+        for later in [
+            format!(
+                "<w:p><w:r><w:pict>{}<v:group/></w:pict></w:r></w:p>",
+                INHERITING_SHAPE.repeat(100)
+            ),
+            format!("<w:p><w:r><w:pict>{INHERITING_SHAPE}</w:pict></w:r></w:p>").repeat(100),
+        ] {
+            let scanned = parse_inherited_wrapcoords(&format!("{earlier}{later}"));
+            assert_eq!(scanned, wrapcoords.len());
+        }
     }
 
     #[test]
