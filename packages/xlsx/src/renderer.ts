@@ -19,6 +19,7 @@ import { activeFontSet, findReferenceFontMetrics, isHTMLCanvas, substituteEntryC
 import { fontFamilyKey } from '@silurus/ooxml-core/internal/font-sources';
 import { chartFontSubstitutions, withChartFontSubstitutions } from '@silurus/ooxml-core/internal/chart-font-sources';
 import { buildStructuredStyleMap, type StructuredCellFormat } from './pivot-style.js';
+import { buildMergeCoverageIndex } from './merge-coverage-index.js';
 import type {
   Worksheet, Styles, Cell, CellValue, CellFont, CellFill, Border, BorderEdge, CellXf,
   ViewportRange, RenderViewportOptions, XlsxTextRunInfo,
@@ -3010,8 +3011,6 @@ export function getSheetRenderCache(worksheet: Worksheet, styles?: Styles): Shee
 
   // Merge skip-set is pure topology (no scaled sizes) so it is cacheable; the
   // anchor map's pixel sizes depend on cellScale and stay per-frame.
-  const mergeSkipSet = new Set<string>();
-  const mergeAnchorSet = new Set<string>();
   const mergeAnchorIdentity = coordinateIndexIdentity(
     worksheet,
     'worksheet-merge-anchor-index',
@@ -3022,16 +3021,11 @@ export function getSheetRenderCache(worksheet: Worksheet, styles?: Styles): Shee
     'worksheet-merge-skip-index',
     'expand-merged-cell-coordinates',
   );
-  for (const mc of worksheet.mergeCells ?? []) {
-    addCoordinateIndexEntry(mergeAnchorSet, `${mc.top}:${mc.left}`, mergeAnchorIdentity);
-    assertCoordinateRangeArea(mc, mergeIdentity, 1);
-    for (let r = mc.top; r <= mc.bottom; r++) {
-      for (let c = mc.left; c <= mc.right; c++) {
-        if (r === mc.top && c === mc.left) continue;
-        addCoordinateIndexEntry(mergeSkipSet, `${r}:${c}`, mergeIdentity);
-      }
-    }
-  }
+  const { anchors: mergeAnchorSet, continuations: mergeSkipSet } = buildMergeCoverageIndex(
+    worksheet.mergeCells ?? [],
+    mergeAnchorIdentity,
+    mergeIdentity,
+  );
 
   const autoFilterCells = new Set<string>();
   if (worksheet.autoFilter) {
