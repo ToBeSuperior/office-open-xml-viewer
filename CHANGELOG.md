@@ -5,6 +5,22 @@ semantic versioning. While the major version is zero, minor releases may contain
 explicitly documented breaking changes; patch releases remain compatible with
 the corresponding minor release.
 
+## 0.89.6 — 2026-10-27
+
+Compatible patch release. No migration is required.
+
+- **Excel sheet tab colors:** sheet tab colors and other workbook colors are
+  resolved to validated `#RRGGBB` values before they are used for styling;
+  other color text is ignored instead of being passed through to CSS (#1957).
+- **Excel merged cells:** workbooks with repeated or overlapping `mergeCell`
+  entries no longer freeze the page; merge handling now scales with the
+  distinct cells covered (#1958).
+- **Word VML pictures with tight or through wrapping:** floating VML pictures
+  with `<w10:wrap type="tight"/>` or `"through"` are painted again, and text
+  wraps around their `wrapcoords` polygon. Wrap polygon parsing (VML
+  `wrapcoords` and DrawingML `wp:wrapPolygon`) is bounded to the vertex limit
+  regardless of input size (#1959).
+
 ## 0.89.5 — 2026-10-26
 
 Compatible patch release. No migration is required.
