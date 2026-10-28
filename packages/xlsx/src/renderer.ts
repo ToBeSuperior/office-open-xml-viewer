@@ -1800,6 +1800,10 @@ interface RenderContext {
   textRuns?: TextRunBuffer;
   /** This pane's first viewport column, before any overflow overscan. */
   firstViewportCol: number;
+  /** Last column a `centerContinuous` selection (§18.18.40) may span in this
+   *  pane. The frozen pane keeps its selections inside its own band whatever
+   *  overflow overscan another row adds to its column list. */
+  selectionLastCol: number;
   /** Max Digit Width resolved for the workbook's default font, `<fonts>[0]`
    *  (ECMA-376 §18.3.1.13). Used by `colWidthToPx` to convert character-
    *  unit column widths into pixels. */
@@ -2235,7 +2239,7 @@ function renderQuadrant(
     for (let ci = 0; ci <= numCols; ci++) {
       let isCC = false;
       let hasValue = false;
-      if (ci < numCols) {
+      if (ci < numCols && colIndices[ci] <= rc.selectionLastCol) {
         const ckey = `${rowIndex}:${colIndices[ci]}`;
         if (!mergeSkipSet.has(ckey) && !mergeAnchorMap.has(ckey)) {
           const c = cellMap.get(ckey);
@@ -2513,7 +2517,7 @@ function renderQuadrant(
       let centerContinuousW = cellW;
       let centerContinuousLastCi = ci;
       if (alignH === 'centerContinuous' && !mergeInfo) {
-        for (let oci = ci + 1; oci < numCols; oci++) {
+        for (let oci = ci + 1; oci < numCols && colIndices[oci] <= rc.selectionLastCol; oci++) {
           const adjKey = `${rowIndex}:${colIndices[oci]}`;
           if (mergeSkipSet.has(adjKey) || mergeAnchorMap.has(adjKey)) break;
           const adjCell = cellMap.get(adjKey);
@@ -3922,6 +3926,7 @@ export function renderViewport(
     overflowTextAnchors: overflowOverscan.anchorKeys,
     textRunPane: { first: freezeCols + 1, last: Number.POSITIVE_INFINITY, ownerShiftX: 0 },
     firstViewportCol: visibleStartCol,
+    selectionLastCol: Number.POSITIVE_INFINITY,
     textRuns: opts.onTextRun ? { owned: new Map(), foreign: new Map() } : undefined,
     mdw,
     rtl: worksheet.rightToLeft === true,
@@ -3961,6 +3966,7 @@ export function renderViewport(
       ownerShiftX: scrollPaneOrigin - frozenPaneOrigin,
     },
     firstViewportCol: frozenColIndices[0] ?? 1,
+    selectionLastCol: freezeCols,
   };
 
   // ── Q1: frozen rows × frozen cols ───────────────────────────
